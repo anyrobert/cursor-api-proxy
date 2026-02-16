@@ -18,6 +18,8 @@ export type BridgeConfig = {
   tlsCertPath?: string;
   /** Path to TLS private key file. When set with tlsCertPath, server uses HTTPS. */
   tlsKeyPath?: string;
+  /** Path to sessions log file; each request is appended as a line. Default: sessions.log in cwd. */
+  sessionsLogPath: string;
 };
 
 function envBool(name: string, defaultValue: boolean): boolean {
@@ -87,6 +89,11 @@ function getWorkspace(): string {
   return raw ? path.resolve(raw) : process.cwd();
 }
 
+function getSessionsLogPath(): string {
+  const raw = process.env.CURSOR_BRIDGE_SESSIONS_LOG;
+  return raw ? path.resolve(raw) : path.join(process.cwd(), "sessions.log");
+}
+
 export function loadBridgeConfig(): BridgeConfig {
   return {
     agentBin: getAgentBin(),
@@ -102,5 +109,6 @@ export function loadBridgeConfig(): BridgeConfig {
     timeoutMs: envNumber("CURSOR_BRIDGE_TIMEOUT_MS", 300_000),
     tlsCertPath: getTlsCertPath(),
     tlsKeyPath: getTlsKeyPath(),
+    sessionsLogPath: getSessionsLogPath(),
   };
 }

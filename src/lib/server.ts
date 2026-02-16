@@ -14,6 +14,7 @@ import {
   type OpenAiChatCompletionRequest,
 } from "./openai.js";
 import { run } from "./process.js";
+import { appendSessionLine, logIncoming } from "./requestLog.js";
 
 type ModelCache = { at: number; models: CursorCliModel[] };
 
@@ -29,10 +30,18 @@ export function startBridgeServer(opts: BridgeServerOptions): http.Server | http
   let lastRequestedModel: string | undefined;
 
   const requestListener = async (req: http.IncomingMessage, res: http.ServerResponse) => {
-    try {
-      const protocol = config.tlsCertPath && config.tlsKeyPath ? "https" : "http";
-      const url = new URL(req.url || "/", `${protocol}://${req.headers.host || "localhost"}`);
+    const protocol = config.tlsCertPath && config.tlsKeyPath ? "https" : "http";
+    const url = new URL(req.url || "/", `${protocol}://${req.headers.host || "localhost"}`);
+    const remoteAddress = req.socket?.remoteAddress ?? "unknown";
+    const method = req.method ?? "?";
+    const path = url.pathname;
 
+    logIncoming(method, path, remoteAddress);
+    res.on("finish", () => {
+      appendSessionLine(config.sessionsLogPath, method, path, remoteAddress, res.statusCode);
+    });
+
+    try {
       if (config.requiredKey) {
         const token = extractBearerToken(req);
         if (token !== config.requiredKey) {
@@ -217,6 +226,7 @@ export function startBridgeServer(opts: BridgeServerOptions): http.Server | http
     console.log(`- force: ${config.force}`);
     console.log(`- approve mcps: ${config.approveMcps}`);
     console.log(`- required api key: ${config.requiredKey ? "yes" : "no"}`);
+    console.log(`- sessions log: ${config.sessionsLogPath}`);
   });
 
   return server;
