@@ -33,6 +33,14 @@ npm start
 
 By default the server listens on **http://127.0.0.1:8765**.
 
+To expose it to your Tailscale network:
+
+```bash
+CURSOR_BRIDGE_API_KEY=your-secret npm start -- --tailscale
+```
+
+This binds to `0.0.0.0` unless `CURSOR_BRIDGE_HOST` is explicitly set.
+
 ## Usage from other services
 
 - **Base URL**: `http://127.0.0.1:8765/v1`
@@ -78,6 +86,13 @@ console.log(completion.choices[0].message.content);
 | `CURSOR_BRIDGE_APPROVE_MCPS` | `false` | Pass `--approve-mcps` to Cursor CLI |
 | `CURSOR_BRIDGE_TIMEOUT_MS` | `300000` | Timeout per completion (ms) |
 | `CURSOR_AGENT_BIN` | `agent` | Path to Cursor CLI binary |
+
+CLI flags:
+
+| Flag | Description |
+|------|-------------|
+| `--tailscale` | Bind to `0.0.0.0` for access from tailnet/LAN (unless `CURSOR_BRIDGE_HOST` is already set) |
+| `-h`, `--help` | Show CLI usage |
 
 Optional per-request override: send header `X-Cursor-Workspace: <path>` to use a different workspace for that request.
 
