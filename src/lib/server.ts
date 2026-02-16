@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import * as fs from "node:fs";
 import * as http from "node:http";
+import * as https from "node:https";
 import { URL } from "node:url";
 
 import type { BridgeConfig } from "./config.js";
@@ -20,15 +22,16 @@ export type BridgeServerOptions = {
   config: BridgeConfig;
 };
 
-export function startBridgeServer(opts: BridgeServerOptions): http.Server {
+export function startBridgeServer(opts: BridgeServerOptions): http.Server | https.Server {
   const { config } = opts;
 
   let modelCache: ModelCache | undefined;
   let lastRequestedModel: string | undefined;
 
-  const server = http.createServer(async (req, res) => {
+  const requestListener = async (req: http.IncomingMessage, res: http.ServerResponse) => {
     try {
-      const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+      const protocol = config.tlsCertPath && config.tlsKeyPath ? "https" : "http";
+      const url = new URL(req.url || "/", `${protocol}://${req.headers.host || "localhost"}`);
 
       if (config.requiredKey) {
         const token = extractBearerToken(req);
@@ -191,10 +194,22 @@ export function startBridgeServer(opts: BridgeServerOptions): http.Server {
         },
       });
     }
-  });
+  };
+
+  const useTls = Boolean(config.tlsCertPath && config.tlsKeyPath);
+  let server: http.Server | https.Server;
+
+  if (useTls) {
+    const cert = fs.readFileSync(config.tlsCertPath!, "utf8");
+    const key = fs.readFileSync(config.tlsKeyPath!, "utf8");
+    server = https.createServer({ cert, key }, requestListener);
+  } else {
+    server = http.createServer(requestListener);
+  }
 
   server.listen(config.port, config.host, () => {
-    console.log(`cursor-api-proxy listening on http://${config.host}:${config.port}`);
+    const scheme = useTls ? "https" : "http";
+    console.log(`cursor-api-proxy listening on ${scheme}://${config.host}:${config.port}`);
     console.log(`- agent bin: ${config.agentBin}`);
     console.log(`- workspace: ${config.workspace}`);
     console.log(`- mode: ${config.mode}`);

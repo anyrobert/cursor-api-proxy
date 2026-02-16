@@ -3,3 +3,6 @@ dist/
 *.log
 .env
 .DS_Store
+# Tailscale / TLS certs (keep private keys out of repo)
+*.ts.net.crt
+*.ts.net.key

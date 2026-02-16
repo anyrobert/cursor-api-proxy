@@ -14,6 +14,10 @@ export type BridgeConfig = {
   strictModel: boolean;
   workspace: string;
   timeoutMs: number;
+  /** Path to TLS certificate file (e.g. Tailscale cert). When set with tlsKeyPath, server uses HTTPS. */
+  tlsCertPath?: string;
+  /** Path to TLS private key file. When set with tlsCertPath, server uses HTTPS. */
+  tlsKeyPath?: string;
 };
 
 function envBool(name: string, defaultValue: boolean): boolean {
@@ -68,6 +72,16 @@ function getRequiredKey(): string | undefined {
   return process.env.CURSOR_BRIDGE_API_KEY;
 }
 
+function getTlsCertPath(): string | undefined {
+  const v = process.env.CURSOR_BRIDGE_TLS_CERT;
+  return v && v.trim() ? v.trim() : undefined;
+}
+
+function getTlsKeyPath(): string | undefined {
+  const v = process.env.CURSOR_BRIDGE_TLS_KEY;
+  return v && v.trim() ? v.trim() : undefined;
+}
+
 function getWorkspace(): string {
   const raw = process.env.CURSOR_BRIDGE_WORKSPACE;
   return raw ? path.resolve(raw) : process.cwd();
@@ -86,5 +100,7 @@ export function loadBridgeConfig(): BridgeConfig {
     strictModel: envBool("CURSOR_BRIDGE_STRICT_MODEL", true),
     workspace: getWorkspace(),
     timeoutMs: envNumber("CURSOR_BRIDGE_TIMEOUT_MS", 300_000),
+    tlsCertPath: getTlsCertPath(),
+    tlsKeyPath: getTlsKeyPath(),
   };
 }

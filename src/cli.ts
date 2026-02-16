@@ -47,12 +47,6 @@ async function main() {
 
   const config = loadBridgeConfig();
   startBridgeServer({ version: "0.1.0", config });
-
-  if (args.tailscale && !process.env.CURSOR_BRIDGE_API_KEY) {
-    console.warn(
-      "Warning: --tailscale is enabled without CURSOR_BRIDGE_API_KEY. Set an API key before exposing the proxy.",
-    );
-  }
 }
 
 main().catch((err) => {

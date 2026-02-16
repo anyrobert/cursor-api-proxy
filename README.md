@@ -36,10 +36,47 @@ By default the server listens on **http://127.0.0.1:8765**.
 To expose it to your Tailscale network:
 
 ```bash
-CURSOR_BRIDGE_API_KEY=your-secret npm start -- --tailscale
+npm start -- --tailscale
 ```
 
-This binds to `0.0.0.0` unless `CURSOR_BRIDGE_HOST` is explicitly set.
+This binds to `0.0.0.0` unless `CURSOR_BRIDGE_HOST` is explicitly set. Optionally set `CURSOR_BRIDGE_API_KEY` to require `Authorization: Bearer <key>` on requests.
+
+### HTTPS with Tailscale (MagicDNS)
+
+To serve over HTTPS so browsers and clients trust the connection (e.g. `https://macbook.tail4048eb.ts.net:8765`):
+
+1. **Generate Tailscale certificates** on this machine (run from the project directory or where you want the cert files):
+
+   ```bash
+   sudo tailscale cert macbook.tail4048eb.ts.net
+   ```
+
+   This creates `macbook.tail4048eb.ts.net.crt` and `macbook.tail4048eb.ts.net.key` in the current directory.
+
+2. **Run the proxy with TLS** and optional Tailscale bind:
+
+   ```bash
+   export CURSOR_BRIDGE_API_KEY=your-secret
+   export CURSOR_BRIDGE_TLS_CERT=/path/to/macbook.tail4048eb.ts.net.crt
+   export CURSOR_BRIDGE_TLS_KEY=/path/to/macbook.tail4048eb.ts.net.key
+   # Bind to Tailscale IP so the service is only on the tailnet (optional):
+   export CURSOR_BRIDGE_HOST=100.123.47.103
+   npm start
+   ```
+
+   Or bind to all interfaces and use HTTPS:
+
+   ```bash
+   CURSOR_BRIDGE_TLS_CERT=./macbook.tail4048eb.ts.net.crt \
+   CURSOR_BRIDGE_TLS_KEY=./macbook.tail4048eb.ts.net.key \
+   CURSOR_BRIDGE_API_KEY=your-secret \
+   npm start -- --tailscale
+   ```
+
+3. **Access the API** from any device on your tailnet:
+
+   - Base URL: `https://macbook.tail4048eb.ts.net:8765/v1` (use your MagicDNS name and port)
+   - Browsers will show a padlock; no certificate warnings when using Tailscale-issued certs.
 
 ## Usage from other services
 
@@ -85,6 +122,8 @@ console.log(completion.choices[0].message.content);
 | `CURSOR_BRIDGE_FORCE` | `false` | Pass `--force` to Cursor CLI |
 | `CURSOR_BRIDGE_APPROVE_MCPS` | `false` | Pass `--approve-mcps` to Cursor CLI |
 | `CURSOR_BRIDGE_TIMEOUT_MS` | `300000` | Timeout per completion (ms) |
+| `CURSOR_BRIDGE_TLS_CERT` | — | Path to TLS certificate file (e.g. Tailscale cert). Use with `CURSOR_BRIDGE_TLS_KEY` for HTTPS. |
+| `CURSOR_BRIDGE_TLS_KEY` | — | Path to TLS private key file. Use with `CURSOR_BRIDGE_TLS_CERT` for HTTPS. |
 | `CURSOR_AGENT_BIN` | `agent` | Path to Cursor CLI binary |
 
 CLI flags:
