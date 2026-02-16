@@ -116,7 +116,7 @@ console.log(completion.choices[0].message.content);
 | `CURSOR_BRIDGE_PORT` | `8765` | Port |
 | `CURSOR_BRIDGE_API_KEY` | — | If set, require `Authorization: Bearer <key>` on requests |
 | `CURSOR_BRIDGE_WORKSPACE` | process cwd | Workspace directory for Cursor CLI |
-| `CURSOR_BRIDGE_MODE` | `ask` | Cursor mode: `ask` \| `plan` \| `agent` |
+| `CURSOR_BRIDGE_MODE` | — | Ignored; proxy always runs in **ask** (chat-only) mode so the CLI never creates or edits files. |
 | `CURSOR_BRIDGE_DEFAULT_MODEL` | `auto` | Default model when request omits one |
 | `CURSOR_BRIDGE_STRICT_MODEL` | `true` | Use last requested model when none specified |
 | `CURSOR_BRIDGE_FORCE` | `false` | Pass `--force` to Cursor CLI |

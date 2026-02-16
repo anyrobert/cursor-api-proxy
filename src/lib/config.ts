@@ -101,7 +101,7 @@ export function loadBridgeConfig(): BridgeConfig {
     port: getPort(),
     requiredKey: getRequiredKey(),
     defaultModel: normalizeModelId(process.env.CURSOR_BRIDGE_DEFAULT_MODEL) || "auto",
-    mode: normalizeMode(process.env.CURSOR_BRIDGE_MODE),
+    mode: "ask", // proxy is chat-only; CURSOR_BRIDGE_MODE is ignored
     force: envBool("CURSOR_BRIDGE_FORCE", false),
     approveMcps: envBool("CURSOR_BRIDGE_APPROVE_MCPS", false),
     strictModel: envBool("CURSOR_BRIDGE_STRICT_MODEL", true),

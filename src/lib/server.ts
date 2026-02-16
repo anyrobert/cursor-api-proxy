@@ -111,7 +111,8 @@ export function startBridgeServer(opts: BridgeServerOptions): http.Server | http
         if (config.approveMcps) cmdArgs.push("--approve-mcps");
         if (config.force) cmdArgs.push("--force");
 
-        if (config.mode !== "agent") cmdArgs.push("--mode", config.mode);
+        // Proxy is chat-only: always use "ask" so the CLI never creates or edits files
+        cmdArgs.push("--mode", "ask");
 
         cmdArgs.push("--workspace", requestWorkspace);
         cmdArgs.push("--model", model);
