@@ -125,6 +125,7 @@ console.log(completion.choices[0].message.content);
 | `CURSOR_BRIDGE_TLS_CERT` | — | Path to TLS certificate file (e.g. Tailscale cert). Use with `CURSOR_BRIDGE_TLS_KEY` for HTTPS. |
 | `CURSOR_BRIDGE_TLS_KEY` | — | Path to TLS private key file. Use with `CURSOR_BRIDGE_TLS_CERT` for HTTPS. |
 | `CURSOR_BRIDGE_SESSIONS_LOG` | `sessions.log` (cwd) | Path to log file; each request is appended as a line (timestamp, method, path, IP, status). |
+| `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE` | `true` | When `true` (default), the CLI runs in an empty temp dir so it **cannot read or write your project**; pure chat only. Set to `false` to pass the real workspace (e.g. for `X-Cursor-Workspace`). |
 | `CURSOR_AGENT_BIN` | `agent` | Path to Cursor CLI binary |
 
 CLI flags:

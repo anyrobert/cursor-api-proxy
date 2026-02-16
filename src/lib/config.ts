@@ -20,6 +20,8 @@ export type BridgeConfig = {
   tlsKeyPath?: string;
   /** Path to sessions log file; each request is appended as a line. Default: sessions.log in cwd. */
   sessionsLogPath: string;
+  /** When true (default), run CLI in an empty temp dir so it cannot read or write the real project. Pure chat only. */
+  chatOnlyWorkspace: boolean;
 };
 
 function envBool(name: string, defaultValue: boolean): boolean {
@@ -94,6 +96,14 @@ function getSessionsLogPath(): string {
   return raw ? path.resolve(raw) : path.join(process.cwd(), "sessions.log");
 }
 
+function getChatOnlyWorkspace(): boolean {
+  const raw = process.env.CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE;
+  if (raw == null) return true; // default: isolate so CLI cannot touch real project
+  const v = raw.trim().toLowerCase();
+  if (v === "0" || v === "false" || v === "no" || v === "off") return false;
+  return true;
+}
+
 export function loadBridgeConfig(): BridgeConfig {
   return {
     agentBin: getAgentBin(),
@@ -110,5 +120,6 @@ export function loadBridgeConfig(): BridgeConfig {
     tlsCertPath: getTlsCertPath(),
     tlsKeyPath: getTlsKeyPath(),
     sessionsLogPath: getSessionsLogPath(),
+    chatOnlyWorkspace: getChatOnlyWorkspace(),
   };
 }
