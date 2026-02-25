@@ -1,0 +1,30 @@
+{
+  "name": "cursor-api-proxy",
+  "version": "0.1.0",
+  "description": "OpenAI-compatible proxy for Cursor CLI — use Cursor models from any LLM client on localhost",
+  "private": false,
+  "type": "module",
+  "bin": {
+    "cursor-api-proxy": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node ./dist/cli.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "cursor",
+    "openai",
+    "proxy",
+    "llm",
+    "api"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

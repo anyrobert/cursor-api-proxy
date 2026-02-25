@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+.env
+.DS_Store
+# Tailscale / TLS certs (keep private keys out of repo)
+*.ts.net.crt
+*.ts.net.key
+# Session/request log (optional; path configurable via CURSOR_BRIDGE_SESSIONS_LOG)
+sessions.log
