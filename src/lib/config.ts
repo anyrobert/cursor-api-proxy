@@ -93,7 +93,14 @@ function getWorkspace(): string {
 
 function getSessionsLogPath(): string {
   const raw = process.env.CURSOR_BRIDGE_SESSIONS_LOG;
-  return raw ? path.resolve(raw) : path.join(process.cwd(), "sessions.log");
+  if (raw) return path.resolve(raw);
+
+  const home = process.env.HOME || process.env.USERPROFILE;
+  if (home) {
+    return path.join(home, ".cursor-api-proxy", "sessions.log");
+  }
+
+  return path.join(process.cwd(), "sessions.log");
 }
 
 function getChatOnlyWorkspace(): boolean {
