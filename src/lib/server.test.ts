@@ -3,7 +3,7 @@ import * as http from "node:http";
 import { startBridgeServer } from "./server.js";
 import type { BridgeConfig } from "./config.js";
 
-vi.mock("./cursorCli.js", () => ({
+vi.mock("./cursor-cli.js", () => ({
   listCursorCliModels: vi.fn().mockResolvedValue([
     { id: "claude-3-opus", name: "Claude 3 Opus" },
     { id: "claude-3-sonnet", name: "Claude 3 Sonnet" },
@@ -29,7 +29,7 @@ vi.mock("./process.js", () => ({
   }),
 }));
 
-vi.mock("./requestLog.js", () => ({
+vi.mock("./request-log.js", () => ({
   logIncoming: vi.fn(),
   appendSessionLine: vi.fn(),
 }));
