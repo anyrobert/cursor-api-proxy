@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 
+import { fileURLToPath } from "node:url";
 import { loadBridgeConfig } from "./lib/config.js";
 import { startBridgeServer } from "./lib/server.js";
 
-function parseArgs(argv: string[]) {
+const __filename = fileURLToPath(import.meta.url);
+const isMainModule =
+  typeof process.argv[1] === "string" && process.argv[1] === __filename;
+
+export function parseArgs(argv: string[]) {
   let tailscale = false;
   let help = false;
 
@@ -49,7 +54,9 @@ async function main() {
   startBridgeServer({ version: "0.1.0", config });
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (isMainModule) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
