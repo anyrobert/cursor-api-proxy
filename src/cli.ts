@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { fileURLToPath } from "node:url";
+
+import pkg from "../package.json" with { type: "json" };
 import { loadBridgeConfig } from "./lib/config.js";
 import { startBridgeServer } from "./lib/server.js";
 
@@ -51,7 +53,7 @@ async function main() {
   }
 
   const config = loadBridgeConfig();
-  startBridgeServer({ version: "0.1.0", config });
+  startBridgeServer({ version: pkg.version, config });
 }
 
 if (isMainModule) {

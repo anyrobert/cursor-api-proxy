@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseCursorCliModels } from "./cursorCli.js";
+import { parseCursorCliModels } from "./cursor-cli.js";
 
 describe("parseCursorCliModels", () => {
   it("parses model lines with id and name", () => {
