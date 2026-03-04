@@ -11,6 +11,11 @@ import type { CursorCliModel } from "./cursorCli.js";
 import { listCursorCliModels } from "./cursorCli.js";
 import { extractBearerToken, json, readBody } from "./http.js";
 import {
+  buildPromptFromAnthropicMessages,
+  type AnthropicMessagesRequest,
+} from "./anthropic.js";
+import { getAnthropicModelAliases, resolveToCursorModel } from "./modelMap.js";
+import {
   buildPromptFromMessages,
   normalizeModelId,
   type OpenAiChatCompletionRequest,
@@ -78,12 +83,20 @@ export function startBridgeServer(opts: BridgeServerOptions): http.Server | http
 
         json(res, 200, {
           object: "list",
-          data: modelCache.models.map((m) => ({
-            id: m.id,
-            object: "model",
-            owned_by: "cursor",
-            name: m.name,
-          })),
+          data: [
+            ...modelCache.models.map((m) => ({
+              id: m.id,
+              object: "model",
+              owned_by: "cursor",
+              name: m.name,
+            })),
+            ...getAnthropicModelAliases(modelCache.models.map((m) => m.id)).map((a) => ({
+              id: a.id,
+              object: "model" as const,
+              owned_by: "cursor" as const,
+              name: a.name,
+            })),
+          ],
         });
         return;
       }
@@ -101,6 +114,8 @@ export function startBridgeServer(opts: BridgeServerOptions): http.Server | http
           requested ||
           lastRequestedModel ||
           config.defaultModel;
+
+        const cursorModel = resolveToCursorModel(model) ?? model;
 
         const prompt = buildPromptFromMessages(body.messages || []);
 
@@ -131,7 +146,7 @@ export function startBridgeServer(opts: BridgeServerOptions): http.Server | http
         cmdArgs.push("--mode", "ask");
 
         cmdArgs.push("--workspace", workspaceDir);
-        cmdArgs.push("--model", model);
+        cmdArgs.push("--model", cursorModel);
         if (body.stream) {
           cmdArgs.push("--stream-partial-output", "--output-format", "stream-json");
         } else {
@@ -282,6 +297,208 @@ export function startBridgeServer(opts: BridgeServerOptions): http.Server | http
             },
           ],
           usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        });
+        return;
+      }
+
+      // Anthropic Messages API (used by Claude Code)
+      if (req.method === "POST" && pathname === "/v1/messages") {
+        const raw = await readBody(req);
+        const body = JSON.parse(raw || "{}") as AnthropicMessagesRequest;
+        const requested = normalizeModelId(body.model);
+        const explicitModel = requested && requested !== "auto" ? requested : undefined;
+        if (explicitModel) lastRequestedModel = explicitModel;
+
+        const model =
+          explicitModel ||
+          (config.strictModel ? lastRequestedModel : undefined) ||
+          requested ||
+          lastRequestedModel ||
+          config.defaultModel;
+
+        if (body.max_tokens == null || typeof body.max_tokens !== "number") {
+          json(res, 400, {
+            error: {
+              type: "invalid_request_error",
+              message: "max_tokens is required",
+            },
+          });
+          return;
+        }
+
+        const cursorModel = resolveToCursorModel(model) ?? model;
+        const prompt = buildPromptFromAnthropicMessages(body.messages, body.system);
+
+        let workspaceDir: string;
+        let tempDir: string | undefined;
+        if (config.chatOnlyWorkspace) {
+          tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-proxy-"));
+          workspaceDir = tempDir;
+        } else {
+          const headerWs = req.headers["x-cursor-workspace"];
+          workspaceDir =
+            (typeof headerWs === "string" && headerWs.trim()) || config.workspace;
+        }
+
+        const cmdArgs: string[] = ["--print"];
+        if (config.approveMcps) cmdArgs.push("--approve-mcps");
+        if (config.force) cmdArgs.push("--force");
+        if (config.chatOnlyWorkspace) cmdArgs.push("--trust");
+        cmdArgs.push("--mode", "ask");
+        cmdArgs.push("--workspace", workspaceDir);
+        cmdArgs.push("--model", cursorModel);
+        if (body.stream) {
+          cmdArgs.push("--stream-partial-output", "--output-format", "stream-json");
+        } else {
+          cmdArgs.push("--output-format", "text");
+        }
+        cmdArgs.push(prompt);
+
+        const msgId = `msg_${randomUUID().replace(/-/g, "")}`;
+
+        if (body.stream) {
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+            "X-Accel-Buffering": "no",
+          });
+
+          const writeAnthropicEvent = (evt: object) => {
+            res.write(`data: ${JSON.stringify(evt)}\n\n`);
+          };
+
+          // Anthropic streaming: message_start and content_block_start first
+          writeAnthropicEvent({
+            type: "message_start",
+            message: {
+              id: msgId,
+              type: "message",
+              role: "assistant",
+              model: model ?? cursorModel,
+              content: [],
+            },
+          });
+          writeAnthropicEvent({
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "text", text: "" },
+          });
+
+          runStreaming(config.agentBin, cmdArgs, {
+            cwd: workspaceDir,
+            timeoutMs: config.timeoutMs,
+            onLine(line: string) {
+              try {
+                const obj = JSON.parse(line) as {
+                  type?: string;
+                  subtype?: string;
+                  message?: { content?: Array<{ type?: string; text?: string }> };
+                };
+                if (obj.type === "assistant" && obj.message?.content) {
+                  for (const part of obj.message.content) {
+                    if (part.type === "text" && part.text) {
+                      writeAnthropicEvent({
+                        type: "content_block_delta",
+                        index: 0,
+                        delta: { type: "text_delta", text: part.text },
+                      });
+                    }
+                  }
+                }
+                if (obj.type === "result" && obj.subtype === "success") {
+                  writeAnthropicEvent({ type: "content_block_stop", index: 0 });
+                  writeAnthropicEvent({
+                    type: "message_delta",
+                    delta: { stop_reason: "end_turn" },
+                  });
+                  writeAnthropicEvent({ type: "message_stop" });
+                }
+              } catch {
+                // ignore parse errors for non-JSON lines
+              }
+            },
+          })
+            .then(({ code, stderr: stderrOut }) => {
+              if (tempDir) {
+                try {
+                  fs.rmSync(tempDir, { recursive: true, force: true });
+                } catch {
+                  // ignore
+                }
+              }
+              if (code !== 0) {
+                const errMsg = `Cursor CLI failed (exit ${code}): ${stderrOut.trim()}`;
+                console.error(`[${new Date().toISOString()}] Agent error: ${errMsg}`);
+                try {
+                  fs.appendFileSync(
+                    config.sessionsLogPath,
+                    `${new Date().toISOString()} ERROR ${method} ${pathname} ${remoteAddress} agent_exit_${code} ${stderrOut.trim().slice(0, 200).replace(/\n/g, " ")}\n`,
+                  );
+                } catch {
+                  // ignore
+                }
+              }
+              res.end();
+            })
+            .catch((err) => {
+              if (tempDir) {
+                try {
+                  fs.rmSync(tempDir, { recursive: true, force: true });
+                } catch {
+                  // ignore
+                }
+              }
+              console.error(`[${new Date().toISOString()}] Agent stream error:`, err);
+              res.end();
+            });
+          return;
+        }
+
+        const out = await run(config.agentBin, cmdArgs, {
+          cwd: workspaceDir,
+          timeoutMs: config.timeoutMs,
+        });
+
+        if (tempDir) {
+          try {
+            fs.rmSync(tempDir, { recursive: true, force: true });
+          } catch {
+            // ignore cleanup errors
+          }
+        }
+        if (out.code !== 0) {
+          const errMsg = `Cursor CLI failed (exit ${out.code}): ${out.stderr.trim()}`;
+          console.error(`[${new Date().toISOString()}] Agent error: ${errMsg}`);
+          try {
+            fs.appendFileSync(
+              config.sessionsLogPath,
+              `${new Date().toISOString()} ERROR ${method} ${pathname} ${remoteAddress} agent_exit_${out.code} ${out.stderr.trim().slice(0, 200).replace(/\n/g, " ")}\n`,
+            );
+          } catch {
+            // ignore log write errors
+          }
+          json(res, 500, {
+            error: {
+              type: "api_error",
+              message: errMsg,
+            },
+          });
+          return;
+        }
+
+        const content = out.stdout.trim();
+        json(res, 200, {
+          id: msgId,
+          type: "message",
+          role: "assistant",
+          content: [{ type: "text", text: content }],
+          model: model ?? cursorModel,
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 0,
+            output_tokens: 0,
+          },
         });
         return;
       }
