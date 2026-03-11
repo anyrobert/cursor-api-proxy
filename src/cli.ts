@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import pkg from "../package.json" with { type: "json" };
@@ -7,8 +8,10 @@ import { loadBridgeConfig } from "./lib/config.js";
 import { startBridgeServer } from "./lib/server.js";
 
 const __filename = fileURLToPath(import.meta.url);
-const isMainModule =
-  typeof process.argv[1] === "string" && process.argv[1] === __filename;
+const realArgv1 = process.argv[1]
+  ? fs.realpathSync(process.argv[1])
+  : "";
+const isMainModule = realArgv1 === fs.realpathSync(__filename);
 
 export function parseArgs(argv: string[]) {
   let tailscale = false;
