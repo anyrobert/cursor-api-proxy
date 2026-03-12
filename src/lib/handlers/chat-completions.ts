@@ -12,7 +12,12 @@ import {
   normalizeModelId,
   type OpenAiChatCompletionRequest,
 } from "../openai.js";
-import { logAgentError } from "../request-log.js";
+import {
+  logAgentError,
+  logTrafficRequest,
+  logTrafficResponse,
+  type TrafficMessage,
+} from "../request-log.js";
 import { resolveModel } from "../resolve-model.js";
 import { resolveWorkspace } from "../workspace.js";
 
@@ -37,6 +42,27 @@ export async function handleChatCompletions(
   const cursorModel = resolveToCursorModel(model) ?? model;
   const prompt = buildPromptFromMessages(body.messages ?? []);
 
+  const trafficMessages: TrafficMessage[] = (body.messages ?? []).map(
+    (m: any) => {
+      const content =
+        typeof m?.content === "string"
+          ? m.content
+          : Array.isArray(m?.content)
+            ? (m.content as Array<{ type?: string; text?: string }>)
+                .filter((p) => p.type === "text")
+                .map((p) => p.text ?? "")
+                .join("")
+            : "";
+      return { role: String(m?.role ?? "user"), content };
+    },
+  );
+  logTrafficRequest(
+    config.verbose,
+    model ?? cursorModel,
+    trafficMessages,
+    !!body.stream,
+  );
+
   const headerWs = req.headers["x-cursor-workspace"];
   const { workspaceDir, tempDir } = resolveWorkspace(config, headerWs);
 
@@ -54,36 +80,50 @@ export async function handleChatCompletions(
   if (body.stream) {
     writeSseHeaders(res);
 
-    runAgentStream(config, workspaceDir, cmdArgs, (line) => {
-      parseCliStreamLine(
-        line,
-        (text) => {
-          res.write(
-            `data: ${JSON.stringify({
-              id,
-              object: "chat.completion.chunk",
-              created,
-              model,
-              choices: [
-                { index: 0, delta: { content: text }, finish_reason: null },
-              ],
-            })}\n\n`,
-          );
-        },
-        () => {
-          res.write(
-            `data: ${JSON.stringify({
-              id,
-              object: "chat.completion.chunk",
-              created,
-              model,
-              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-            })}\n\n`,
-          );
-          res.write("data: [DONE]\n\n");
-        },
-      );
-    }, tempDir)
+    let accumulated = "";
+    runAgentStream(
+      config,
+      workspaceDir,
+      cmdArgs,
+      (line) => {
+        parseCliStreamLine(
+          line,
+          (text) => {
+            accumulated += text;
+            res.write(
+              `data: ${JSON.stringify({
+                id,
+                object: "chat.completion.chunk",
+                created,
+                model,
+                choices: [
+                  { index: 0, delta: { content: text }, finish_reason: null },
+                ],
+              })}\n\n`,
+            );
+          },
+          () => {
+            logTrafficResponse(
+              config.verbose,
+              model ?? cursorModel,
+              accumulated,
+              true,
+            );
+            res.write(
+              `data: ${JSON.stringify({
+                id,
+                object: "chat.completion.chunk",
+                created,
+                model,
+                choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+              })}\n\n`,
+            );
+            res.write("data: [DONE]\n\n");
+          },
+        );
+      },
+      tempDir,
+    )
       .then(({ code, stderr: stderrOut }) => {
         if (code !== 0) {
           logAgentError(
@@ -122,6 +162,7 @@ export async function handleChatCompletions(
   }
 
   const content = out.stdout.trim();
+  logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
   json(res, 200, {
     id,
     object: "chat.completion",

@@ -19,10 +19,12 @@ vi.mock("./process.js", () => ({
   runStreaming: vi.fn().mockImplementation((_cmd, _args, opts) => {
     // Simulate streaming response
     if (opts.onLine) {
-      opts.onLine(JSON.stringify({
-        type: "assistant",
-        message: { content: [{ type: "text", text: "Hello" }] },
-      }));
+      opts.onLine(
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "text", text: "Hello" }] },
+        }),
+      );
       opts.onLine(JSON.stringify({ type: "result", subtype: "success" }));
     }
     return Promise.resolve({ code: 0, stderr: "" });
@@ -50,6 +52,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     timeoutMs: 30_000,
     sessionsLogPath: tmpLogPath,
     chatOnlyWorkspace: true,
+    verbose: false,
     ...overrides,
   };
 }
@@ -57,7 +60,11 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
 async function fetchServer(
   server: http.Server,
   path: string,
-  options: { method?: string; body?: string; headers?: Record<string, string> } = {},
+  options: {
+    method?: string;
+    body?: string;
+    headers?: Record<string, string>;
+  } = {},
 ): Promise<{ status: number; body: string }> {
   const port = (server.address() as { port: number })?.port;
   const url = `http://127.0.0.1:${port}${path}`;
@@ -100,7 +107,9 @@ describe("startBridgeServer", () => {
       version: "0.1.0",
       config: createTestConfig(),
     });
-    await new Promise<void>((resolve) => server.on("listening", () => resolve()));
+    await new Promise<void>((resolve) =>
+      server.on("listening", () => resolve()),
+    );
 
     const { status, body } = await fetchServer(server, "/health");
     expect(status).toBe(200);
@@ -115,7 +124,9 @@ describe("startBridgeServer", () => {
       version: "0.1.0",
       config: createTestConfig(),
     });
-    await new Promise<void>((resolve) => server.on("listening", () => resolve()));
+    await new Promise<void>((resolve) =>
+      server.on("listening", () => resolve()),
+    );
 
     const { status, body } = await fetchServer(server, "/v1/models");
     expect(status).toBe(200);
@@ -130,7 +141,9 @@ describe("startBridgeServer", () => {
       version: "0.1.0",
       config: createTestConfig({ requiredKey: "sk-secret" }),
     });
-    await new Promise<void>((resolve) => server.on("listening", () => resolve()));
+    await new Promise<void>((resolve) =>
+      server.on("listening", () => resolve()),
+    );
 
     const { status, body } = await fetchServer(server, "/health");
     expect(status).toBe(401);
@@ -143,7 +156,9 @@ describe("startBridgeServer", () => {
       version: "0.1.0",
       config: createTestConfig({ requiredKey: "sk-secret" }),
     });
-    await new Promise<void>((resolve) => server.on("listening", () => resolve()));
+    await new Promise<void>((resolve) =>
+      server.on("listening", () => resolve()),
+    );
 
     const { status } = await fetchServer(server, "/health", {
       headers: { Authorization: "Bearer sk-secret" },
@@ -156,7 +171,9 @@ describe("startBridgeServer", () => {
       version: "0.1.0",
       config: createTestConfig(),
     });
-    await new Promise<void>((resolve) => server.on("listening", () => resolve()));
+    await new Promise<void>((resolve) =>
+      server.on("listening", () => resolve()),
+    );
 
     const { status, body } = await fetchServer(server, "/unknown");
     expect(status).toBe(404);
@@ -169,7 +186,9 @@ describe("startBridgeServer", () => {
       version: "0.1.0",
       config: createTestConfig(),
     });
-    await new Promise<void>((resolve) => server.on("listening", () => resolve()));
+    await new Promise<void>((resolve) =>
+      server.on("listening", () => resolve()),
+    );
 
     const { status, body } = await fetchServer(server, "/v1/chat/completions", {
       method: "POST",

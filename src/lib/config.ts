@@ -22,6 +22,8 @@ export type BridgeConfig = {
   sessionsLogPath: string;
   /** When true (default), run CLI in an empty temp dir so it cannot read or write the real project. Pure chat only. */
   chatOnlyWorkspace: boolean;
+  /** When true, print full request/response content to stdout for each completion. */
+  verbose: boolean;
 };
 
 function envBool(name: string, defaultValue: boolean): boolean {
@@ -117,7 +119,8 @@ export function loadBridgeConfig(): BridgeConfig {
     host: getHost(),
     port: getPort(),
     requiredKey: getRequiredKey(),
-    defaultModel: normalizeModelId(process.env.CURSOR_BRIDGE_DEFAULT_MODEL) || "auto",
+    defaultModel:
+      normalizeModelId(process.env.CURSOR_BRIDGE_DEFAULT_MODEL) || "auto",
     mode: "ask", // proxy is chat-only; CURSOR_BRIDGE_MODE is ignored
     force: envBool("CURSOR_BRIDGE_FORCE", false),
     approveMcps: envBool("CURSOR_BRIDGE_APPROVE_MCPS", false),
@@ -128,5 +131,6 @@ export function loadBridgeConfig(): BridgeConfig {
     tlsKeyPath: getTlsKeyPath(),
     sessionsLogPath: getSessionsLogPath(),
     chatOnlyWorkspace: getChatOnlyWorkspace(),
+    verbose: envBool("CURSOR_BRIDGE_VERBOSE", false),
   };
 }
