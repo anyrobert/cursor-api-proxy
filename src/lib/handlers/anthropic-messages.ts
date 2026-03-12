@@ -10,7 +10,12 @@ import type { BridgeConfig } from "../config.js";
 import { json, writeSseHeaders } from "../http.js";
 import { resolveToCursorModel } from "../model-map.js";
 import { normalizeModelId } from "../openai.js";
-import { logAgentError } from "../request-log.js";
+import {
+  logAgentError,
+  logTrafficRequest,
+  logTrafficResponse,
+  type TrafficMessage,
+} from "../request-log.js";
 import { resolveModel } from "../resolve-model.js";
 import { resolveWorkspace } from "../workspace.js";
 
@@ -45,6 +50,35 @@ export async function handleAnthropicMessages(
 
   const cursorModel = resolveToCursorModel(model) ?? model;
   const prompt = buildPromptFromAnthropicMessages(body.messages, body.system);
+
+  const trafficMessages: TrafficMessage[] = [];
+  if (body.system) {
+    const sys =
+      typeof body.system === "string"
+        ? body.system
+        : (body.system as Array<{ type?: string; text?: string }>)
+            .filter((p) => p.type === "text")
+            .map((p) => p.text ?? "")
+            .join("\n");
+    if (sys.trim())
+      trafficMessages.push({ role: "system", content: sys.trim() });
+  }
+  for (const m of body.messages ?? []) {
+    const text =
+      typeof m.content === "string"
+        ? m.content
+        : (m.content as Array<{ type?: string; text?: string }>)
+            .filter((p) => p.type === "text")
+            .map((p) => p.text ?? "")
+            .join("");
+    if (text) trafficMessages.push({ role: m.role, content: text });
+  }
+  logTrafficRequest(
+    config.verbose,
+    model ?? cursorModel,
+    trafficMessages,
+    !!body.stream,
+  );
 
   const headerWs = req.headers["x-cursor-workspace"];
   const { workspaceDir, tempDir } = resolveWorkspace(config, headerWs);
@@ -82,25 +116,40 @@ export async function handleAnthropicMessages(
       content_block: { type: "text", text: "" },
     });
 
-    runAgentStream(config, workspaceDir, cmdArgs, (line) => {
-      parseCliStreamLine(
-        line,
-        (text) =>
-          writeEvent({
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "text_delta", text },
-          }),
-        () => {
-          writeEvent({ type: "content_block_stop", index: 0 });
-          writeEvent({
-            type: "message_delta",
-            delta: { stop_reason: "end_turn" },
-          });
-          writeEvent({ type: "message_stop" });
-        },
-      );
-    }, tempDir)
+    let accumulated = "";
+    runAgentStream(
+      config,
+      workspaceDir,
+      cmdArgs,
+      (line) => {
+        parseCliStreamLine(
+          line,
+          (text) => {
+            accumulated += text;
+            writeEvent({
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "text_delta", text },
+            });
+          },
+          () => {
+            logTrafficResponse(
+              config.verbose,
+              model ?? cursorModel,
+              accumulated,
+              true,
+            );
+            writeEvent({ type: "content_block_stop", index: 0 });
+            writeEvent({
+              type: "message_delta",
+              delta: { stop_reason: "end_turn" },
+            });
+            writeEvent({ type: "message_stop" });
+          },
+        );
+      },
+      tempDir,
+    )
       .then(({ code, stderr: stderrOut }) => {
         if (code !== 0) {
           logAgentError(
@@ -139,6 +188,7 @@ export async function handleAnthropicMessages(
   }
 
   const content = out.stdout.trim();
+  logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
   json(res, 200, {
     id: msgId,
     type: "message",

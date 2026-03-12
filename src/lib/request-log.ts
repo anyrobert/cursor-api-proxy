@@ -1,8 +1,112 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export function logIncoming(method: string, pathname: string, remoteAddress: string): void {
-  console.log(`[${new Date().toISOString()}] Incoming: ${method} ${pathname} (from ${remoteAddress})`);
+export function logIncoming(
+  method: string,
+  pathname: string,
+  remoteAddress: string,
+): void {
+  console.log(
+    `[${new Date().toISOString()}] Incoming: ${method} ${pathname} (from ${remoteAddress})`,
+  );
+}
+
+export type TrafficMessage = { role: string; content: string };
+
+// ANSI color helpers
+const C = {
+  reset: "\x1b[0m",
+  bold: "\x1b[1m",
+  dim: "\x1b[2m",
+  cyan: "\x1b[36m",
+  bCyan: "\x1b[1;96m",
+  green: "\x1b[32m",
+  bGreen: "\x1b[1;92m",
+  yellow: "\x1b[33m",
+  magenta: "\x1b[35m",
+  bMagenta: "\x1b[1;95m",
+  red: "\x1b[31m",
+  gray: "\x1b[90m",
+  white: "\x1b[97m",
+};
+
+const ROLE_STYLE: Record<string, string> = {
+  system: C.yellow,
+  user: C.cyan,
+  assistant: C.green,
+};
+
+const ROLE_EMOJI: Record<string, string> = {
+  system: "🔧",
+  user: "👤",
+  assistant: "🤖",
+};
+
+function ts(): string {
+  return `${C.gray}${new Date().toISOString()}${C.reset}`;
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const head = Math.floor(max * 0.6);
+  const tail = max - head;
+  const omitted = s.length - head - tail;
+  return (
+    s.slice(0, head) +
+    `${C.dim} … (${omitted} chars omitted) … ` +
+    s.slice(s.length - tail) +
+    C.reset
+  );
+}
+
+function hr(char = "─", len = 60): string {
+  return C.gray + char.repeat(len) + C.reset;
+}
+
+export function logTrafficRequest(
+  verbose: boolean,
+  model: string,
+  messages: TrafficMessage[],
+  isStream: boolean,
+): void {
+  if (!verbose) return;
+  const modeTag = isStream
+    ? `${C.bCyan}⚡ stream${C.reset}`
+    : `${C.dim}sync${C.reset}`;
+  const modelStr = `${C.bMagenta}✦ ${model}${C.reset}`;
+  console.log(hr());
+  console.log(
+    `${ts()} 📤 ${C.bCyan}${C.bold}REQUEST${C.reset}  ${modelStr}  ${modeTag}`,
+  );
+  for (const m of messages) {
+    const roleColor = ROLE_STYLE[m.role] ?? C.white;
+    const emoji = ROLE_EMOJI[m.role] ?? "💬";
+    const label = `${roleColor}${C.bold}[${m.role}]${C.reset}`;
+    const charCount = `${C.dim}(${m.content.length} chars)${C.reset}`;
+    const preview = truncate(m.content.replace(/\n/g, "↵ "), 280);
+    console.log(`  ${emoji} ${label} ${charCount}`);
+    console.log(`     ${C.dim}${preview}${C.reset}`);
+  }
+}
+
+export function logTrafficResponse(
+  verbose: boolean,
+  model: string,
+  text: string,
+  isStream: boolean,
+): void {
+  if (!verbose) return;
+  const modeTag = isStream
+    ? `${C.bGreen}⚡ stream${C.reset}`
+    : `${C.dim}sync${C.reset}`;
+  const modelStr = `${C.bMagenta}✦ ${model}${C.reset}`;
+  const charCount = `${C.bold}${text.length}${C.reset}${C.dim} chars${C.reset}`;
+  const preview = truncate(text.replace(/\n/g, "↵ "), 480);
+  console.log(
+    `${ts()} 📥 ${C.bGreen}${C.bold}RESPONSE${C.reset}  ${modelStr}  ${modeTag}  ${charCount}`,
+  );
+  console.log(`  🤖 ${C.green}${preview}${C.reset}`);
+  console.log(hr("─", 60));
 }
 
 export function appendSessionLine(

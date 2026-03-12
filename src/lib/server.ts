@@ -38,12 +38,13 @@ export function startBridgeServer(
     console.log(`- default model: ${config.defaultModel}`);
     console.log(`- force: ${config.force}`);
     console.log(`- approve mcps: ${config.approveMcps}`);
-    console.log(
-      `- required api key: ${config.requiredKey ? "yes" : "no"}`,
-    );
+    console.log(`- required api key: ${config.requiredKey ? "yes" : "no"}`);
     console.log(`- sessions log: ${config.sessionsLogPath}`);
     console.log(
       `- chat-only workspace: ${config.chatOnlyWorkspace ? "yes (isolated temp dir)" : "no"}`,
+    );
+    console.log(
+      `- verbose traffic: ${config.verbose ? "yes (CURSOR_BRIDGE_VERBOSE=true)" : "no"}`,
     );
   });
 
