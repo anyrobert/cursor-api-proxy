@@ -1,4 +1,4 @@
-import * as path from "node:path";
+import { loadEnvConfig, type EnvOptions } from "./env.js";
 
 export type CursorExecutionMode = "agent" | "ask" | "plan";
 
@@ -26,111 +26,25 @@ export type BridgeConfig = {
   verbose: boolean;
 };
 
-function envBool(name: string, defaultValue: boolean): boolean {
-  const raw = process.env[name];
-  if (raw == null) return defaultValue;
-  const v = raw.trim().toLowerCase();
-  if (v === "1" || v === "true" || v === "yes" || v === "on") return true;
-  if (v === "0" || v === "false" || v === "no" || v === "off") return false;
-  return defaultValue;
-}
+export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
+  const env = loadEnvConfig(opts);
 
-function envNumber(name: string, defaultValue: number): number {
-  const raw = process.env[name];
-  if (raw == null) return defaultValue;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : defaultValue;
-}
-
-function normalizeMode(raw: string | undefined): CursorExecutionMode {
-  const m = (raw || "").trim().toLowerCase();
-  if (m === "ask" || m === "plan" || m === "agent") return m;
-  return "ask";
-}
-
-function normalizeModelId(raw: string | undefined): string | undefined {
-  if (!raw) return undefined;
-  const trimmed = raw.trim();
-  if (!trimmed) return undefined;
-  const parts = trimmed.split("/");
-  return parts[parts.length - 1] || undefined;
-}
-
-function getAgentBin(): string {
-  return (
-    process.env.CURSOR_AGENT_BIN ||
-    process.env.CURSOR_CLI_BIN ||
-    process.env.CURSOR_CLI_PATH ||
-    "agent"
-  );
-}
-
-function getHost(): string {
-  return process.env.CURSOR_BRIDGE_HOST || "127.0.0.1";
-}
-
-function getPort(): number {
-  const n = envNumber("CURSOR_BRIDGE_PORT", 8765);
-  return Number.isFinite(n) && n > 0 ? n : 8765;
-}
-
-function getRequiredKey(): string | undefined {
-  return process.env.CURSOR_BRIDGE_API_KEY;
-}
-
-function getTlsCertPath(): string | undefined {
-  const v = process.env.CURSOR_BRIDGE_TLS_CERT;
-  return v && v.trim() ? v.trim() : undefined;
-}
-
-function getTlsKeyPath(): string | undefined {
-  const v = process.env.CURSOR_BRIDGE_TLS_KEY;
-  return v && v.trim() ? v.trim() : undefined;
-}
-
-function getWorkspace(): string {
-  const raw = process.env.CURSOR_BRIDGE_WORKSPACE;
-  return raw ? path.resolve(raw) : process.cwd();
-}
-
-function getSessionsLogPath(): string {
-  const raw = process.env.CURSOR_BRIDGE_SESSIONS_LOG;
-  if (raw) return path.resolve(raw);
-
-  const home = process.env.HOME || process.env.USERPROFILE;
-  if (home) {
-    return path.join(home, ".cursor-api-proxy", "sessions.log");
-  }
-
-  return path.join(process.cwd(), "sessions.log");
-}
-
-function getChatOnlyWorkspace(): boolean {
-  const raw = process.env.CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE;
-  if (raw == null) return true; // default: isolate so CLI cannot touch real project
-  const v = raw.trim().toLowerCase();
-  if (v === "0" || v === "false" || v === "no" || v === "off") return false;
-  return true;
-}
-
-export function loadBridgeConfig(): BridgeConfig {
   return {
-    agentBin: getAgentBin(),
-    host: getHost(),
-    port: getPort(),
-    requiredKey: getRequiredKey(),
-    defaultModel:
-      normalizeModelId(process.env.CURSOR_BRIDGE_DEFAULT_MODEL) || "auto",
+    agentBin: env.agentBin,
+    host: env.host,
+    port: env.port,
+    requiredKey: env.requiredKey,
+    defaultModel: env.defaultModel,
     mode: "ask", // proxy is chat-only; CURSOR_BRIDGE_MODE is ignored
-    force: envBool("CURSOR_BRIDGE_FORCE", false),
-    approveMcps: envBool("CURSOR_BRIDGE_APPROVE_MCPS", false),
-    strictModel: envBool("CURSOR_BRIDGE_STRICT_MODEL", true),
-    workspace: getWorkspace(),
-    timeoutMs: envNumber("CURSOR_BRIDGE_TIMEOUT_MS", 300_000),
-    tlsCertPath: getTlsCertPath(),
-    tlsKeyPath: getTlsKeyPath(),
-    sessionsLogPath: getSessionsLogPath(),
-    chatOnlyWorkspace: getChatOnlyWorkspace(),
-    verbose: envBool("CURSOR_BRIDGE_VERBOSE", false),
+    force: env.force,
+    approveMcps: env.approveMcps,
+    strictModel: env.strictModel,
+    workspace: env.workspace,
+    timeoutMs: env.timeoutMs,
+    tlsCertPath: env.tlsCertPath,
+    tlsKeyPath: env.tlsKeyPath,
+    sessionsLogPath: env.sessionsLogPath,
+    chatOnlyWorkspace: env.chatOnlyWorkspace,
+    verbose: env.verbose,
   };
 }
