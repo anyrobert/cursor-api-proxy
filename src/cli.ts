@@ -51,11 +51,7 @@ async function main() {
     return;
   }
 
-  if (args.tailscale && !process.env.CURSOR_BRIDGE_HOST) {
-    process.env.CURSOR_BRIDGE_HOST = "0.0.0.0";
-  }
-
-  const config = loadBridgeConfig();
+  const config = loadBridgeConfig({ tailscale: args.tailscale });
   startBridgeServer({ version: pkg.version, config });
 }
 
