@@ -9,14 +9,16 @@ export function resolveModel(
   lastRequestedModelRef: { current?: string },
   config: BridgeConfig,
 ): string {
-  const explicitModel =
-    requested && requested !== "auto" ? requested : undefined;
+  const isAuto = requested === "auto";
+  const explicitModel = requested && !isAuto ? requested : undefined;
   if (explicitModel) lastRequestedModelRef.current = explicitModel;
+
+  // "auto" is a valid Cursor model identifier — pass it through directly
+  if (isAuto) return "auto";
 
   return (
     explicitModel ??
     (config.strictModel ? lastRequestedModelRef.current : undefined) ??
-    requested ??
     lastRequestedModelRef.current ??
     config.defaultModel
   );
