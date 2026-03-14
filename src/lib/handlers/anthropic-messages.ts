@@ -5,7 +5,7 @@ import type { AnthropicMessagesRequest } from "../anthropic.js";
 import { buildPromptFromAnthropicMessages } from "../anthropic.js";
 import { buildAgentCmdArgs } from "../agent-cmd-args.js";
 import { runAgentStream, runAgentSync } from "../agent-runner.js";
-import { parseCliStreamLine } from "../cli-stream-parser.js";
+import { createStreamParser } from "../cli-stream-parser.js";
 import type { BridgeConfig } from "../config.js";
 import { json, writeSseHeaders } from "../http.js";
 import { resolveToCursorModel } from "../model-map.js";
@@ -117,37 +117,35 @@ export async function handleAnthropicMessages(
     });
 
     let accumulated = "";
+    const parseLine = createStreamParser(
+      (text) => {
+        accumulated += text;
+        writeEvent({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text },
+        });
+      },
+      () => {
+        logTrafficResponse(
+          config.verbose,
+          model ?? cursorModel,
+          accumulated,
+          true,
+        );
+        writeEvent({ type: "content_block_stop", index: 0 });
+        writeEvent({
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+        });
+        writeEvent({ type: "message_stop" });
+      },
+    );
     runAgentStream(
       config,
       workspaceDir,
       cmdArgs,
-      (line) => {
-        parseCliStreamLine(
-          line,
-          (text) => {
-            accumulated += text;
-            writeEvent({
-              type: "content_block_delta",
-              index: 0,
-              delta: { type: "text_delta", text },
-            });
-          },
-          () => {
-            logTrafficResponse(
-              config.verbose,
-              model ?? cursorModel,
-              accumulated,
-              true,
-            );
-            writeEvent({ type: "content_block_stop", index: 0 });
-            writeEvent({
-              type: "message_delta",
-              delta: { stop_reason: "end_turn" },
-            });
-            writeEvent({ type: "message_stop" });
-          },
-        );
-      },
+      parseLine,
       tempDir,
     )
       .then(({ code, stderr: stderrOut }) => {

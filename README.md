@@ -111,6 +111,8 @@ console.log(completion.choices[0].message.content);
 
 ## Environment variables
 
+Environment handling is centralized in one module. Aliases, defaults, path resolution, platform fallbacks, and `--tailscale` host behavior are resolved consistently before the server starts.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CURSOR_BRIDGE_HOST` | `127.0.0.1` | Bind address |
@@ -128,7 +130,25 @@ console.log(completion.choices[0].message.content);
 | `CURSOR_BRIDGE_SESSIONS_LOG` | `~/.cursor-api-proxy/sessions.log` | Path to log file; each request is appended as a line (timestamp, method, path, IP, status). |
 | `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE` | `true` | When `true` (default), the CLI runs in an empty temp dir so it **cannot read or write your project**; pure chat only. Set to `false` to pass the real workspace (e.g. for `X-Cursor-Workspace`). |
 | `CURSOR_BRIDGE_VERBOSE` | `false` | When `true`, print full request messages and response content to stdout for every completion (both stream and sync). |
-| `CURSOR_AGENT_BIN` | `agent` | Path to Cursor CLI binary |
+| `CURSOR_AGENT_BIN` | `agent` | Path to Cursor CLI binary. Alias precedence: `CURSOR_AGENT_BIN`, then `CURSOR_CLI_BIN`, then `CURSOR_CLI_PATH`. |
+| `CURSOR_AGENT_NODE` | — | **(Windows)** Path to Node.js executable. When set together with `CURSOR_AGENT_SCRIPT`, spawns Node directly instead of going through cmd.exe, bypassing the ~8191 character command line limit. |
+| `CURSOR_AGENT_SCRIPT` | — | **(Windows)** Path to the agent script (e.g. `agent.cmd` or the underlying `.js`). Use with `CURSOR_AGENT_NODE` to bypass cmd.exe for long prompts. |
+
+Notes:
+- `--tailscale` changes the default host to `0.0.0.0` only when `CURSOR_BRIDGE_HOST` is not already set.
+- Relative paths such as `CURSOR_BRIDGE_WORKSPACE`, `CURSOR_BRIDGE_SESSIONS_LOG`, `CURSOR_BRIDGE_TLS_CERT`, and `CURSOR_BRIDGE_TLS_KEY` are resolved from the current working directory.
+
+#### Windows command line limit bypass
+
+On Windows, cmd.exe has a ~8191 character limit on the command line. Long prompts passed as arguments can exceed this and cause the agent to fail. To avoid that, set both `CURSOR_AGENT_NODE` (path to `node.exe`) and `CURSOR_AGENT_SCRIPT` (path to the agent script). The proxy will then spawn Node directly with the script and args instead of using cmd.exe, avoiding the limit.
+
+Example (adjust paths to your install):
+
+```bash
+set CURSOR_AGENT_NODE=C:\Program Files\nodejs\node.exe
+set CURSOR_AGENT_SCRIPT=C:\path\to\Cursor\resources\agent\agent.cmd
+# or wherever your agent script lives
+```
 
 CLI flags:
 
@@ -141,7 +161,7 @@ Optional per-request override: send header `X-Cursor-Workspace: <path>` to use a
 
 ## Streaming
 
-The proxy supports `stream: true` on `POST /v1/chat/completions`. It returns Server-Sent Events (SSE) in OpenAI’s streaming format. Cursor CLI returns the full response in one go, so the proxy sends that response as a single content delta (clients still receive a valid SSE stream).
+The proxy supports `stream: true` on `POST /v1/chat/completions` and `POST /v1/messages`. It returns Server-Sent Events (SSE) in OpenAI’s streaming format. Cursor CLI emits incremental deltas plus a final full message; the proxy deduplicates output so clients receive each chunk only once.
 
 **Test streaming:** from repo root, with the proxy running:
 

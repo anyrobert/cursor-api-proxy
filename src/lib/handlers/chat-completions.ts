@@ -4,7 +4,7 @@ import * as http from "node:http";
 import type { BridgeConfig } from "../config.js";
 import { buildAgentCmdArgs } from "../agent-cmd-args.js";
 import { runAgentStream, runAgentSync } from "../agent-runner.js";
-import { parseCliStreamLine } from "../cli-stream-parser.js";
+import { createStreamParser } from "../cli-stream-parser.js";
 import { json, writeSseHeaders } from "../http.js";
 import { resolveToCursorModel } from "../model-map.js";
 import {
@@ -81,47 +81,45 @@ export async function handleChatCompletions(
     writeSseHeaders(res);
 
     let accumulated = "";
+    const parseLine = createStreamParser(
+      (text) => {
+        accumulated += text;
+        res.write(
+          `data: ${JSON.stringify({
+            id,
+            object: "chat.completion.chunk",
+            created,
+            model,
+            choices: [
+              { index: 0, delta: { content: text }, finish_reason: null },
+            ],
+          })}\n\n`,
+        );
+      },
+      () => {
+        logTrafficResponse(
+          config.verbose,
+          model ?? cursorModel,
+          accumulated,
+          true,
+        );
+        res.write(
+          `data: ${JSON.stringify({
+            id,
+            object: "chat.completion.chunk",
+            created,
+            model,
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          })}\n\n`,
+        );
+        res.write("data: [DONE]\n\n");
+      },
+    );
     runAgentStream(
       config,
       workspaceDir,
       cmdArgs,
-      (line) => {
-        parseCliStreamLine(
-          line,
-          (text) => {
-            accumulated += text;
-            res.write(
-              `data: ${JSON.stringify({
-                id,
-                object: "chat.completion.chunk",
-                created,
-                model,
-                choices: [
-                  { index: 0, delta: { content: text }, finish_reason: null },
-                ],
-              })}\n\n`,
-            );
-          },
-          () => {
-            logTrafficResponse(
-              config.verbose,
-              model ?? cursorModel,
-              accumulated,
-              true,
-            );
-            res.write(
-              `data: ${JSON.stringify({
-                id,
-                object: "chat.completion.chunk",
-                created,
-                model,
-                choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-              })}\n\n`,
-            );
-            res.write("data: [DONE]\n\n");
-          },
-        );
-      },
+      parseLine,
       tempDir,
     )
       .then(({ code, stderr: stderrOut }) => {
