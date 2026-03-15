@@ -56,6 +56,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     sessionsLogPath: tmpLogPath,
     chatOnlyWorkspace: true,
     verbose: false,
+    maxMode: false,
     ...overrides,
   };
 }
