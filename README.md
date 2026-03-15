@@ -130,6 +130,7 @@ Environment handling is centralized in one module. Aliases, defaults, path resol
 | `CURSOR_BRIDGE_SESSIONS_LOG` | `~/.cursor-api-proxy/sessions.log` | Path to log file; each request is appended as a line (timestamp, method, path, IP, status). |
 | `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE` | `true` | When `true` (default), the CLI runs in an empty temp dir so it **cannot read or write your project**; pure chat only. Set to `false` to pass the real workspace (e.g. for `X-Cursor-Workspace`). |
 | `CURSOR_BRIDGE_VERBOSE` | `false` | When `true`, print full request messages and response content to stdout for every completion (both stream and sync). |
+| `CURSOR_BRIDGE_MAX_MODE` | `false` | When `true`, enable Cursor **Max Mode** for all requests (larger context window, higher tool-call limits). The proxy writes `maxMode: true` to `cli-config.json` before each run. Works when using `CURSOR_AGENT_NODE`/`CURSOR_AGENT_SCRIPT` or the default Windows `.cmd` layout (node.exe + index.js next to agent.cmd). |
 | `CURSOR_AGENT_BIN` | `agent` | Path to Cursor CLI binary. Alias precedence: `CURSOR_AGENT_BIN`, then `CURSOR_CLI_BIN`, then `CURSOR_CLI_PATH`. |
 | `CURSOR_AGENT_NODE` | — | **(Windows)** Path to Node.js executable. When set together with `CURSOR_AGENT_SCRIPT`, spawns Node directly instead of going through cmd.exe, bypassing the ~8191 character command line limit. |
 | `CURSOR_AGENT_SCRIPT` | — | **(Windows)** Path to the agent script (e.g. `agent.cmd` or the underlying `.js`). Use with `CURSOR_AGENT_NODE` to bypass cmd.exe for long prompts. |
