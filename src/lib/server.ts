@@ -46,6 +46,9 @@ export function startBridgeServer(
     console.log(
       `- verbose traffic: ${config.verbose ? "yes (CURSOR_BRIDGE_VERBOSE=true)" : "no"}`,
     );
+    console.log(
+      `- max mode: ${config.maxMode ? "yes (CURSOR_BRIDGE_MAX_MODE=true)" : "no"}`,
+    );
   });
 
   return server;
