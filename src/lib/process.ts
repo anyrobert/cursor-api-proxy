@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { resolveAgentCommand } from "./env.js";
+import { runMaxModePreflight } from "./max-mode-preflight.js";
 
 export type RunResult = {
   code: number;
@@ -10,17 +11,33 @@ export type RunResult = {
 export type RunOptions = {
   cwd?: string;
   timeoutMs?: number;
+  /** Enable Cursor Max Mode (preflight writes maxMode to cli-config.json). */
+  maxMode?: boolean;
 };
 
 export type RunStreamingOptions = RunOptions & {
   onLine: (line: string) => void;
 };
 
-function spawnChild(cmd: string, args: string[], cwd?: string) {
+function spawnChild(
+  cmd: string,
+  args: string[],
+  opts?: { cwd?: string; maxMode?: boolean },
+) {
   const resolved = resolveAgentCommand(cmd, args);
+
+  if (opts?.maxMode && resolved.agentScriptPath) {
+    runMaxModePreflight(resolved.agentScriptPath);
+  }
+
+  const env = { ...resolved.env };
+  if (resolved.configDir && !env.CURSOR_CONFIG_DIR) {
+    env.CURSOR_CONFIG_DIR = resolved.configDir;
+  }
+
   return spawn(resolved.command, resolved.args, {
-    cwd,
-    env: resolved.env,
+    cwd: opts?.cwd,
+    env,
     stdio: ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: resolved.windowsVerbatimArguments,
   });
@@ -32,7 +49,7 @@ export function runStreaming(
   opts: RunStreamingOptions,
 ): Promise<{ code: number; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawnChild(cmd, args, opts.cwd);
+    const child = spawnChild(cmd, args, { cwd: opts.cwd, maxMode: opts.maxMode });
 
     const timeoutMs = opts.timeoutMs;
     const timeout =
@@ -81,7 +98,7 @@ export function runStreaming(
 
 export function run(cmd: string, args: string[], opts: RunOptions = {}): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawnChild(cmd, args, opts.cwd);
+    const child = spawnChild(cmd, args, { cwd: opts.cwd, maxMode: opts.maxMode });
 
     const timeoutMs = opts.timeoutMs;
     const timeout =

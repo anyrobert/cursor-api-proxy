@@ -18,6 +18,7 @@ export function runAgentSync(
   return run(config.agentBin, cmdArgs, {
     cwd: workspaceDir,
     timeoutMs: config.timeoutMs,
+    maxMode: config.maxMode,
   }).then((out) => {
     if (tempDir) {
       try {
@@ -42,6 +43,7 @@ export function runAgentStream(
   return runStreaming(config.agentBin, cmdArgs, {
     cwd: workspaceDir,
     timeoutMs: config.timeoutMs,
+    maxMode: config.maxMode,
     onLine,
   }).then((result) => {
     if (tempDir) {

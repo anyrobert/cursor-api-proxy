@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 export type EnvSource = Record<string, string | undefined>;
@@ -28,6 +29,8 @@ export type LoadedEnv = {
   sessionsLogPath: string;
   chatOnlyWorkspace: boolean;
   verbose: boolean;
+  /** When true, set maxMode in cli-config.json before each run (larger context, more tools). */
+  maxMode: boolean;
 };
 
 export type AgentCommand = {
@@ -35,6 +38,10 @@ export type AgentCommand = {
   args: string[];
   env: EnvSource;
   windowsVerbatimArguments?: boolean;
+  /** Path to agent entry script (e.g. index.js). Set when using node+script so max-mode preflight can find config. */
+  agentScriptPath?: string;
+  /** Cursor config dir (cli-config.json). Set so CLI reads the same config preflight wrote to. */
+  configDir?: string;
 };
 
 function getEnvSource(env?: EnvSource): EnvSource {
@@ -129,6 +136,7 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
     sessionsLogPath,
     chatOnlyWorkspace: envBool(env, ["CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE"], true),
     verbose: envBool(env, ["CURSOR_BRIDGE_VERBOSE"], false),
+    maxMode: envBool(env, ["CURSOR_BRIDGE_MAX_MODE"], false),
   };
 }
 
@@ -140,17 +148,40 @@ export function resolveAgentCommand(
   const env = getEnvSource(opts.env);
   const loaded = loadEnvConfig(opts);
   const platform = opts.platform ?? process.platform;
+  const cwd = getCwd(opts.cwd);
 
   if (platform === "win32") {
     if (loaded.agentNode && loaded.agentScript) {
-      return {
+      const agentScriptPath = path.isAbsolute(loaded.agentScript)
+        ? loaded.agentScript
+        : path.resolve(cwd, loaded.agentScript);
+      const agentDir = path.dirname(agentScriptPath);
+      const configDir = path.join(agentDir, "..", "data", "config");
+      const out: AgentCommand = {
         command: loaded.agentNode,
         args: [loaded.agentScript, ...args],
         env: { ...env, CURSOR_INVOKED_AS: "agent.cmd" },
+        agentScriptPath,
+        configDir: fs.existsSync(path.join(configDir, "cli-config.json")) ? configDir : undefined,
       };
+      return out;
     }
 
     if (/\.cmd$/i.test(cmd)) {
+      const cmdResolved = path.resolve(cwd, cmd);
+      const dir = path.dirname(cmdResolved);
+      const nodeBin = path.join(dir, "node.exe");
+      const script = path.join(dir, "index.js");
+      if (fs.existsSync(nodeBin) && fs.existsSync(script)) {
+        const configDir = path.join(dir, "..", "data", "config");
+        return {
+          command: nodeBin,
+          args: [script, ...args],
+          env: { ...env, CURSOR_INVOKED_AS: "agent.cmd" },
+          agentScriptPath: script,
+          configDir: fs.existsSync(path.join(configDir, "cli-config.json")) ? configDir : undefined,
+        };
+      }
       const quotedArgs = args.map((arg) => (arg.includes(" ") ? `"${arg}"` : arg)).join(" ");
       const cmdLine = `""${cmd}" ${quotedArgs}"`;
       return {

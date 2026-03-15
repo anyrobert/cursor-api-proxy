@@ -24,6 +24,8 @@ export type BridgeConfig = {
   chatOnlyWorkspace: boolean;
   /** When true, print full request/response content to stdout for each completion. */
   verbose: boolean;
+  /** When true, enable Cursor Max Mode (larger context, more tool calls) via cli-config.json preflight. */
+  maxMode: boolean;
 };
 
 export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
@@ -46,5 +48,6 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     sessionsLogPath: env.sessionsLogPath,
     chatOnlyWorkspace: env.chatOnlyWorkspace,
     verbose: env.verbose,
+    maxMode: env.maxMode,
   };
 }
