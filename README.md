@@ -2,10 +2,12 @@
 
 OpenAI-compatible proxy for Cursor CLI. Expose Cursor models on localhost so any LLM client (OpenAI SDK, LiteLLM, LangChain, etc.) can call them as a standard chat API.
 
-## Prerequisites
+This package works as **one npm dependency**: use it as an **SDK** in your app to call the proxy API, and/or run the **CLI** to start the proxy server. Core behavior is unchanged.
+
+## Prerequisites (required for the proxy to work)
 
 - **Node.js** 18+
-- **Cursor CLI** (`agent`). This project is developed and tested with `agent` version **2026.02.27-e7d2ef6**. Install and log in:
+- **Cursor agent CLI** (`agent`). This package does **not** install or bundle the CLI. You must install and set it up separately. This project is developed and tested with `agent` version **2026.02.27-e7d2ef6**.
 
   ```bash
   curl https://cursor.com/install -fsS | bash
@@ -17,29 +19,37 @@ OpenAI-compatible proxy for Cursor CLI. Expose Cursor models on localhost so any
 
 ## Install
 
+**From npm (use as SDK in another project):**
+
 ```bash
-cd ~/personal/cursor-api-proxy
+npm install cursor-api-proxy
+```
+
+**From source (develop or run CLI locally):**
+
+```bash
+git clone <this-repo>
+cd cursor-api-proxy
 npm install
 npm run build
 ```
 
-## Run
+## Run the proxy (CLI)
+
+Start the server so the API is available (e.g. for the SDK or any HTTP client):
 
 ```bash
-npm start
-# or: node dist/cli.js
-# or: npx cursor-api-proxy   (if linked globally)
+npx cursor-api-proxy
+# or from repo: npm start / node dist/cli.js
 ```
 
-By default the server listens on **http://127.0.0.1:8765**.
-
-To expose it to your Tailscale network:
+To expose on your network (e.g. Tailscale):
 
 ```bash
-npm start -- --tailscale
+npx cursor-api-proxy --tailscale
 ```
 
-This binds to `0.0.0.0` unless `CURSOR_BRIDGE_HOST` is explicitly set. Optionally set `CURSOR_BRIDGE_API_KEY` to require `Authorization: Bearer <key>` on requests.
+By default the server listens on **http://127.0.0.1:8765**. Optionally set `CURSOR_BRIDGE_API_KEY` to require `Authorization: Bearer <key>` on requests.
 
 ### HTTPS with Tailscale (MagicDNS)
 
@@ -78,12 +88,49 @@ To serve over HTTPS so browsers and clients trust the connection (e.g. `https://
    - Base URL: `https://macbook.tail4048eb.ts.net:8765/v1` (use your MagicDNS name and port)
    - Browsers will show a padlock; no certificate warnings when using Tailscale-issued certs.
 
-## Usage from other services
+## Use as SDK in another project
 
-- **Base URL**: `http://127.0.0.1:8765/v1`
-- **API key**: Use any value (e.g. `unused`), or set `CURSOR_BRIDGE_API_KEY` and send it as `Authorization: Bearer <key>`.
+Install the package and ensure the **Cursor agent CLI is installed and set up** (see Prerequisites). When you use the SDK with the default URL, **the proxy starts in the background automatically** if it is not already running. You can still start it yourself with `npx cursor-api-proxy` or set `CURSOR_PROXY_URL` to point at an existing proxy (then the SDK will not start another).
 
-### Example (OpenAI client)
+- **Base URL**: `http://127.0.0.1:8765/v1` (override with `CURSOR_PROXY_URL` or options).
+- **API key**: Use any value (e.g. `unused`), or set `CURSOR_BRIDGE_API_KEY` and pass it in options or env.
+- **Disable auto-start**: Pass `startProxy: false` (or use a custom `baseUrl`) if you run the proxy yourself and don’t want the SDK to start it.
+- **Shutdown behavior**: When the SDK starts the proxy, it also stops it automatically when the Node.js process exits or receives normal termination signals. `stopManagedProxy()` is still available if you want to shut it down earlier. `SIGKILL` cannot be intercepted.
+
+### Option A: OpenAI SDK + helper (recommended)
+
+This is an optional consumer-side example. `openai` is not a dependency of `cursor-api-proxy`; install it only in the app where you want to use this example.
+
+```js
+import OpenAI from "openai";
+import { getOpenAIOptionsAsync } from "cursor-api-proxy";
+
+const opts = await getOpenAIOptionsAsync();  // starts proxy if needed
+const client = new OpenAI(opts);
+
+const completion = await client.chat.completions.create({
+  model: "gpt-5.2",
+  messages: [{ role: "user", content: "Hello" }],
+});
+console.log(completion.choices[0].message.content);
+```
+
+For a sync config without auto-start, use `getOpenAIOptions()` and ensure the proxy is already running.
+
+### Option B: Minimal client (no OpenAI SDK)
+
+```js
+import { createCursorProxyClient } from "cursor-api-proxy";
+
+const proxy = createCursorProxyClient();  // proxy starts on first request if needed
+const data = await proxy.chatCompletionsCreate({
+  model: "auto",
+  messages: [{ role: "user", content: "Hello" }],
+});
+console.log(data.choices?.[0]?.message?.content);
+```
+
+### Option C: Raw OpenAI client (no SDK import from this package)
 
 ```js
 import OpenAI from "openai";
@@ -92,12 +139,7 @@ const client = new OpenAI({
   baseURL: "http://127.0.0.1:8765/v1",
   apiKey: process.env.CURSOR_BRIDGE_API_KEY || "unused",
 });
-
-const completion = await client.chat.completions.create({
-  model: "gpt-5.2",
-  messages: [{ role: "user", content: "Hello" }],
-});
-console.log(completion.choices[0].message.content);
+// Start the proxy yourself (npx cursor-api-proxy) or use Option A/B for auto-start.
 ```
 
 ### Endpoints
