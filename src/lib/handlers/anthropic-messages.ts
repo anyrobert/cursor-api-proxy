@@ -147,6 +147,7 @@ export async function handleAnthropicMessages(
       cmdArgs,
       parseLine,
       tempDir,
+      (config.promptViaStdin || config.useAcp) ? prompt : undefined,
     )
       .then(({ code, stderr: stderrOut }) => {
         if (code !== 0) {
@@ -168,7 +169,13 @@ export async function handleAnthropicMessages(
     return;
   }
 
-  const out = await runAgentSync(config, workspaceDir, cmdArgs, tempDir);
+  const out = await runAgentSync(
+    config,
+    workspaceDir,
+    cmdArgs,
+    tempDir,
+    (config.promptViaStdin || config.useAcp) ? prompt : undefined,
+  );
 
   if (out.code !== 0) {
     const errMsg = logAgentError(

@@ -57,6 +57,8 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     chatOnlyWorkspace: true,
     verbose: false,
     maxMode: false,
+    promptViaStdin: false,
+    useAcp: false,
     ...overrides,
   };
 }

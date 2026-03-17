@@ -13,6 +13,8 @@ export type RunOptions = {
   timeoutMs?: number;
   /** Enable Cursor Max Mode (preflight writes maxMode to cli-config.json). */
   maxMode?: boolean;
+  /** When set, pass this string to the child process stdin and close it (avoids long prompt in argv on Windows). */
+  stdinContent?: string;
 };
 
 export type RunStreamingOptions = RunOptions & {
@@ -22,7 +24,7 @@ export type RunStreamingOptions = RunOptions & {
 function spawnChild(
   cmd: string,
   args: string[],
-  opts?: { cwd?: string; maxMode?: boolean },
+  opts?: { cwd?: string; maxMode?: boolean; stdinContent?: string },
 ) {
   const resolved = resolveAgentCommand(cmd, args);
 
@@ -35,12 +37,20 @@ function spawnChild(
     env.CURSOR_CONFIG_DIR = resolved.configDir;
   }
 
-  return spawn(resolved.command, resolved.args, {
+  const useStdin = typeof opts?.stdinContent === "string";
+  const child = spawn(resolved.command, resolved.args, {
     cwd: opts?.cwd,
     env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: useStdin ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: resolved.windowsVerbatimArguments,
   });
+
+  if (useStdin && opts.stdinContent !== undefined && child.stdin) {
+    child.stdin.write(opts.stdinContent, "utf8");
+    child.stdin.end();
+  }
+
+  return child;
 }
 
 export function runStreaming(
@@ -49,7 +59,11 @@ export function runStreaming(
   opts: RunStreamingOptions,
 ): Promise<{ code: number; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawnChild(cmd, args, { cwd: opts.cwd, maxMode: opts.maxMode });
+    const child = spawnChild(cmd, args, {
+      cwd: opts.cwd,
+      maxMode: opts.maxMode,
+      stdinContent: opts.stdinContent,
+    });
 
     const timeoutMs = opts.timeoutMs;
     const timeout =
@@ -98,7 +112,11 @@ export function runStreaming(
 
 export function run(cmd: string, args: string[], opts: RunOptions = {}): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawnChild(cmd, args, { cwd: opts.cwd, maxMode: opts.maxMode });
+    const child = spawnChild(cmd, args, {
+      cwd: opts.cwd,
+      maxMode: opts.maxMode,
+      stdinContent: opts.stdinContent,
+    });
 
     const timeoutMs = opts.timeoutMs;
     const timeout =

@@ -31,6 +31,10 @@ export type LoadedEnv = {
   verbose: boolean;
   /** When true, set maxMode in cli-config.json before each run (larger context, more tools). */
   maxMode: boolean;
+  /** When true, pass the user prompt via stdin instead of argv (avoids Windows argv truncation). */
+  promptViaStdin: boolean;
+  /** When true, use ACP (Agent Client Protocol) over stdio instead of CLI argv (fixes prompt delivery on Windows). */
+  useAcp: boolean;
 };
 
 export type AgentCommand = {
@@ -137,6 +141,8 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
     chatOnlyWorkspace: envBool(env, ["CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE"], true),
     verbose: envBool(env, ["CURSOR_BRIDGE_VERBOSE"], false),
     maxMode: envBool(env, ["CURSOR_BRIDGE_MAX_MODE"], false),
+    promptViaStdin: envBool(env, ["CURSOR_BRIDGE_PROMPT_VIA_STDIN"], false),
+    useAcp: envBool(env, ["CURSOR_BRIDGE_USE_ACP"], false),
   };
 }
 

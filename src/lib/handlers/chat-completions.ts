@@ -77,8 +77,69 @@ export async function handleChatCompletions(
   const id = `chatcmpl_${randomUUID().replace(/-/g, "")}`;
   const created = Math.floor(Date.now() / 1000);
 
+  const promptForAgent = (config.promptViaStdin || config.useAcp) ? prompt : undefined;
+
   if (body.stream) {
     writeSseHeaders(res);
+
+    if (config.useAcp && typeof promptForAgent === "string") {
+      let accumulated = "";
+      runAgentStream(
+        config,
+        workspaceDir,
+        [],
+        (chunk) => {
+          accumulated += chunk;
+          res.write(
+            `data: ${JSON.stringify({
+              id,
+              object: "chat.completion.chunk",
+              created,
+              model,
+              choices: [
+                { index: 0, delta: { content: chunk }, finish_reason: null },
+              ],
+            })}\n\n`,
+          );
+        },
+        tempDir,
+        promptForAgent,
+      )
+        .then(({ code, stderr: stderrOut }) => {
+          if (code !== 0) {
+            logAgentError(
+              config.sessionsLogPath,
+              method,
+              pathname,
+              remoteAddress,
+              code,
+              stderrOut,
+            );
+          }
+          logTrafficResponse(
+            config.verbose,
+            model ?? cursorModel,
+            accumulated,
+            true,
+          );
+          res.write(
+            `data: ${JSON.stringify({
+              id,
+              object: "chat.completion.chunk",
+              created,
+              model,
+              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            })}\n\n`,
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+        })
+        .catch((err) => {
+          console.error(`[${new Date().toISOString()}] Agent stream error:`, err);
+          res.end();
+        });
+      return;
+    }
 
     let accumulated = "";
     const parseLine = createStreamParser(
@@ -121,6 +182,7 @@ export async function handleChatCompletions(
       cmdArgs,
       parseLine,
       tempDir,
+      promptForAgent,
     )
       .then(({ code, stderr: stderrOut }) => {
         if (code !== 0) {
@@ -142,7 +204,13 @@ export async function handleChatCompletions(
     return;
   }
 
-  const out = await runAgentSync(config, workspaceDir, cmdArgs, tempDir);
+  const out = await runAgentSync(
+    config,
+    workspaceDir,
+    cmdArgs,
+    tempDir,
+    promptForAgent,
+  );
 
   if (out.code !== 0) {
     const errMsg = logAgentError(

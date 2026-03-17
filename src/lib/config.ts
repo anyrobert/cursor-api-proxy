@@ -26,6 +26,10 @@ export type BridgeConfig = {
   verbose: boolean;
   /** When true, enable Cursor Max Mode (larger context, more tool calls) via cli-config.json preflight. */
   maxMode: boolean;
+  /** When true, pass the user prompt via stdin instead of argv (avoids Windows argv issues). */
+  promptViaStdin: boolean;
+  /** When true, use ACP (Agent Client Protocol) over stdio; fixes prompt delivery on Windows. */
+  useAcp: boolean;
 };
 
 export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
@@ -49,5 +53,7 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     chatOnlyWorkspace: env.chatOnlyWorkspace,
     verbose: env.verbose,
     maxMode: env.maxMode,
+    promptViaStdin: env.promptViaStdin,
+    useAcp: env.useAcp,
   };
 }
