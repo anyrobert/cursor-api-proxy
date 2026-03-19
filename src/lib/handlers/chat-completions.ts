@@ -122,6 +122,8 @@ export async function handleChatCompletions(
             accumulated,
             true,
           );
+          const promptTokens = Math.max(1, Math.round(prompt.length / 4));
+          const completionTokens = Math.max(1, Math.round(accumulated.length / 4));
           res.write(
             `data: ${JSON.stringify({
               id,
@@ -129,6 +131,11 @@ export async function handleChatCompletions(
               created,
               model,
               choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+              usage: {
+                prompt_tokens: promptTokens,
+                completion_tokens: completionTokens,
+                total_tokens: promptTokens + completionTokens,
+              },
             })}\n\n`,
           );
           res.write("data: [DONE]\n\n");
@@ -164,6 +171,8 @@ export async function handleChatCompletions(
           accumulated,
           true,
         );
+        const promptTokens = Math.max(1, Math.round(prompt.length / 4));
+        const completionTokens = Math.max(1, Math.round(accumulated.length / 4));
         res.write(
           `data: ${JSON.stringify({
             id,
@@ -171,6 +180,11 @@ export async function handleChatCompletions(
             created,
             model,
             choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: {
+              prompt_tokens: promptTokens,
+              completion_tokens: completionTokens,
+              total_tokens: promptTokens + completionTokens,
+            },
           })}\n\n`,
         );
         res.write("data: [DONE]\n\n");
@@ -229,6 +243,12 @@ export async function handleChatCompletions(
 
   const content = out.stdout.trim();
   logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
+
+  // Estimate tokens (chars/4 heuristic; Cursor CLI does not expose usage)
+  const promptTokens = Math.max(1, Math.round(prompt.length / 4));
+  const completionTokens = Math.max(1, Math.round(content.length / 4));
+  const totalTokens = promptTokens + completionTokens;
+
   json(res, 200, {
     id,
     object: "chat.completion",
@@ -241,6 +261,10 @@ export async function handleChatCompletions(
         finish_reason: "stop",
       },
     ],
-    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    usage: {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: totalTokens,
+    },
   });
 }
