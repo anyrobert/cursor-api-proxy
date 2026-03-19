@@ -40,6 +40,11 @@ export async function handleChatCompletions(
   const requested = normalizeModelId(body.model);
   const model = resolveModel(requested, lastRequestedModelRef, config);
   const cursorModel = resolveToCursorModel(model) ?? model;
+  // When request is "auto", use defaultModel for response display (dashboard) if set; else echo "auto"
+  const displayModel =
+    requested === "auto" && config.defaultModel !== "auto"
+      ? config.defaultModel
+      : model;
   const prompt = buildPromptFromMessages(body.messages ?? []);
 
   const trafficMessages: TrafficMessage[] = (body.messages ?? []).map(
@@ -95,7 +100,7 @@ export async function handleChatCompletions(
               id,
               object: "chat.completion.chunk",
               created,
-              model,
+              model: displayModel,
               choices: [
                 { index: 0, delta: { content: chunk }, finish_reason: null },
               ],
@@ -129,7 +134,7 @@ export async function handleChatCompletions(
               id,
               object: "chat.completion.chunk",
               created,
-              model,
+              model: displayModel,
               choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
               usage: {
                 prompt_tokens: promptTokens,
@@ -157,7 +162,7 @@ export async function handleChatCompletions(
             id,
             object: "chat.completion.chunk",
             created,
-            model,
+            model: displayModel,
             choices: [
               { index: 0, delta: { content: text }, finish_reason: null },
             ],
@@ -178,7 +183,7 @@ export async function handleChatCompletions(
             id,
             object: "chat.completion.chunk",
             created,
-            model,
+            model: displayModel,
             choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
             usage: {
               prompt_tokens: promptTokens,
@@ -253,7 +258,7 @@ export async function handleChatCompletions(
     id,
     object: "chat.completion",
     created,
-    model,
+    model: displayModel,
     choices: [
       {
         index: 0,

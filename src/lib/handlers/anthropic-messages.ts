@@ -37,6 +37,11 @@ export async function handleAnthropicMessages(
   const body = JSON.parse(rawBody || "{}") as AnthropicMessagesRequest;
   const requested = normalizeModelId(body.model);
   const model = resolveModel(requested, lastRequestedModelRef, config);
+  // When request is "auto", use defaultModel for response display (dashboard) if set; else echo "auto"
+  const displayModel =
+    requested === "auto" && config.defaultModel !== "auto"
+      ? config.defaultModel
+      : model;
 
   if (body.max_tokens == null || typeof body.max_tokens !== "number") {
     json(res, 400, {
@@ -106,7 +111,7 @@ export async function handleAnthropicMessages(
         id: msgId,
         type: "message",
         role: "assistant",
-        model: model ?? cursorModel,
+        model: displayModel ?? cursorModel,
         content: [],
       },
     });
@@ -199,7 +204,7 @@ export async function handleAnthropicMessages(
     type: "message",
     role: "assistant",
     content: [{ type: "text", text: content }],
-    model: model ?? cursorModel,
+    model: displayModel ?? cursorModel,
     stop_reason: "end_turn",
     usage: { input_tokens: 0, output_tokens: 0 },
   });
