@@ -40,6 +40,11 @@ export async function handleChatCompletions(
   const requested = normalizeModelId(body.model);
   const model = resolveModel(requested, lastRequestedModelRef, config);
   const cursorModel = resolveToCursorModel(model) ?? model;
+  // When request is "auto", use defaultModel for response display (dashboard) if set; else echo "auto"
+  const displayModel =
+    requested === "auto" && config.defaultModel !== "auto"
+      ? config.defaultModel
+      : model;
   const prompt = buildPromptFromMessages(body.messages ?? []);
 
   const trafficMessages: TrafficMessage[] = (body.messages ?? []).map(
@@ -77,8 +82,76 @@ export async function handleChatCompletions(
   const id = `chatcmpl_${randomUUID().replace(/-/g, "")}`;
   const created = Math.floor(Date.now() / 1000);
 
+  const promptForAgent = (config.promptViaStdin || config.useAcp) ? prompt : undefined;
+
   if (body.stream) {
     writeSseHeaders(res);
+
+    if (config.useAcp && typeof promptForAgent === "string") {
+      let accumulated = "";
+      runAgentStream(
+        config,
+        workspaceDir,
+        cmdArgs,
+        (chunk) => {
+          accumulated += chunk;
+          res.write(
+            `data: ${JSON.stringify({
+              id,
+              object: "chat.completion.chunk",
+              created,
+              model: displayModel,
+              choices: [
+                { index: 0, delta: { content: chunk }, finish_reason: null },
+              ],
+            })}\n\n`,
+          );
+        },
+        tempDir,
+        promptForAgent,
+      )
+        .then(({ code, stderr: stderrOut }) => {
+          if (code !== 0) {
+            logAgentError(
+              config.sessionsLogPath,
+              method,
+              pathname,
+              remoteAddress,
+              code,
+              stderrOut,
+            );
+          }
+          logTrafficResponse(
+            config.verbose,
+            model ?? cursorModel,
+            accumulated,
+            true,
+          );
+          const promptTokens = Math.max(1, Math.round(prompt.length / 4));
+          const completionTokens = Math.max(1, Math.round(accumulated.length / 4));
+          res.write(
+            `data: ${JSON.stringify({
+              id,
+              object: "chat.completion.chunk",
+              created,
+              model: displayModel,
+              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+              usage: {
+                prompt_tokens: promptTokens,
+                completion_tokens: completionTokens,
+                total_tokens: promptTokens + completionTokens,
+              },
+            })}\n\n`,
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+        })
+        .catch((err) => {
+          console.error(`[${new Date().toISOString()}] Agent stream error:`, err);
+          res.end();
+        });
+      return;
+    }
 
     let accumulated = "";
     const parseLine = createStreamParser(
@@ -89,7 +162,7 @@ export async function handleChatCompletions(
             id,
             object: "chat.completion.chunk",
             created,
-            model,
+            model: displayModel,
             choices: [
               { index: 0, delta: { content: text }, finish_reason: null },
             ],
@@ -103,13 +176,20 @@ export async function handleChatCompletions(
           accumulated,
           true,
         );
+        const promptTokens = Math.max(1, Math.round(prompt.length / 4));
+        const completionTokens = Math.max(1, Math.round(accumulated.length / 4));
         res.write(
           `data: ${JSON.stringify({
             id,
             object: "chat.completion.chunk",
             created,
-            model,
+            model: displayModel,
             choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: {
+              prompt_tokens: promptTokens,
+              completion_tokens: completionTokens,
+              total_tokens: promptTokens + completionTokens,
+            },
           })}\n\n`,
         );
         res.write("data: [DONE]\n\n");
@@ -121,6 +201,7 @@ export async function handleChatCompletions(
       cmdArgs,
       parseLine,
       tempDir,
+      promptForAgent,
     )
       .then(({ code, stderr: stderrOut }) => {
         if (code !== 0) {
@@ -142,7 +223,13 @@ export async function handleChatCompletions(
     return;
   }
 
-  const out = await runAgentSync(config, workspaceDir, cmdArgs, tempDir);
+  const out = await runAgentSync(
+    config,
+    workspaceDir,
+    cmdArgs,
+    tempDir,
+    promptForAgent,
+  );
 
   if (out.code !== 0) {
     const errMsg = logAgentError(
@@ -161,11 +248,17 @@ export async function handleChatCompletions(
 
   const content = out.stdout.trim();
   logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
+
+  // Estimate tokens (chars/4 heuristic; Cursor CLI does not expose usage)
+  const promptTokens = Math.max(1, Math.round(prompt.length / 4));
+  const completionTokens = Math.max(1, Math.round(content.length / 4));
+  const totalTokens = promptTokens + completionTokens;
+
   json(res, 200, {
     id,
     object: "chat.completion",
     created,
-    model,
+    model: displayModel,
     choices: [
       {
         index: 0,
@@ -173,6 +266,10 @@ export async function handleChatCompletions(
         finish_reason: "stop",
       },
     ],
-    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    usage: {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: totalTokens,
+    },
   });
 }

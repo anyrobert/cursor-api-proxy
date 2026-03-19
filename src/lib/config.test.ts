@@ -59,6 +59,35 @@ describe("loadBridgeConfig", () => {
     expect(config.tlsKeyPath).toBe("/tmp/project/certs/test.key");
   });
 
+  it("sets acpSkipAuthenticate and acpEnv when CURSOR_API_KEY is set", () => {
+    const config = loadBridgeConfig({
+      env: { CURSOR_API_KEY: "sk-abc", CURSOR_AGENT_BIN: "agent" },
+      cwd: "/workspace",
+    });
+    expect(config.acpSkipAuthenticate).toBe(true);
+    expect(config.acpEnv.CURSOR_API_KEY).toBe("sk-abc");
+    expect(config.acpEnv.CURSOR_AUTH_TOKEN).toBe("sk-abc");
+  });
+
+  it("allows CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE to force skip", () => {
+    const config = loadBridgeConfig({
+      env: {
+        CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE: "true",
+        CURSOR_AGENT_BIN: "agent",
+      },
+      cwd: "/workspace",
+    });
+    expect(config.acpSkipAuthenticate).toBe(true);
+  });
+
+  it("sets acpRawDebug when CURSOR_BRIDGE_ACP_RAW_DEBUG=1", () => {
+    const config = loadBridgeConfig({
+      env: { CURSOR_BRIDGE_ACP_RAW_DEBUG: "1", CURSOR_AGENT_BIN: "agent" },
+      cwd: "/workspace",
+    });
+    expect(config.acpRawDebug).toBe(true);
+  });
+
   it("uses tailscale host fallback without mutating process.env", () => {
     const config = loadBridgeConfig({
       env: {},

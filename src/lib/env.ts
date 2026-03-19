@@ -31,6 +31,10 @@ export type LoadedEnv = {
   verbose: boolean;
   /** When true, set maxMode in cli-config.json before each run (larger context, more tools). */
   maxMode: boolean;
+  /** When true, pass the user prompt via stdin instead of argv (avoids Windows argv truncation). */
+  promptViaStdin: boolean;
+  /** When true, use ACP (Agent Client Protocol) over stdio instead of CLI argv (fixes prompt delivery on Windows). */
+  useAcp: boolean;
 };
 
 export type AgentCommand = {
@@ -94,6 +98,36 @@ function resolveAbsolutePath(raw: string | undefined, cwd: string): string | und
   return path.resolve(cwd, raw);
 }
 
+/** Version dir name format: YYYY.MM.DD-commit (matches cursor-agent.ps1). */
+const VERSION_DIR_REGEX = /^(\d{4})\.(\d{1,2})\.(\d{1,2})-[a-f0-9]+$/;
+
+function parseVersionToInt(name: string): number {
+  const m = name.match(VERSION_DIR_REGEX);
+  if (!m) return 0;
+  const [, year, month, day] = m;
+  const y = year!.padStart(4, "0");
+  const mo = month!.padStart(2, "0");
+  const d = day!.padStart(2, "0");
+  return parseInt(y + mo + d, 10);
+}
+
+/**
+ * Find the latest version directory under dir/versions/ (e.g. cursor-agent/versions/2026.03.11-6dfa30c).
+ * Returns the full path to the version dir, or undefined if none found.
+ */
+function findLatestVersionDir(dir: string): string | undefined {
+  const versionsDir = path.join(dir, "versions");
+  if (!fs.existsSync(versionsDir) || !fs.statSync(versionsDir).isDirectory()) {
+    return undefined;
+  }
+  const entries = fs.readdirSync(versionsDir, { withFileTypes: true });
+  const versionDirs = entries
+    .filter((e) => e.isDirectory() && VERSION_DIR_REGEX.test(e.name))
+    .sort((a, b) => parseVersionToInt(b.name) - parseVersionToInt(a.name));
+  if (versionDirs.length === 0) return undefined;
+  return path.join(versionsDir, versionDirs[0]!.name);
+}
+
 export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
   const env = getEnvSource(opts.env);
   const cwd = getCwd(opts.cwd);
@@ -137,6 +171,8 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
     chatOnlyWorkspace: envBool(env, ["CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE"], true),
     verbose: envBool(env, ["CURSOR_BRIDGE_VERBOSE"], false),
     maxMode: envBool(env, ["CURSOR_BRIDGE_MAX_MODE"], false),
+    promptViaStdin: envBool(env, ["CURSOR_BRIDGE_PROMPT_VIA_STDIN"], false),
+    useAcp: envBool(env, ["CURSOR_BRIDGE_USE_ACP"], false),
   };
 }
 
@@ -181,6 +217,21 @@ export function resolveAgentCommand(
           agentScriptPath: script,
           configDir: fs.existsSync(path.join(configDir, "cli-config.json")) ? configDir : undefined,
         };
+      }
+      const versionDir = findLatestVersionDir(dir);
+      if (versionDir) {
+        const versionNode = path.join(versionDir, "node.exe");
+        const versionScript = path.join(versionDir, "index.js");
+        if (fs.existsSync(versionNode) && fs.existsSync(versionScript)) {
+          const configDir = path.join(dir, "..", "data", "config");
+          return {
+            command: versionNode,
+            args: [versionScript, ...args],
+            env: { ...env, CURSOR_INVOKED_AS: "agent.cmd" },
+            agentScriptPath: versionScript,
+            configDir: fs.existsSync(path.join(configDir, "cli-config.json")) ? configDir : undefined,
+          };
+        }
       }
       const quotedArgs = args.map((arg) => (arg.includes(" ") ? `"${arg}"` : arg)).join(" ");
       const cmdLine = `""${cmd}" ${quotedArgs}"`;

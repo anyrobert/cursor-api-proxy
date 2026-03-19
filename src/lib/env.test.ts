@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -160,5 +162,71 @@ describe("resolveAgentCommand", () => {
     expect(command.command).toBe("agent");
     expect(command.args).toEqual(["--help"]);
     expect(command.windowsVerbatimArguments).toBeUndefined();
+  });
+
+  it("uses versioned layout (versions/YYYY.MM.DD-commit) when node.exe/index.js not in agent dir", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-agent-"));
+    try {
+      const agentCmd = path.join(tmp, "agent.cmd");
+      const versionDir = path.join(tmp, "versions", "2026.03.11-6dfa30c");
+      fs.mkdirSync(versionDir, { recursive: true });
+      fs.writeFileSync(path.join(versionDir, "node.exe"), "");
+      fs.writeFileSync(path.join(versionDir, "index.js"), "");
+      fs.writeFileSync(agentCmd, "");
+
+      const command = resolveAgentCommand(agentCmd, ["acp"], {
+        platform: "win32",
+        env: {},
+        cwd: tmp,
+      });
+
+      expect(command.command).toBe(path.join(versionDir, "node.exe"));
+      expect(command.args).toEqual([path.join(versionDir, "index.js"), "acp"]);
+      expect(command.windowsVerbatimArguments).toBeUndefined();
+      expect(command.env.CURSOR_INVOKED_AS).toBe("agent.cmd");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to cmd when versions dir does not exist", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-agent-"));
+    try {
+      const agentCmd = path.join(tmp, "agent.cmd");
+      fs.writeFileSync(agentCmd, "");
+
+      const command = resolveAgentCommand(agentCmd, ["acp"], {
+        platform: "win32",
+        env: { COMSPEC: "C:\\Windows\\System32\\cmd.exe" },
+        cwd: tmp,
+      });
+
+      expect(command.command).toBe("C:\\Windows\\System32\\cmd.exe");
+      expect(command.windowsVerbatimArguments).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to cmd when versions dir has no valid version subdirs", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-agent-"));
+    try {
+      const agentCmd = path.join(tmp, "agent.cmd");
+      const versionsDir = path.join(tmp, "versions");
+      fs.mkdirSync(versionsDir, { recursive: true });
+      fs.writeFileSync(agentCmd, "");
+      fs.mkdirSync(path.join(versionsDir, "not-a-version"), { recursive: true });
+
+      const command = resolveAgentCommand(agentCmd, ["acp"], {
+        platform: "win32",
+        env: { COMSPEC: "C:\\Windows\\System32\\cmd.exe" },
+        cwd: tmp,
+      });
+
+      expect(command.command).toBe("C:\\Windows\\System32\\cmd.exe");
+      expect(command.windowsVerbatimArguments).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

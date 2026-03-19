@@ -22,6 +22,8 @@ export function buildAgentCmdArgs(
   } else {
     args.push("--output-format", "text");
   }
-  args.push(prompt);
+  if (!config.promptViaStdin) {
+    args.push(prompt);
+  }
   return args;
 }

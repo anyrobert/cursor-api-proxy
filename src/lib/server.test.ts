@@ -44,6 +44,9 @@ const tmpLogPath = "/tmp/cursor-proxy-test-sessions.log";
 function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
   return {
     agentBin: "agent",
+    acpCommand: "agent",
+    acpArgs: ["acp"],
+    acpEnv: {},
     host: "127.0.0.1",
     port: 0, // Let OS assign a free port
     defaultModel: "auto",
@@ -57,6 +60,10 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     chatOnlyWorkspace: true,
     verbose: false,
     maxMode: false,
+    promptViaStdin: false,
+    useAcp: false,
+    acpSkipAuthenticate: false,
+    acpRawDebug: false,
     ...overrides,
   };
 }
@@ -205,5 +212,47 @@ describe("startBridgeServer", () => {
     const data = JSON.parse(body);
     expect(data.object).toBe("chat.completion");
     expect(data.choices[0].message.content).toBe("Hello from agent");
+  });
+
+  it("returns display model when request is auto and defaultModel is set", async () => {
+    server = startBridgeServer({
+      version: "0.1.0",
+      config: createTestConfig({ defaultModel: "composer-1.5" }),
+    });
+    await new Promise<void>((resolve) =>
+      server.on("listening", () => resolve()),
+    );
+
+    const { status, body } = await fetchServer(server, "/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "auto",
+        messages: [{ role: "user", content: "Hi" }],
+      }),
+    });
+    expect(status).toBe(200);
+    const data = JSON.parse(body);
+    expect(data.model).toBe("composer-1.5");
+  });
+
+  it("echoes auto when request is auto and defaultModel is unset", async () => {
+    server = startBridgeServer({
+      version: "0.1.0",
+      config: createTestConfig({ defaultModel: "auto" }),
+    });
+    await new Promise<void>((resolve) =>
+      server.on("listening", () => resolve()),
+    );
+
+    const { status, body } = await fetchServer(server, "/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "auto",
+        messages: [{ role: "user", content: "Hi" }],
+      }),
+    });
+    expect(status).toBe(200);
+    const data = JSON.parse(body);
+    expect(data.model).toBe("auto");
   });
 });

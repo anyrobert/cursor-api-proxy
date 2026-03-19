@@ -19,6 +19,14 @@ describe("run", () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toBe("ok");
   });
+
+  it("passes stdinContent to child stdin", async () => {
+    const result = await run(node, ["-e", "process.stdin.on('data', d => process.stdout.write(d))"], {
+      stdinContent: "hello from stdin",
+    });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("hello from stdin");
+  });
 });
 
 describe("runStreaming", () => {
