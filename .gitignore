@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# Cursor / Claude local IDE settings
+.claude/
 *.log
 .env
 .DS_Store
