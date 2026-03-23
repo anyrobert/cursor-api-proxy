@@ -5,6 +5,7 @@ import { ACCOUNTS_DIR } from "./constants.js";
 import {
   readCachedToken,
   readKeychainToken,
+  tokenSub,
   fetchAccountUsage,
   fetchStripeProfile,
   formatUsageSummary,
@@ -143,10 +144,15 @@ export async function handleAccountsList(): Promise<void> {
       }
       console.log(`     ✅ Authenticated`);
 
-      // Per-account cached token (written after each agent run or after login).
-      // Fall back directly to the shared keychain token — no sub-matching needed
-      // because after login the token IS for this account.
-      const token = readCachedToken(configDir) ?? keychainToken;
+      // Per-account cached token wins. Fall back to keychain ONLY if its JWT
+      // sub matches this account's authId (prevents showing another account's data).
+      const cachedToken = readCachedToken(configDir);
+      const keychainMatchesAccount =
+        !!keychainToken &&
+        !!info.authId &&
+        tokenSub(keychainToken) === info.authId;
+      const token =
+        cachedToken ?? (keychainMatchesAccount ? keychainToken : undefined);
 
       if (token) {
         try {
