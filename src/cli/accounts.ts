@@ -5,10 +5,10 @@ import { ACCOUNTS_DIR } from "./constants.js";
 import {
   readCachedToken,
   readKeychainToken,
-  tokenSub,
   fetchAccountUsage,
   fetchStripeProfile,
   formatUsageSummary,
+  describePlan,
 } from "./usage.js";
 
 // ---------------------------------------------------------------------------
@@ -143,13 +143,10 @@ export async function handleAccountsList(): Promise<void> {
       }
       console.log(`     ✅ Authenticated`);
 
-      // Try to fetch live usage: prefer per-account cached token, fall back to keychain
-      const cachedToken = readCachedToken(configDir);
-      const token =
-        cachedToken ??
-        (keychainToken && info.authId && tokenSub(keychainToken) === info.authId
-          ? keychainToken
-          : undefined);
+      // Per-account cached token (written after each agent run or after login).
+      // Fall back directly to the shared keychain token — no sub-matching needed
+      // because after login the token IS for this account.
+      const token = readCachedToken(configDir) ?? keychainToken;
 
       if (token) {
         try {
@@ -158,24 +155,14 @@ export async function handleAccountsList(): Promise<void> {
             fetchStripeProfile(token),
           ]);
           if (profile) {
-            const plan =
-              profile.membershipType === "free_trial"
-                ? `Free Trial (${profile.daysRemainingOnTrial ?? 0}d left)`
-                : profile.membershipType === "pro"
-                  ? "Pro"
-                  : profile.membershipType;
-            console.log(
-              `     💳 Plan (live): ${plan} · ${profile.subscriptionStatus}`,
-            );
+            console.log(`     💳 ${describePlan(profile)}`);
           }
           if (usage) {
             for (const line of formatUsageSummary(usage)) console.log(line);
           }
         } catch {
-          /* ignore live fetch errors */
+          /* ignore transient fetch errors */
         }
-      } else {
-        console.log(`     ℹ️  Run a request to load live usage stats`);
       }
     } else {
       console.log(`     ⚠️  Not authenticated`);

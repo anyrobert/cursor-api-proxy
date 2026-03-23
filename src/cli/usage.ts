@@ -134,7 +134,28 @@ export type StripeProfile = {
   subscriptionStatus: string;
   daysRemainingOnTrial: number | null;
   isTeamMember: boolean;
+  isYearlyPlan: boolean;
 };
+
+/** Human-readable plan name + limits for display. */
+export function describePlan(profile: StripeProfile): string {
+  const { membershipType, subscriptionStatus, daysRemainingOnTrial } = profile;
+  switch (membershipType) {
+    case "free_trial": {
+      const days = daysRemainingOnTrial ?? 0;
+      return `Free Trial (${days}d left) — unlimited fast requests`;
+    }
+    case "pro":
+    case "pro_plus":
+    case "ultra":
+      return `${membershipType === "pro" ? "Pro" : membershipType === "pro_plus" ? "Pro+" : "Ultra"} — extended limits`;
+    case "free":
+    case "hobby":
+      return "Hobby (free) — limited agent requests";
+    default:
+      return `${membershipType} · ${subscriptionStatus}`;
+  }
+}
 
 export async function fetchStripeProfile(
   token: string,
@@ -153,6 +174,7 @@ export async function fetchStripeProfile(
           ? raw.daysRemainingOnTrial
           : null,
       isTeamMember: Boolean(raw.isTeamMember),
+      isYearlyPlan: Boolean(raw.isYearlyPlan),
     };
   } catch {
     return null;
@@ -163,21 +185,35 @@ export async function fetchStripeProfile(
 // Summary helpers
 // ---------------------------------------------------------------------------
 
-// Human-readable labels for Cursor's internal model keys
+// Human-readable labels for Cursor's internal model/pool keys.
+// Keys are actual identifiers from the agent binary (2026.03.20 build).
 const MODEL_LABELS: Record<string, string> = {
-  "gpt-4": "Fast Premium (GPT-4o / Claude)",
+  // ── Usage pool keys (what the /auth/usage API actually returns) ──
+  "gpt-4": "Fast Premium Requests", // main premium pool (all models)
+
+  // ── Claude Sonnet ──
+  "claude-sonnet-4-6": "Claude Sonnet 4.6",
+  "claude-sonnet-4-5-20250929-v1": "Claude Sonnet 4.5",
+  "claude-sonnet-4-20250514-v1": "Claude Sonnet 4",
+
+  // ── Claude Opus ──
+  "claude-opus-4-6-v1": "Claude Opus 4.6",
+  "claude-opus-4-5-20251101-v1": "Claude Opus 4.5",
+  "claude-opus-4-1-20250805-v1": "Claude Opus 4.1",
+  "claude-opus-4-20250514-v1": "Claude Opus 4",
+
+  // ── Claude Haiku ──
+  "claude-haiku-4-5-20251001-v1": "Claude Haiku 4.5",
+  "claude-3-5-haiku-20241022-v1": "Claude 3.5 Haiku",
+
+  // ── GPT / OpenAI ──
+  "gpt-5": "GPT-5",
   "gpt-4o": "GPT-4o",
-  "gpt-4-turbo": "GPT-4 Turbo",
-  "gpt-3.5-turbo": "GPT-3.5 (slow queue)",
-  "claude-3-5-sonnet": "Claude 3.5 Sonnet",
-  "claude-3-5-sonnet-20241022": "Claude 3.5 Sonnet",
-  "claude-3-7-sonnet": "Claude 3.7 Sonnet",
-  "claude-3-opus": "Claude 3 Opus",
-  "cursor-small": "Cursor Small (free)",
-  "cursor-fast": "Cursor Fast",
   o1: "o1",
-  "o1-mini": "o1-mini",
   "o3-mini": "o3-mini",
+
+  // ── Cursor-native ──
+  "cursor-small": "Cursor Small (free)",
 };
 
 function modelLabel(key: string): string {

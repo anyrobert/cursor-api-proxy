@@ -5,6 +5,7 @@ import { launch as launchChrome } from "chrome-launcher";
 
 import { loadEnvConfig } from "../lib/env.js";
 import { ACCOUNTS_DIR } from "./constants.js";
+import { readKeychainToken, writeCachedToken } from "./usage.js";
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -39,7 +40,9 @@ async function openIncognito(url: string, proxies: string[]): Promise<void> {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.log(`\n🌐 Could not open Chrome automatically: ${msg}`);
-    console.log(`Please open this URL in a private/incognito window:\n${url}\n`);
+    console.log(
+      `Please open this URL in a private/incognito window:\n${url}\n`,
+    );
   }
 }
 
@@ -63,7 +66,9 @@ export async function handleLogin(
   console.log(`🔑 Logging into Cursor account: ${name}`);
   console.log(`📁 Config: ${configDir}`);
   console.log("");
-  console.log("A Chrome incognito window will open — complete the login there.");
+  console.log(
+    "A Chrome incognito window will open — complete the login there.",
+  );
   console.log("");
 
   return new Promise<void>((resolve, reject) => {
@@ -81,7 +86,11 @@ export async function handleLogin(
 
     const child = spawn(envCfg.agentBin, ["login"], {
       stdio: ["inherit", "pipe", "pipe"],
-      env: { ...process.env, CURSOR_CONFIG_DIR: configDir, NO_OPEN_BROWSER: "1" },
+      env: {
+        ...process.env,
+        CURSOR_CONFIG_DIR: configDir,
+        NO_OPEN_BROWSER: "1",
+      },
     });
 
     // Remove all signal handlers once the child exits (success or failure)
@@ -91,19 +100,19 @@ export async function handleLogin(
       if (signal === "SIGINT") console.log("\n\n❌ Login cancelled.");
       process.exit(0);
     };
-    const onSigint  = () => onCancel("SIGINT");
+    const onSigint = () => onCancel("SIGINT");
     const onSigterm = () => onCancel("SIGTERM");
-    const onSighup  = () => onCancel("SIGHUP");
+    const onSighup = () => onCancel("SIGHUP");
 
     const removeSignalHandlers = () => {
-      process.removeListener("SIGINT",  onSigint);
+      process.removeListener("SIGINT", onSigint);
       process.removeListener("SIGTERM", onSigterm);
-      process.removeListener("SIGHUP",  onSighup);
+      process.removeListener("SIGHUP", onSighup);
     };
 
-    process.once("SIGINT",  onSigint);
+    process.once("SIGINT", onSigint);
     process.once("SIGTERM", onSigterm);
-    process.once("SIGHUP",  onSighup);
+    process.once("SIGHUP", onSighup);
 
     child.stdout?.on("data", (data: Buffer) => {
       const text = data.toString();
@@ -111,7 +120,10 @@ export async function handleLogin(
       stdoutBuffer += text;
 
       // The agent prints the login URL across multiple chunks — buffer until complete
-      if (!browserOpened && stdoutBuffer.includes("https://cursor.com/loginDeepControl")) {
+      if (
+        !browserOpened &&
+        stdoutBuffer.includes("https://cursor.com/loginDeepControl")
+      ) {
         const match = stdoutBuffer.match(LOGIN_URL_RE);
         if (match?.[1]) {
           const url = match[1].replace(/\s+/g, "");
@@ -141,6 +153,11 @@ export async function handleLogin(
     child.on("exit", (code: number | null) => {
       removeSignalHandlers();
       if (code === 0) {
+        // Immediately cache the keychain token for this account so that
+        // 'accounts list' can show live usage without needing a prior request.
+        const token = readKeychainToken();
+        if (token) writeCachedToken(configDir, token);
+
         console.log(
           `\n✅ Account '${name}' saved — it will be auto-discovered when you start the proxy.`,
         );
