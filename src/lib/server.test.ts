@@ -38,6 +38,8 @@ vi.mock("./request-log.js", () => ({
   logTrafficResponse: vi.fn(),
   logAgentError: vi.fn().mockReturnValue("agent error"),
   appendSessionLine: vi.fn(),
+  logAccountAssigned: vi.fn(),
+  logAccountStats: vi.fn(),
 }));
 
 const tmpLogPath = "/tmp/cursor-proxy-test-sessions.log";

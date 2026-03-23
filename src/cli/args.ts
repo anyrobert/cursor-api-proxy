@@ -6,6 +6,9 @@ export type ParsedArgs = {
   logout: boolean;
   accountName: string;
   proxies: string[];
+  resetHwid: boolean;
+  deepClean: boolean;
+  dryRun: boolean;
 };
 
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -16,6 +19,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let logout = false;
   let accountName = "";
   let proxies: string[] = [];
+  let resetHwid = false;
+  let deepClean = false;
+  let dryRun = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -41,6 +47,21 @@ export function parseArgs(argv: string[]): ParsedArgs {
       continue;
     }
 
+    if (arg === "reset-hwid" || arg === "reset") {
+      resetHwid = true;
+      continue;
+    }
+
+    if (arg === "--deep-clean") {
+      deepClean = true;
+      continue;
+    }
+
+    if (arg === "--dry-run") {
+      dryRun = true;
+      continue;
+    }
+
     if (arg === "--tailscale") {
       tailscale = true;
       continue;
@@ -63,7 +84,18 @@ export function parseArgs(argv: string[]): ParsedArgs {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { tailscale, help, login, accountsList, logout, accountName, proxies };
+  return {
+    tailscale,
+    help,
+    login,
+    accountsList,
+    logout,
+    accountName,
+    proxies,
+    resetHwid,
+    deepClean,
+    dryRun,
+  };
 }
 
 export function printHelp(version: string): void {
@@ -81,6 +113,12 @@ export function printHelp(version: string): void {
   );
   console.log("  logout <name>             Remove a saved Cursor account");
   console.log("  accounts                  List saved accounts with plan info");
+  console.log(
+    "  reset-hwid                Reset Cursor machine/telemetry IDs (anti-ban)",
+  );
+  console.log(
+    "  reset-hwid --deep-clean   Also wipe session storage and cookies",
+  );
   console.log("");
   console.log("Options:");
   console.log("  --tailscale     Bind to 0.0.0.0 for tailnet/LAN access");

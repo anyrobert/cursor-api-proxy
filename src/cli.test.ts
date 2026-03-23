@@ -13,8 +13,11 @@ import { describe, it, expect } from "vitest";
 import { parseArgs } from "./cli.js";
 
 describe("parseArgs", () => {
+  const base = { resetHwid: false, deepClean: false, dryRun: false };
+
   it("parses empty argv", () => {
     expect(parseArgs([])).toEqual({
+      ...base,
       tailscale: false,
       help: false,
       login: false,
@@ -27,6 +30,7 @@ describe("parseArgs", () => {
 
   it("parses --tailscale", () => {
     expect(parseArgs(["--tailscale"])).toEqual({
+      ...base,
       tailscale: true,
       help: false,
       login: false,
@@ -39,6 +43,7 @@ describe("parseArgs", () => {
 
   it("parses --help", () => {
     expect(parseArgs(["--help"])).toEqual({
+      ...base,
       tailscale: false,
       help: true,
       login: false,
@@ -51,6 +56,7 @@ describe("parseArgs", () => {
 
   it("parses -h", () => {
     expect(parseArgs(["-h"])).toEqual({
+      ...base,
       tailscale: false,
       help: true,
       login: false,
@@ -63,6 +69,7 @@ describe("parseArgs", () => {
 
   it("parses combined flags", () => {
     expect(parseArgs(["--tailscale", "--help"])).toEqual({
+      ...base,
       tailscale: true,
       help: true,
       login: false,
@@ -75,6 +82,7 @@ describe("parseArgs", () => {
 
   it("parses login command", () => {
     expect(parseArgs(["login", "my-account"])).toEqual({
+      ...base,
       tailscale: false,
       help: false,
       login: true,
@@ -89,6 +97,7 @@ describe("parseArgs", () => {
     expect(
       parseArgs(["login", "my-account", "--proxy=http://proxy1:8080"]),
     ).toEqual({
+      ...base,
       tailscale: false,
       help: false,
       login: true,
@@ -107,6 +116,7 @@ describe("parseArgs", () => {
         "--proxy=http://p1:8080,socks5://p2:1080,http://p3:3128",
       ]),
     ).toEqual({
+      ...base,
       tailscale: false,
       help: false,
       login: true,
@@ -119,6 +129,7 @@ describe("parseArgs", () => {
 
   it("parses logout command", () => {
     expect(parseArgs(["logout", "my-account"])).toEqual({
+      ...base,
       tailscale: false,
       help: false,
       login: false,
@@ -131,6 +142,7 @@ describe("parseArgs", () => {
 
   it("parses accounts command", () => {
     expect(parseArgs(["accounts"])).toEqual({
+      ...base,
       tailscale: false,
       help: false,
       login: false,

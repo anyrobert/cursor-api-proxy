@@ -12,7 +12,8 @@ export const TOKEN_FILE = ".cursor-token";
 export function readCachedToken(configDir: string): string | undefined {
   try {
     const p = path.join(configDir, TOKEN_FILE);
-    if (fs.existsSync(p)) return fs.readFileSync(p, "utf-8").trim() || undefined;
+    if (fs.existsSync(p))
+      return fs.readFileSync(p, "utf-8").trim() || undefined;
   } catch {
     /* ignore */
   }
@@ -162,29 +163,60 @@ export async function fetchStripeProfile(
 // Summary helpers
 // ---------------------------------------------------------------------------
 
+// Human-readable labels for Cursor's internal model keys
+const MODEL_LABELS: Record<string, string> = {
+  "gpt-4": "Fast Premium (GPT-4o / Claude)",
+  "gpt-4o": "GPT-4o",
+  "gpt-4-turbo": "GPT-4 Turbo",
+  "gpt-3.5-turbo": "GPT-3.5 (slow queue)",
+  "claude-3-5-sonnet": "Claude 3.5 Sonnet",
+  "claude-3-5-sonnet-20241022": "Claude 3.5 Sonnet",
+  "claude-3-7-sonnet": "Claude 3.7 Sonnet",
+  "claude-3-opus": "Claude 3 Opus",
+  "cursor-small": "Cursor Small (free)",
+  "cursor-fast": "Cursor Fast",
+  o1: "o1",
+  "o1-mini": "o1-mini",
+  "o3-mini": "o3-mini",
+};
+
+function modelLabel(key: string): string {
+  return MODEL_LABELS[key] ?? key;
+}
+
 export function formatUsageSummary(usage: UsageData): string[] {
   const lines: string[] = [];
   const start = usage.startOfMonth
     ? new Date(usage.startOfMonth).toLocaleDateString()
     : "?";
-  lines.push(`     📅 Billing period from: ${start}`);
+  lines.push(`     📅 Billing period from ${start}`);
 
-  const premiumModels = Object.entries(usage.models).filter(
-    ([, v]) => v.maxRequestUsage !== null || v.numRequests > 0,
-  );
-  const allModels = Object.entries(usage.models);
-  const modelList = premiumModels.length > 0 ? premiumModels : allModels;
-
-  for (const [model, v] of modelList) {
-    const used = v.numRequests;
-    const max = v.maxRequestUsage;
-    const bar = max && max > 0 ? ` [${makeBar(used, max, 10)}]` : "";
-    const limit = max !== null ? `/${max}` : "/∞";
-    lines.push(`     🔢 ${model}: ${used}${limit} requests${bar}`);
+  const entries = Object.entries(usage.models);
+  if (entries.length === 0) {
+    lines.push(`     🔢 No requests this billing period`);
+    return lines;
   }
 
-  if (modelList.length === 0) {
-    lines.push(`     🔢 No requests this period`);
+  // Sort: entries with limits first, then by usage descending
+  const sorted = entries.sort(([, a], [, b]) => {
+    if ((a.maxRequestUsage !== null) !== (b.maxRequestUsage !== null))
+      return a.maxRequestUsage !== null ? -1 : 1;
+    return b.numRequests - a.numRequests;
+  });
+
+  for (const [key, v] of sorted) {
+    const used = v.numRequests;
+    const max = v.maxRequestUsage;
+    const label = modelLabel(key);
+    if (max !== null && max > 0) {
+      const pct = Math.round((used / max) * 100);
+      const bar = makeBar(used, max, 12);
+      lines.push(`     🔢 ${label}: ${used}/${max} (${pct}%) [${bar}]`);
+    } else if (used > 0) {
+      lines.push(`     🔢 ${label}: ${used} requests`);
+    } else {
+      lines.push(`     🔢 ${label}: 0 requests (unlimited)`);
+    }
   }
 
   return lines;
