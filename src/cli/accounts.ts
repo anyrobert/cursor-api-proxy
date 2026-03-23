@@ -132,18 +132,6 @@ export async function handleAccountsList(): Promise<void> {
     console.log(`  ${i + 1}. ${name}`);
 
     if (info.authenticated) {
-      if (info.email) {
-        const display = info.displayName ? ` (${info.displayName})` : "";
-        console.log(`     📧 ${info.email}${display}`);
-      }
-      if (info.plan) {
-        const canceled =
-          info.subscriptionStatus === "canceled" ? " · canceled" : "";
-        const expiry = info.expiresAt ? ` · expires ${info.expiresAt}` : "";
-        console.log(`     📊 ${info.plan}${canceled}${expiry}`);
-      }
-      console.log(`     ✅ Authenticated`);
-
       // Per-account cached token wins. Fall back to keychain ONLY if its JWT
       // sub matches this account's authId (prevents showing another account's data).
       const cachedToken = readCachedToken(configDir);
@@ -154,21 +142,38 @@ export async function handleAccountsList(): Promise<void> {
       const token =
         cachedToken ?? (keychainMatchesAccount ? keychainToken : undefined);
 
+      // Fetch live data before printing so we can decide what to show
+      let liveProfile: Awaited<ReturnType<typeof fetchStripeProfile>> = null;
+      let liveUsage: Awaited<ReturnType<typeof fetchAccountUsage>> = null;
       if (token) {
         try {
-          const [usage, profile] = await Promise.all([
+          [liveUsage, liveProfile] = await Promise.all([
             fetchAccountUsage(token),
             fetchStripeProfile(token),
           ]);
-          if (profile) {
-            console.log(`     💳 ${describePlan(profile)}`);
-          }
-          if (usage) {
-            for (const line of formatUsageSummary(usage)) console.log(line);
-          }
         } catch {
           /* ignore transient fetch errors */
         }
+      }
+
+      if (info.email) {
+        const display = info.displayName ? ` (${info.displayName})` : "";
+        console.log(`     � ${info.email}${display}`);
+      }
+      // Show static plan only when live data isn't available (avoids contradictions)
+      if (info.plan && !liveProfile) {
+        const canceled =
+          info.subscriptionStatus === "canceled" ? " · canceled" : "";
+        const expiry = info.expiresAt ? ` · expires ${info.expiresAt}` : "";
+        console.log(`     📊 ${info.plan}${canceled}${expiry}`);
+      }
+      console.log(`     ✅ Authenticated`);
+
+      if (liveProfile) {
+        console.log(`     💳 ${describePlan(liveProfile)}`);
+      }
+      if (liveUsage) {
+        for (const line of formatUsageSummary(liveUsage)) console.log(line);
       }
     } else {
       console.log(`     ⚠️  Not authenticated`);

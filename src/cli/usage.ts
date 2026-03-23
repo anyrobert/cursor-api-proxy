@@ -143,7 +143,7 @@ export function describePlan(profile: StripeProfile): string {
   switch (membershipType) {
     case "free_trial": {
       const days = daysRemainingOnTrial ?? 0;
-      return `Free Trial (${days}d left) — unlimited fast requests`;
+      return `Pro Trial (${days}d left) — unlimited fast requests`;
     }
     case "pro":
     case "pro_plus":
