@@ -3,6 +3,23 @@ type AccountStatus = {
   activeRequests: number;
   lastUsed: number;
   rateLimitUntil: number;
+  totalRequests: number;
+  totalSuccess: number;
+  totalErrors: number;
+  totalRateLimits: number;
+  totalLatencyMs: number;
+};
+
+export type AccountStat = {
+  configDir: string;
+  activeRequests: number;
+  totalRequests: number;
+  totalSuccess: number;
+  totalErrors: number;
+  totalRateLimits: number;
+  totalLatencyMs: number;
+  isRateLimited: boolean;
+  rateLimitUntil: number;
 };
 
 export class AccountPool {
@@ -14,6 +31,11 @@ export class AccountPool {
       activeRequests: 0,
       lastUsed: 0,
       rateLimitUntil: 0,
+      totalRequests: 0,
+      totalSuccess: 0,
+      totalErrors: 0,
+      totalRateLimits: 0,
+      totalLatencyMs: 0,
     }));
   }
 
@@ -59,6 +81,25 @@ export class AccountPool {
     const account = this.accounts.find((a) => a.configDir === configDir);
     if (account) {
       account.activeRequests++;
+      account.totalRequests++;
+    }
+  }
+
+  public reportRequestSuccess(configDir?: string, latencyMs = 0): void {
+    if (!configDir) return;
+    const account = this.accounts.find((a) => a.configDir === configDir);
+    if (account) {
+      account.totalSuccess++;
+      account.totalLatencyMs += latencyMs;
+    }
+  }
+
+  public reportRequestError(configDir?: string, latencyMs = 0): void {
+    if (!configDir) return;
+    const account = this.accounts.find((a) => a.configDir === configDir);
+    if (account) {
+      account.totalErrors++;
+      account.totalLatencyMs += latencyMs;
     }
   }
 
@@ -75,7 +116,23 @@ export class AccountPool {
     const account = this.accounts.find((a) => a.configDir === configDir);
     if (account) {
       account.rateLimitUntil = Date.now() + penaltyMs;
+      account.totalRateLimits++;
     }
+  }
+
+  public getStats(): AccountStat[] {
+    const now = Date.now();
+    return this.accounts.map((a) => ({
+      configDir: a.configDir,
+      activeRequests: a.activeRequests,
+      totalRequests: a.totalRequests,
+      totalSuccess: a.totalSuccess,
+      totalErrors: a.totalErrors,
+      totalRateLimits: a.totalRateLimits,
+      totalLatencyMs: a.totalLatencyMs,
+      isRateLimited: a.rateLimitUntil > now,
+      rateLimitUntil: a.rateLimitUntil,
+    }));
   }
 
   public getConfigDirsCount(): number {
@@ -111,4 +168,26 @@ export function reportRateLimit(configDir?: string, penaltyMs?: number): void {
   if (globalPool) {
     globalPool.reportRateLimit(configDir, penaltyMs);
   }
+}
+
+export function reportRequestSuccess(
+  configDir?: string,
+  latencyMs?: number,
+): void {
+  if (globalPool) {
+    globalPool.reportRequestSuccess(configDir, latencyMs);
+  }
+}
+
+export function reportRequestError(
+  configDir?: string,
+  latencyMs?: number,
+): void {
+  if (globalPool) {
+    globalPool.reportRequestError(configDir, latencyMs);
+  }
+}
+
+export function getAccountStats(): AccountStat[] {
+  return globalPool?.getStats() ?? [];
 }

@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import type { AccountStat } from "./account-pool.js";
+
 export function logIncoming(
   method: string,
   pathname: string,
@@ -61,6 +63,50 @@ function truncate(s: string, max: number): string {
 
 function hr(char = "─", len = 60): string {
   return C.gray + char.repeat(len) + C.reset;
+}
+
+export function logAccountAssigned(configDir: string | undefined): void {
+  if (!configDir) return;
+  const name = path.basename(configDir);
+  console.log(
+    `[${new Date().toISOString()}] ${C.bCyan}→ account${C.reset} ${C.bold}${name}${C.reset}`,
+  );
+}
+
+export function logAccountStats(verbose: boolean, stats: AccountStat[]): void {
+  if (!verbose || stats.length === 0) return;
+  const now = Date.now();
+  const lines: string[] = [];
+  for (const s of stats) {
+    const name = path.basename(s.configDir).padEnd(20);
+    const active =
+      s.activeRequests > 0
+        ? `${C.bCyan}active:${s.activeRequests}${C.reset}`
+        : `${C.dim}active:0${C.reset}`;
+    const total = `total:${C.bold}${s.totalRequests}${C.reset}`;
+    const ok = `${C.green}ok:${s.totalSuccess}${C.reset}`;
+    const err =
+      s.totalErrors > 0
+        ? `${C.red}err:${s.totalErrors}${C.reset}`
+        : `${C.dim}err:0${C.reset}`;
+    const rl =
+      s.totalRateLimits > 0
+        ? `${C.yellow}rl:${s.totalRateLimits}${C.reset}`
+        : `${C.dim}rl:0${C.reset}`;
+    const avg =
+      s.totalRequests > 0
+        ? `avg:${Math.round(s.totalLatencyMs / s.totalRequests)}ms`
+        : `avg:-`;
+    const status = s.isRateLimited
+      ? `${C.red}⛔ rate-limited (recovers ${new Date(s.rateLimitUntil).toISOString()})${C.reset}`
+      : `${C.green}✓${C.reset}`;
+    lines.push(
+      `  ${C.bold}${name}${C.reset}  ${active}  ${total}  ${ok}  ${err}  ${rl}  ${C.dim}${avg}${C.reset}  ${status}`,
+    );
+  }
+  console.log(`${C.gray}┌─ Account Stats ${"─".repeat(44)}┐${C.reset}`);
+  for (const l of lines) console.log(l);
+  console.log(`${C.gray}└${"─".repeat(60)}┘${C.reset}`);
 }
 
 export function logTrafficRequest(

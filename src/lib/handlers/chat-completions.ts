@@ -15,6 +15,8 @@ import {
 } from "../openai.js";
 import {
   logAgentError,
+  logAccountAssigned,
+  logAccountStats,
   logTrafficRequest,
   logTrafficResponse,
   type TrafficMessage,
@@ -27,6 +29,9 @@ import {
   reportRequestStart,
   reportRequestEnd,
   reportRateLimit,
+  reportRequestSuccess,
+  reportRequestError,
+  getAccountStats,
 } from "../account-pool.js";
 
 function isRateLimited(stderr: string): boolean {
@@ -138,7 +143,9 @@ export async function handleChatCompletions(
     );
 
     const configDir = getNextAccountConfigDir();
+    logAccountAssigned(configDir);
     reportRequestStart(configDir);
+    const streamStart = Date.now();
 
     const abortController = new AbortController();
     req.once("close", () => abortController.abort());
@@ -153,6 +160,7 @@ export async function handleChatCompletions(
       abortController.signal,
     )
       .then(({ code, stderr: stderrOut }) => {
+        const latencyMs = Date.now() - streamStart;
         reportRequestEnd(configDir);
 
         if (stderrOut && isRateLimited(stderrOut)) {
@@ -160,6 +168,7 @@ export async function handleChatCompletions(
         }
 
         if (code !== 0 && !abortController.signal.aborted) {
+          reportRequestError(configDir, latencyMs);
           logAgentError(
             config.sessionsLogPath,
             method,
@@ -168,11 +177,15 @@ export async function handleChatCompletions(
             code,
             stderrOut,
           );
+        } else {
+          reportRequestSuccess(configDir, latencyMs);
         }
+        logAccountStats(config.verbose, getAccountStats());
         res.end();
       })
       .catch((err) => {
         reportRequestEnd(configDir);
+        reportRequestError(configDir, Date.now() - streamStart);
         console.error(`[${new Date().toISOString()}] Agent stream error:`, err);
         res.end();
       });
@@ -180,7 +193,9 @@ export async function handleChatCompletions(
   }
 
   const configDir = getNextAccountConfigDir();
+  logAccountAssigned(configDir);
   reportRequestStart(configDir);
+  const syncStart = Date.now();
 
   const abortController = new AbortController();
   req.once("close", () => abortController.abort());
@@ -193,6 +208,7 @@ export async function handleChatCompletions(
     configDir,
     abortController.signal,
   );
+  const syncLatency = Date.now() - syncStart;
   reportRequestEnd(configDir);
 
   if (out.stderr && isRateLimited(out.stderr)) {
@@ -200,6 +216,8 @@ export async function handleChatCompletions(
   }
 
   if (out.code !== 0) {
+    reportRequestError(configDir, syncLatency);
+    logAccountStats(config.verbose, getAccountStats());
     const errMsg = logAgentError(
       config.sessionsLogPath,
       method,
@@ -214,8 +232,10 @@ export async function handleChatCompletions(
     return;
   }
 
+  reportRequestSuccess(configDir, syncLatency);
   const content = out.stdout.trim();
   logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
+  logAccountStats(config.verbose, getAccountStats());
   json(res, 200, {
     id,
     object: "chat.completion",

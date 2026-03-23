@@ -12,6 +12,8 @@ import { resolveToCursorModel } from "../model-map.js";
 import { normalizeModelId, toolsToSystemText } from "../openai.js";
 import {
   logAgentError,
+  logAccountAssigned,
+  logAccountStats,
   logTrafficRequest,
   logTrafficResponse,
   type TrafficMessage,
@@ -24,6 +26,9 @@ import {
   reportRequestStart,
   reportRequestEnd,
   reportRateLimit,
+  reportRequestSuccess,
+  reportRequestError,
+  getAccountStats,
 } from "../account-pool.js";
 
 function isRateLimited(stderr: string): boolean {
@@ -172,7 +177,9 @@ export async function handleAnthropicMessages(
     );
 
     const configDir = getNextAccountConfigDir();
+    logAccountAssigned(configDir);
     reportRequestStart(configDir);
+    const streamStart = Date.now();
 
     const abortController = new AbortController();
     req.once("close", () => abortController.abort());
@@ -187,6 +194,7 @@ export async function handleAnthropicMessages(
       abortController.signal,
     )
       .then(({ code, stderr: stderrOut }) => {
+        const latencyMs = Date.now() - streamStart;
         reportRequestEnd(configDir);
 
         if (stderrOut && isRateLimited(stderrOut)) {
@@ -194,6 +202,7 @@ export async function handleAnthropicMessages(
         }
 
         if (code !== 0) {
+          reportRequestError(configDir, latencyMs);
           logAgentError(
             config.sessionsLogPath,
             method,
@@ -202,11 +211,15 @@ export async function handleAnthropicMessages(
             code,
             stderrOut,
           );
+        } else {
+          reportRequestSuccess(configDir, latencyMs);
         }
+        logAccountStats(config.verbose, getAccountStats());
         res.end();
       })
       .catch((err) => {
         reportRequestEnd(configDir);
+        reportRequestError(configDir, Date.now() - streamStart);
         console.error(`[${new Date().toISOString()}] Agent stream error:`, err);
         res.end();
       });
@@ -214,7 +227,9 @@ export async function handleAnthropicMessages(
   }
 
   const configDir = getNextAccountConfigDir();
+  logAccountAssigned(configDir);
   reportRequestStart(configDir);
+  const syncStart = Date.now();
 
   const abortController = new AbortController();
   req.once("close", () => abortController.abort());
@@ -227,6 +242,7 @@ export async function handleAnthropicMessages(
     configDir,
     abortController.signal,
   );
+  const syncLatency = Date.now() - syncStart;
   reportRequestEnd(configDir);
 
   if (out.stderr && isRateLimited(out.stderr)) {
@@ -234,6 +250,8 @@ export async function handleAnthropicMessages(
   }
 
   if (out.code !== 0) {
+    reportRequestError(configDir, syncLatency);
+    logAccountStats(config.verbose, getAccountStats());
     const errMsg = logAgentError(
       config.sessionsLogPath,
       method,
@@ -248,8 +266,10 @@ export async function handleAnthropicMessages(
     return;
   }
 
+  reportRequestSuccess(configDir, syncLatency);
   const content = out.stdout.trim();
   logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
+  logAccountStats(config.verbose, getAccountStats());
   json(res, 200, {
     id: msgId,
     type: "message",
