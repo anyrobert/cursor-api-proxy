@@ -19,6 +19,7 @@ describe("loadBridgeConfig", () => {
     expect(config.workspace).toBe("/workspace");
     expect(config.chatOnlyWorkspace).toBe(true);
     expect(config.sessionsLogPath).toBe("/workspace/sessions.log");
+    expect(config.winCmdlineMax).toBe(30_000);
   });
 
   it("assembles config from the centralized env layer", () => {

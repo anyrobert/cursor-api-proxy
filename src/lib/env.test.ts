@@ -208,6 +208,25 @@ describe("loadEnvConfig", () => {
       loadEnvConfig({ env: { CURSOR_BRIDGE_MAX_MODE: "true" } }).maxMode,
     ).toBe(true);
   });
+
+  it("winCmdlineMax defaults to 30000", () => {
+    expect(loadEnvConfig({ env: {} }).winCmdlineMax).toBe(30_000);
+  });
+
+  it("winCmdlineMax is parsed from CURSOR_BRIDGE_WIN_CMDLINE_MAX and clamped", () => {
+    expect(
+      loadEnvConfig({ env: { CURSOR_BRIDGE_WIN_CMDLINE_MAX: "25000" } })
+        .winCmdlineMax,
+    ).toBe(25_000);
+    expect(
+      loadEnvConfig({ env: { CURSOR_BRIDGE_WIN_CMDLINE_MAX: "999999" } })
+        .winCmdlineMax,
+    ).toBe(32_700);
+    expect(
+      loadEnvConfig({ env: { CURSOR_BRIDGE_WIN_CMDLINE_MAX: "100" } })
+        .winCmdlineMax,
+    ).toBe(4096);
+  });
 });
 
 describe("discoverAccountDirs filtering", () => {
