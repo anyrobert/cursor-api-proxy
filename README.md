@@ -172,20 +172,28 @@ Environment handling is centralized in one module. Aliases, defaults, path resol
 | `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE` | `true`                             | When `true` (default), the CLI runs in an empty temp dir so it **cannot read or write your project**; pure chat only. Set to `false` to pass the real workspace (e.g. for `X-Cursor-Workspace`).                                                                                                                           |
 | `CURSOR_BRIDGE_VERBOSE`             | `false`                            | When `true`, print full request messages and response content to stdout for every completion (both stream and sync).                                                                                                                                                                                                       |
 | `CURSOR_BRIDGE_MAX_MODE`            | `false`                            | When `true`, enable Cursor **Max Mode** for all requests (larger context window, higher tool-call limits). The proxy writes `maxMode: true` to `cli-config.json` before each run. Works when using `CURSOR_AGENT_NODE`/`CURSOR_AGENT_SCRIPT` or the default Windows `.cmd` layout (node.exe + index.js next to agent.cmd). |
+| `CURSOR_BRIDGE_WIN_CMDLINE_MAX`     | `30000`                            | **(Windows)** Upper bound (UTF-16 units, pessimistic) for the full `CreateProcess` command line. If the prompt would exceed it, the proxy keeps the **tail** of the prompt and prepends a short omission notice, logs a warning, and sets `X-Cursor-Proxy-Prompt-Truncated: true` on the response. Clamped to `4096`–`32700`. |
 | `CURSOR_CONFIG_DIRS`                | —                                  | Comma-separated list of configuration directories (e.g. `/home/user/.config/cursor-agent-1,/home/user/.config/cursor-agent-2`). Used for round-robin rotation between multiple accounts to distribute load and avoid rate limits.                                                                                          |
 | `CURSOR_BRIDGE_MULTI_PORT`          | `false`                            | When `true` and `CURSOR_CONFIG_DIRS` is set, instead of a single server doing round-robin, the proxy spawns a separate server for each configuration directory on incrementing ports (starting from `CURSOR_BRIDGE_PORT`).                                                                                                 |
 | `CURSOR_AGENT_BIN`                  | `agent`                            | Path to Cursor CLI binary. Alias precedence: `CURSOR_AGENT_BIN`, then `CURSOR_CLI_BIN`, then `CURSOR_CLI_PATH`.                                                                                                                                                                                                            |
-| `CURSOR_AGENT_NODE`                 | —                                  | **(Windows)** Path to Node.js executable. When set together with `CURSOR_AGENT_SCRIPT`, spawns Node directly instead of going through cmd.exe, bypassing the ~8191 character command line limit.                                                                                                                           |
-| `CURSOR_AGENT_SCRIPT`               | —                                  | **(Windows)** Path to the agent script (e.g. `agent.cmd` or the underlying `.js`). Use with `CURSOR_AGENT_NODE` to bypass cmd.exe for long prompts.                                                                                                                                                                        |
+| `CURSOR_AGENT_NODE`                 | —                                  | **(Windows)** Path to Node.js executable. When set together with `CURSOR_AGENT_SCRIPT`, spawns Node directly instead of going through cmd.exe, bypassing cmd’s ~8191 character limit (the overall `CreateProcess` limit ~32K still applies; see `CURSOR_BRIDGE_WIN_CMDLINE_MAX`).                                             |
+| `CURSOR_AGENT_SCRIPT`               | —                                  | **(Windows)** Path to the agent script (e.g. `agent.cmd` or the underlying `.js`). Use with `CURSOR_AGENT_NODE` to avoid cmd.exe’s short command-line cap.                                                                                                                                                                  |
 
 Notes:
 
 - `--tailscale` changes the default host to `0.0.0.0` only when `CURSOR_BRIDGE_HOST` is not already set.
 - Relative paths such as `CURSOR_BRIDGE_WORKSPACE`, `CURSOR_BRIDGE_SESSIONS_LOG`, `CURSOR_BRIDGE_TLS_CERT`, and `CURSOR_BRIDGE_TLS_KEY` are resolved from the current working directory.
 
-#### Windows command line limit bypass
+#### Windows command line limits
 
-On Windows, cmd.exe has a ~8191 character limit on the command line. Long prompts passed as arguments can exceed this and cause the agent to fail. To avoid that, set both `CURSOR_AGENT_NODE` (path to `node.exe`) and `CURSOR_AGENT_SCRIPT` (path to the agent script). The proxy will then spawn Node directly with the script and args instead of using cmd.exe, avoiding the limit.
+Two different limits matter:
+
+1. **cmd.exe** — about **8191** characters. If the proxy invokes the agent through `cmd.exe`, long prompts can fail before the process starts.
+2. **CreateProcess** — about **32,767** characters for the **entire** command line (executable path plus all arguments), even when spawning `node.exe` and the script directly.
+
+Set both `CURSOR_AGENT_NODE` (path to `node.exe`) and `CURSOR_AGENT_SCRIPT` (path to the agent script) so the proxy spawns Node with the script and args **without** cmd.exe, avoiding the smaller cmd limit.
+
+Very large prompts can still hit the **CreateProcess** cap and produce `spawn ENAMETOOLONG`. The proxy mitigates that on Windows by **truncating the start of the prompt** while **keeping the tail** (recent context), prepending a short notice, logging a warning, and optionally exposing `X-Cursor-Proxy-Prompt-Truncated: true`. Tune the budget with `CURSOR_BRIDGE_WIN_CMDLINE_MAX` (default `30000`).
 
 Example (adjust paths to your install):
 
