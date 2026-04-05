@@ -107,9 +107,9 @@ function envNumber(
 }
 
 function normalizeModelId(raw: string | undefined): string {
-  if (!raw) return "auto";
+  if (!raw) return "default";
   const parts = raw.split("/");
-  return parts[parts.length - 1] || "auto";
+  return parts[parts.length - 1] || "default";
 }
 
 function resolveAbsolutePath(

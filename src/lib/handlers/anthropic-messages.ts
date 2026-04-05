@@ -58,7 +58,7 @@ export async function handleAnthropicMessages(
   const requested = normalizeModelId(body.model);
   const model = resolveModel(requested, lastRequestedModelRef, config);
   const displayModel =
-    requested === "auto" && config.defaultModel !== "auto"
+    requested === "default" && config.defaultModel !== "default"
       ? config.defaultModel
       : model;
 

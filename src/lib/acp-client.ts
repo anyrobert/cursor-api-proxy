@@ -89,6 +89,17 @@ type AcpParsedMsg = {
   error?: { message?: string };
 };
 
+/** Normalise CRLF / stray CR so JSON-RPC lines parse on Windows (avoids silent hangs). */
+function parseAcpStdoutLine(line: string): AcpParsedMsg | null {
+  const t = line.replace(/\r$/, "").trim();
+  if (!t) return null;
+  try {
+    return JSON.parse(t) as AcpParsedMsg;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Handle ACP server→client notifications (session/update chunks, permissions, cursor/*).
  * Returns true if the message was consumed as a notification.
@@ -182,6 +193,30 @@ function handleAcpNotification(
   }
 
   return false;
+}
+
+export type AcpAvailableModel = { modelId: string; name: string };
+
+/**
+ * Map OpenAI-style display name to Cursor ACP `modelId` (e.g. `composer-2` → `composer-2[fast=true]`).
+ * If `availableModels` is missing or empty, returns `displayName` unchanged.
+ * If the list is non-empty but no row matches `name`, logs via debug and returns `displayName` (pass-through).
+ * Duplicate `name` entries: first match wins.
+ */
+export function resolveAcpModelConfigValue(
+  displayName: string,
+  availableModels: AcpAvailableModel[] | undefined,
+): string {
+  if (!availableModels?.length) return displayName;
+  const hit = availableModels.find((m) => m.name === displayName);
+  if (!hit) {
+    debugAcp(
+      "ACP model: no catalog match for display name %j; using value as-is",
+      displayName,
+    );
+    return displayName;
+  }
+  return hit.modelId;
 }
 
 function sendRequest(
@@ -311,12 +346,14 @@ export function runAcpSync(
         if (opts.rawDebug) {
           debugAcp("ACP raw: %s", line);
         }
-        const msg = JSON.parse(line) as AcpParsedMsg;
+        const msg = parseAcpStdoutLine(line);
+        if (!msg) return;
 
         if (msg.id != null && (msg.result !== undefined || msg.error !== undefined)) {
-          const waiter = pending.get(msg.id);
+          const reqId = typeof msg.id === "number" ? msg.id : Number(msg.id);
+          const waiter = Number.isFinite(reqId) ? pending.get(reqId) : undefined;
           if (waiter) {
-            pending.delete(msg.id);
+            pending.delete(reqId);
             if (msg.error) {
               waiter.reject(new Error(msg.error.message ?? "ACP error"));
             } else {
@@ -334,7 +371,7 @@ export function runAcpSync(
           },
         });
       } catch {
-        /* ignore parse errors */
+        /* ignore notification handler errors */
       }
     });
 
@@ -385,7 +422,10 @@ export function runAcpSync(
           { cwd: opts.cwd, mcpServers: [] },
           pending,
           requestTimeoutMs,
-        )) as { sessionId?: string };
+        )) as {
+          sessionId?: string;
+          models?: { availableModels?: AcpAvailableModel[] };
+        };
         const sessionId = sessionResult?.sessionId;
         if (!sessionId) {
           finish(1);
@@ -393,15 +433,25 @@ export function runAcpSync(
         }
 
         if (opts.model) {
-          debugAcp("ACP step: session/set_config_option (model)");
-          await sendRequest(
-            child.stdin,
-            nextId,
-            "session/set_config_option",
-            { sessionId, option: "model", value: opts.model },
-            pending,
-            requestTimeoutMs,
+          const resolvedModelId = resolveAcpModelConfigValue(
+            opts.model,
+            sessionResult.models?.availableModels,
           );
+          if (resolvedModelId !== "default" && resolvedModelId !== "default[]") {
+            debugAcp("ACP step: session/set_config_option (model)");
+            await sendRequest(
+              child.stdin,
+              nextId,
+              "session/set_config_option",
+              { sessionId, configId: "model", value: resolvedModelId },
+              pending,
+              requestTimeoutMs,
+            );
+          } else {
+            debugAcp(
+              "ACP step: session/set_config_option (model) — skipped, using session default",
+            );
+          }
         }
 
         debugAcp("ACP step: session/prompt");
@@ -416,7 +466,6 @@ export function runAcpSync(
       } catch {
         if (timeout) clearTimeout(timeout);
         if (!resolved) {
-          resolved = true;
           finish(1);
         }
       }
@@ -502,12 +551,14 @@ export function runAcpStream(
         if (opts.rawDebug) {
           debugAcp("ACP raw: %s", line);
         }
-        const msg = JSON.parse(line) as AcpParsedMsg;
+        const msg = parseAcpStdoutLine(line);
+        if (!msg) return;
 
         if (msg.id != null && (msg.result !== undefined || msg.error !== undefined)) {
-          const waiter = pending.get(msg.id);
+          const reqId = typeof msg.id === "number" ? msg.id : Number(msg.id);
+          const waiter = Number.isFinite(reqId) ? pending.get(reqId) : undefined;
           if (waiter) {
-            pending.delete(msg.id);
+            pending.delete(reqId);
             if (msg.error) {
               waiter.reject(new Error(msg.error.message ?? "ACP error"));
             } else {
@@ -523,7 +574,7 @@ export function runAcpStream(
           onAgentTextChunk: onChunk,
         });
       } catch {
-        /* ignore */
+        /* ignore notification handler errors */
       }
     });
 
@@ -574,7 +625,10 @@ export function runAcpStream(
           { cwd: opts.cwd, mcpServers: [] },
           pending,
           requestTimeoutMs,
-        )) as { sessionId?: string };
+        )) as {
+          sessionId?: string;
+          models?: { availableModels?: AcpAvailableModel[] };
+        };
         const sessionId = sessionResult?.sessionId;
         if (!sessionId) {
           finish(1);
@@ -582,15 +636,25 @@ export function runAcpStream(
         }
 
         if (opts.model) {
-          debugAcp("ACP step: session/set_config_option (model)");
-          await sendRequest(
-            child.stdin,
-            nextId,
-            "session/set_config_option",
-            { sessionId, option: "model", value: opts.model },
-            pending,
-            requestTimeoutMs,
+          const resolvedModelId = resolveAcpModelConfigValue(
+            opts.model,
+            sessionResult.models?.availableModels,
           );
+          if (resolvedModelId !== "default" && resolvedModelId !== "default[]") {
+            debugAcp("ACP step: session/set_config_option (model)");
+            await sendRequest(
+              child.stdin,
+              nextId,
+              "session/set_config_option",
+              { sessionId, configId: "model", value: resolvedModelId },
+              pending,
+              requestTimeoutMs,
+            );
+          } else {
+            debugAcp(
+              "ACP step: session/set_config_option (model) — skipped, using session default",
+            );
+          }
         }
 
         debugAcp("ACP step: session/prompt");
@@ -602,7 +666,6 @@ export function runAcpStream(
       } catch {
         if (timeout) clearTimeout(timeout);
         if (!resolved) {
-          resolved = true;
           finish(1);
         }
       }

@@ -61,9 +61,9 @@ export async function handleChatCompletions(
   const requested = normalizeModelId(body.model);
   const model = resolveModel(requested, lastRequestedModelRef, config);
   const cursorModel = resolveToCursorModel(model) ?? model;
-  // When request is "auto", use defaultModel for response display (dashboard) if set; else echo "auto"
+  // When request is "default", use defaultModel for response display (dashboard) if set; else echo "default"
   const displayModel =
-    requested === "auto" && config.defaultModel !== "auto"
+    requested === "default" && config.defaultModel !== "default"
       ? config.defaultModel
       : model;
 
