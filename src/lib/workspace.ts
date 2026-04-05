@@ -12,14 +12,30 @@ export type WorkspaceResult = {
 /**
  * Env overrides for chat-only (isolated) workspace so the agent cannot load
  * rules from ~/.cursor or other user config paths.
+ *
+ * When `authConfigDir` is set (account pool), use it for `CURSOR_CONFIG_DIR` so the
+ * CLI loads credentials from that profile.
+ *
+ * We do **not** override `HOME` / `USERPROFILE` / `XDG_*` in that case: the Cursor CLI
+ * still resolves auth relative to the real user profile for `agent --print` / ask, and
+ * a fake `HOME` makes login fail even when `CURSOR_CONFIG_DIR` points at the pool.
+ * Without a pool, the temp `HOME` keeps rules from the real `~/.cursor` from loading.
  */
-export function getChatOnlyEnvOverrides(workspaceDir: string): Record<string, string> {
-  const cursorDir = path.join(workspaceDir, ".cursor");
+export function getChatOnlyEnvOverrides(
+  workspaceDir: string,
+  authConfigDir?: string,
+): Record<string, string> {
+  const cursorDir = authConfigDir ?? path.join(workspaceDir, ".cursor");
   const overrides: Record<string, string> = {
     CURSOR_CONFIG_DIR: cursorDir,
-    HOME: workspaceDir,
-    USERPROFILE: workspaceDir,
   };
+
+  if (authConfigDir) {
+    return overrides;
+  }
+
+  overrides.HOME = workspaceDir;
+  overrides.USERPROFILE = workspaceDir;
   if (process.platform === "win32") {
     const appDataRoaming = path.join(workspaceDir, "AppData", "Roaming");
     const appDataLocal = path.join(workspaceDir, "AppData", "Local");

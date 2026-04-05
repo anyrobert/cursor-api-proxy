@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveWorkspace } from "./workspace.js";
+import { getChatOnlyEnvOverrides, resolveWorkspace } from "./workspace.js";
 import type { BridgeConfig } from "./config.js";
 
 function baseConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
@@ -34,6 +34,22 @@ function baseConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     ...overrides,
   };
 }
+
+describe("getChatOnlyEnvOverrides", () => {
+  it("uses temp workspace .cursor when no auth pool dir", () => {
+    const tmp = "/tmp/cursor-proxy-abc123";
+    const o = getChatOnlyEnvOverrides(tmp);
+    expect(o.CURSOR_CONFIG_DIR).toBe(`${tmp}/.cursor`);
+  });
+
+  it("uses account pool path for CURSOR_CONFIG_DIR when provided", () => {
+    const tmp = "/tmp/cursor-proxy-abc123";
+    const pool = "/home/u/.cursor-api-proxy/accounts/account-5765";
+    const o = getChatOnlyEnvOverrides(tmp, pool);
+    expect(o.CURSOR_CONFIG_DIR).toBe(pool);
+    expect(o.HOME).toBeUndefined();
+  });
+});
 
 describe("resolveWorkspace", () => {
   it("rejects X-Cursor-Workspace outside configured base", () => {

@@ -50,7 +50,7 @@ export function runAgentSync(
     args = acpModel ? acpArgsWithModel(args, acpModel) : args;
     const acpEnv = { ...config.acpEnv };
     if (config.chatOnlyWorkspace) {
-      Object.assign(acpEnv, getChatOnlyEnvOverrides(workspaceDir));
+      Object.assign(acpEnv, getChatOnlyEnvOverrides(workspaceDir, configDir));
     }
     return runAcpSync(config.acpCommand, args, stdinPrompt, {
       cwd: workspaceDir,
@@ -75,7 +75,7 @@ export function runAgentSync(
     });
   }
   const runEnvOverrides = config.chatOnlyWorkspace
-    ? getChatOnlyEnvOverrides(workspaceDir)
+    ? getChatOnlyEnvOverrides(workspaceDir, configDir)
     : undefined;
   return run(config.agentBin, cmdArgs, {
     cwd: workspaceDir,
@@ -116,7 +116,7 @@ export function runAgentStream(
     args = acpModel ? acpArgsWithModel(args, acpModel) : args;
     const acpEnv = { ...config.acpEnv };
     if (config.chatOnlyWorkspace) {
-      Object.assign(acpEnv, getChatOnlyEnvOverrides(workspaceDir));
+      Object.assign(acpEnv, getChatOnlyEnvOverrides(workspaceDir, configDir));
     }
     return runAcpStream(
       config.acpCommand,
@@ -147,7 +147,7 @@ export function runAgentStream(
     });
   }
   const streamEnvOverrides = config.chatOnlyWorkspace
-    ? getChatOnlyEnvOverrides(workspaceDir)
+    ? getChatOnlyEnvOverrides(workspaceDir, configDir)
     : undefined;
   return runStreaming(config.agentBin, cmdArgs, {
     cwd: workspaceDir,
