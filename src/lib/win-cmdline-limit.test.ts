@@ -43,7 +43,7 @@ describe("fitPromptToWinCmdline", () => {
     "--workspace",
     "/tmp/ws",
     "--model",
-    "auto",
+    "default",
     "--output-format",
     "text",
   ];

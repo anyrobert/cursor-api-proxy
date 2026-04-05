@@ -9,12 +9,12 @@ export function resolveModel(
   lastRequestedModelRef: { current?: string },
   config: BridgeConfig,
 ): string {
-  const isAuto = requested === "auto";
-  const explicitModel = requested && !isAuto ? requested : undefined;
+  const isDefault = requested === "default";
+  const explicitModel = requested && !isDefault ? requested : undefined;
   if (explicitModel) lastRequestedModelRef.current = explicitModel;
 
-  // "auto" is a valid Cursor model identifier — pass it through directly
-  if (isAuto) return "auto";
+  // "default" matches ACP catalog name for session default model — pass through directly
+  if (isDefault) return "default";
 
   return (
     explicitModel ??

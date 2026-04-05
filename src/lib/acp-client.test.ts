@@ -118,12 +118,12 @@ describe("runAcpSync", () => {
     });
   });
 
-  it("skips session/set_config_option when model is auto with no catalog match", async () => {
+  it("skips session/set_config_option when model is default with no catalog match", async () => {
     const result = await runAcpSync(node, [fakeServerPath], "hi", {
       cwd,
       timeoutMs: 5000,
       skipAuthenticate: true,
-      model: "auto",
+      model: "default",
     });
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("Hello from fake ACP");

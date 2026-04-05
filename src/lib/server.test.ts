@@ -53,7 +53,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     acpEnv: {},
     host: "127.0.0.1",
     port: 0, // Let OS assign a free port
-    defaultModel: "auto",
+    defaultModel: "default",
     mode: "ask",
     force: false,
     approveMcps: false,
@@ -135,7 +135,7 @@ describe("startBridgeServer", () => {
     const data = JSON.parse(body);
     expect(data.ok).toBe(true);
     expect(data.version).toBe("1.0.0");
-    expect(data.defaultModel).toBe("auto");
+    expect(data.defaultModel).toBe("default");
   });
 
   it("responds 200 on GET /v1/models", async () => {
@@ -226,7 +226,7 @@ describe("startBridgeServer", () => {
     expect(data.choices[0].message.content).toBe("Hello from agent");
   });
 
-  it("returns display model when request is auto and defaultModel is set", async () => {
+  it("returns display model when request is default and defaultModel is set", async () => {
     servers = startBridgeServer({
       version: "0.1.0",
       config: createTestConfig({ defaultModel: "composer-1.5" }),
@@ -241,7 +241,7 @@ describe("startBridgeServer", () => {
       {
         method: "POST",
         body: JSON.stringify({
-          model: "auto",
+          model: "default",
           messages: [{ role: "user", content: "Hi" }],
         }),
       },
@@ -251,10 +251,10 @@ describe("startBridgeServer", () => {
     expect(data.model).toBe("composer-1.5");
   });
 
-  it("echoes auto when request is auto and defaultModel is unset", async () => {
+  it("echoes default when request is default and defaultModel is unset", async () => {
     servers = startBridgeServer({
       version: "0.1.0",
-      config: createTestConfig({ defaultModel: "auto" }),
+      config: createTestConfig({ defaultModel: "default" }),
     });
     await new Promise<void>((resolve) =>
       servers[0].on("listening", () => resolve()),
@@ -266,14 +266,14 @@ describe("startBridgeServer", () => {
       {
         method: "POST",
         body: JSON.stringify({
-          model: "auto",
+          model: "default",
           messages: [{ role: "user", content: "Hi" }],
         }),
       },
     );
     expect(status).toBe(200);
     const data = JSON.parse(body);
-    expect(data.model).toBe("auto");
+    expect(data.model).toBe("default");
   });
 
   it("should spawn multiple servers when multiPort is true", async () => {

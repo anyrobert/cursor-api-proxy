@@ -13,7 +13,7 @@ describe("loadEnvConfig", () => {
     expect(loaded.agentBin).toBe("agent");
     expect(loaded.host).toBe("127.0.0.1");
     expect(loaded.port).toBe(8765);
-    expect(loaded.defaultModel).toBe("auto");
+    expect(loaded.defaultModel).toBe("default");
     expect(loaded.force).toBe(false);
     expect(loaded.approveMcps).toBe(false);
     expect(loaded.strictModel).toBe(true);

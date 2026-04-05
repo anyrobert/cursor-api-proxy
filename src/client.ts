@@ -374,7 +374,7 @@ export function createCursorProxyClient(options: CursorProxyClientOptions = {}) 
         choices?: Array<{ message?: { content?: string } }>;
         error?: { message?: string };
       }>("/v1/chat/completions", {
-        model: params.model ?? "auto",
+        model: params.model ?? "default",
         messages: params.messages,
         stream: false,
       });

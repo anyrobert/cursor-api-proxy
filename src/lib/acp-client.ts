@@ -437,7 +437,7 @@ export function runAcpSync(
             opts.model,
             sessionResult.models?.availableModels,
           );
-          if (resolvedModelId !== "auto" && resolvedModelId !== "default[]") {
+          if (resolvedModelId !== "default" && resolvedModelId !== "default[]") {
             debugAcp("ACP step: session/set_config_option (model)");
             await sendRequest(
               child.stdin,
@@ -640,7 +640,7 @@ export function runAcpStream(
             opts.model,
             sessionResult.models?.availableModels,
           );
-          if (resolvedModelId !== "auto" && resolvedModelId !== "default[]") {
+          if (resolvedModelId !== "default" && resolvedModelId !== "default[]") {
             debugAcp("ACP step: session/set_config_option (model)");
             await sendRequest(
               child.stdin,

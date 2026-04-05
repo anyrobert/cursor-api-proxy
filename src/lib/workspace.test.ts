@@ -13,7 +13,7 @@ function baseConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     acpEnv: {},
     host: "127.0.0.1",
     port: 8765,
-    defaultModel: "auto",
+    defaultModel: "default",
     mode: "ask",
     force: false,
     approveMcps: false,

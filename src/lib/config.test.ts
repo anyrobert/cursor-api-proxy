@@ -11,7 +11,7 @@ describe("loadBridgeConfig", () => {
     expect(config.host).toBe("127.0.0.1");
     expect(config.port).toBe(8765);
     expect(config.requiredKey).toBeUndefined();
-    expect(config.defaultModel).toBe("auto");
+    expect(config.defaultModel).toBe("default");
     expect(config.force).toBe(false);
     expect(config.approveMcps).toBe(false);
     expect(config.strictModel).toBe(true);
