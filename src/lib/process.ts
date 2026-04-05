@@ -45,6 +45,14 @@ export function killAllChildProcesses(): void {
   activeChildren.clear();
 }
 
+/** Register a child (e.g. ACP) for graceful shutdown; removed on close. */
+export function trackChildProcess(child: ChildProcess): void {
+  activeChildren.add(child);
+  child.once("close", () => {
+    activeChildren.delete(child);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

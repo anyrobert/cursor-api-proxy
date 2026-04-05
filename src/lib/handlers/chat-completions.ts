@@ -95,7 +95,17 @@ export async function handleChatCompletions(
   );
 
   const headerWs = req.headers["x-cursor-workspace"];
-  const { workspaceDir, tempDir } = resolveWorkspace(config, headerWs);
+  let workspaceDir: string;
+  let tempDir: string | undefined;
+  try {
+    const ws = resolveWorkspace(config, headerWs);
+    workspaceDir = ws.workspaceDir;
+    tempDir = ws.tempDir;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Invalid workspace";
+    json(res, 400, { error: { message: msg, code: "invalid_workspace" } });
+    return;
+  }
 
   const fixedArgs = buildAgentFixedArgs(
     config,
@@ -110,7 +120,11 @@ export async function handleChatCompletions(
   });
   if (!fit.ok) {
     json(res, 500, {
-      error: { message: fit.error, code: "windows_cmdline_limit" },
+      error: {
+        message: fit.error,
+        code: "windows_cmdline_limit",
+        type: "api_error",
+      },
     });
     return;
   }
@@ -176,9 +190,11 @@ export async function handleChatCompletions(
             reportRateLimit(configDir, 60000);
           }
 
-          if (code !== 0 && !abortController.signal.aborted) {
+          if (abortController.signal.aborted) {
+            /* client disconnected — do not count as success or failure */
+          } else if (code !== 0) {
             reportRequestError(configDir, latencyMs);
-            logAgentError(
+            const publicMsg = logAgentError(
               config.sessionsLogPath,
               method,
               pathname,
@@ -186,15 +202,19 @@ export async function handleChatCompletions(
               code,
               stderrOut,
             );
+            res.write(
+              `data: ${JSON.stringify({
+                error: { message: publicMsg, code: "cursor_cli_error" },
+              })}\n\n`,
+            );
+            res.write("data: [DONE]\n\n");
+            logAccountStats(config.verbose, getAccountStats());
+            res.end();
+            return;
           } else {
             reportRequestSuccess(configDir, latencyMs);
           }
           logAccountStats(config.verbose, getAccountStats());
-
-          if (code !== 0 && !abortController.signal.aborted) {
-            res.end();
-            return;
-          }
           logTrafficResponse(
             config.verbose,
             model ?? cursorModel,
@@ -225,7 +245,19 @@ export async function handleChatCompletions(
         })
         .catch((err) => {
           reportRequestEnd(configDir);
-          reportRequestError(configDir, Date.now() - streamStart);
+          if (!abortController.signal.aborted) {
+            reportRequestError(configDir, Date.now() - streamStart);
+            res.write(
+              `data: ${JSON.stringify({
+                error: {
+                  message:
+                    "The Cursor agent stream failed. See server logs for details.",
+                  code: "cursor_cli_error",
+                },
+              })}\n\n`,
+            );
+            res.write("data: [DONE]\n\n");
+          }
           console.error(
             `[${new Date().toISOString()}] Agent stream error:`,
             err,
@@ -299,7 +331,9 @@ export async function handleChatCompletions(
           reportRateLimit(configDir, 60000);
         }
 
-        if (code !== 0 && !abortController.signal.aborted) {
+        if (abortController.signal.aborted) {
+          /* client disconnected — do not count as success or failure */
+        } else if (code !== 0) {
           reportRequestError(configDir, latencyMs);
           logAgentError(
             config.sessionsLogPath,
@@ -317,7 +351,9 @@ export async function handleChatCompletions(
       })
       .catch((err) => {
         reportRequestEnd(configDir);
-        reportRequestError(configDir, Date.now() - streamStart);
+        if (!abortController.signal.aborted) {
+          reportRequestError(configDir, Date.now() - streamStart);
+        }
         console.error(
           `[${new Date().toISOString()}] Agent stream error:`,
           err,

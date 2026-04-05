@@ -164,7 +164,17 @@ function updateStateVscdb(
       } catch { /* ignore */ }
     }
 
-    // Build SQL
+    const keyRe = /^[A-Za-z0-9._-]+$/;
+    /** Hex / UUID / telemetry.sqmId brace form only — rejects quotes and SQL metacharacters */
+    const valueRe = /^[A-Fa-f0-9\-{}]+$/i;
+    for (const [k, v] of Object.entries(ids)) {
+      if (!keyRe.test(k) || !valueRe.test(v)) {
+        log("⚠️ ", "state.vscdb: skipping update — unexpected key/value format");
+        return;
+      }
+    }
+
+    // Build SQL (values validated as hex/UUID-shaped only)
     const stmts = Object.entries(ids)
       .map(([k, v]) =>
         `INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('${k}', '${v}');`,

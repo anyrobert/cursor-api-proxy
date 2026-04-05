@@ -13,6 +13,7 @@ rl.on("line", (line) => {
       if (msg.method === "initialize") result = { protocolVersion: 1 };
       else if (msg.method === "authenticate") result = {};
       else if (msg.method === "session/new") result = { sessionId: "sess-1" };
+      else if (msg.method === "session/set_config_option") result = {};
       else if (msg.method === "session/prompt") {
         result = {};
         process.stdout.write(

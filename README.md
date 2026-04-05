@@ -161,6 +161,8 @@ const client = new OpenAI({
 | POST   | `/v1/chat/completions` | Chat completion (OpenAI shape; supports `stream: true`)               |
 | POST   | `/v1/messages`         | Anthropic Messages API (used by Claude Code; supports `stream: true`) |
 
+**Usage / token fields:** Responses may include `usage` with `prompt_tokens`, `completion_tokens`, and `total_tokens`. These are **heuristic estimates** (character count ÷ 4), not Cursor billing meters. Do not use them for invoicing.
+
 ## Environment variables
 
 Environment handling is centralized in one module. Aliases, defaults, path resolution, platform fallbacks, and `--tailscale` host behavior are resolved consistently before the server starts.
@@ -170,7 +172,8 @@ Environment handling is centralized in one module. Aliases, defaults, path resol
 | `CURSOR_BRIDGE_HOST` | `127.0.0.1` | Bind address |
 | `CURSOR_BRIDGE_PORT` | `8765` | Port |
 | `CURSOR_BRIDGE_API_KEY` | — | If set, require `Authorization: Bearer <key>` on requests |
-| `CURSOR_BRIDGE_WORKSPACE` | process cwd | Workspace directory for Cursor CLI |
+| `CURSOR_API_KEY` / `CURSOR_AUTH_TOKEN` | — | Cursor access token passed to spawned CLI/ACP children (automation, headless). Same value can be used for both names. |
+| `CURSOR_BRIDGE_WORKSPACE` | process cwd | Base workspace directory for Cursor CLI. With `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=false`, header `X-Cursor-Workspace` must point to an **existing directory under this path** (after resolving real paths). |
 | `CURSOR_BRIDGE_MODE` | — | Ignored; proxy always runs in **ask** (chat-only) mode so the CLI never creates or edits files. |
 | `CURSOR_BRIDGE_DEFAULT_MODEL` | `auto` | Default model when request omits one |
 | `CURSOR_BRIDGE_STRICT_MODEL` | `true` | Use last requested model when none specified |
@@ -196,6 +199,7 @@ Environment handling is centralized in one module. Aliases, defaults, path resol
 
 Notes:
 
+- The `login` subcommand depends on `chrome-launcher`; its dependency tree may pull typings into production installs. Prefer `npm audit` before release; upstream may move types to `devDependencies` over time.
 - `--tailscale` changes the default host to `0.0.0.0` only when `CURSOR_BRIDGE_HOST` is not already set.
 - ACP `session/request_permission` uses `reject-once` (least-privilege) so the agent cannot grant file/tool access; intentional for chat-only mode.
 - Relative paths such as `CURSOR_BRIDGE_WORKSPACE`, `CURSOR_BRIDGE_SESSIONS_LOG`, `CURSOR_BRIDGE_TLS_CERT`, and `CURSOR_BRIDGE_TLS_KEY` are resolved from the current working directory.
@@ -228,7 +232,9 @@ CLI flags:
 | `--tailscale`  | Bind to `0.0.0.0` for access from tailnet/LAN (unless `CURSOR_BRIDGE_HOST` is already set) |
 | `-h`, `--help` | Show CLI usage                                                                             |
 
-Optional per-request override: send header `X-Cursor-Workspace: <path>` to use a different workspace for that request.
+Optional per-request override: send header `X-Cursor-Workspace: <path>` to use a subdirectory of `CURSOR_BRIDGE_WORKSPACE` for that request (requires `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=false` and an existing path on the proxy host).
+
+**CLI subcommands** (see `cursor-api-proxy --help`): `login <name>`, `accounts` (list), `logout`, `usage`, `reset-hwid` (see `--help` for options). Flags above still apply to the server entrypoint.
 
 ## Multi-Account Setup
 
@@ -236,7 +242,7 @@ You can use multiple Cursor accounts to distribute load and avoid hitting usage 
 
 ### 1. Adding Accounts (Easy Method)
 
-You can add new accounts using the CLI `login` command. This will launch the Cursor CLI login process in an isolated profile directory (`~/.cursor-api-proxy/accounts/`).
+You can add new accounts using the CLI `login` command. This will launch the Cursor CLI login process in an isolated profile directory: `~/.cursor-api-proxy/accounts/` on macOS/Linux, or `%USERPROFILE%\.cursor-api-proxy\accounts\` on Windows.
 
 ```bash
 npx cursor-api-proxy login account1
@@ -251,7 +257,7 @@ npx cursor-api-proxy login account2
 npx cursor-api-proxy login account3
 ```
 
-**Auto-Discovery:** When you start the proxy server normally (`npx cursor-api-proxy`), it will automatically find all accounts in your `~/.cursor-api-proxy/accounts/` directory and include them in the rotation pool!
+**Auto-Discovery:** When you start the proxy server normally (`npx cursor-api-proxy`), it will automatically find all accounts under that `accounts` directory and include them in the rotation pool.
 
 ### 2. Manual Config Directories
 

@@ -62,6 +62,25 @@ export function resolveWorkspace(
     typeof workspaceHeader === "string" && workspaceHeader.trim()
       ? workspaceHeader.trim()
       : null;
-  const workspaceDir = headerWs ?? config.workspace;
-  return { workspaceDir };
+  const base = path.resolve(config.workspace);
+  if (!headerWs) {
+    return { workspaceDir: base };
+  }
+
+  const candidate = path.resolve(headerWs);
+  if (!fs.existsSync(candidate) || !fs.statSync(candidate).isDirectory()) {
+    throw new Error(
+      "X-Cursor-Workspace must be an existing directory on the proxy host",
+    );
+  }
+
+  const realBase = fs.existsSync(base) ? fs.realpathSync(base) : base;
+  const realRequested = fs.realpathSync(candidate);
+  const rel = path.relative(realBase, realRequested);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(
+      "X-Cursor-Workspace must resolve to a directory under the configured workspace base",
+    );
+  }
+  return { workspaceDir: realRequested };
 }

@@ -4,7 +4,7 @@ import { runAcpStream, runAcpSync } from "./acp-client.js";
 import type { BridgeConfig } from "./config.js";
 import { run, runStreaming } from "./process.js";
 import { getChatOnlyEnvOverrides } from "./workspace.js";
-import { readKeychainToken, writeCachedToken } from "../cli/usage.js";
+import { readKeychainToken, writeCachedToken } from "./token-cache.js";
 
 function cacheTokenForAccount(configDir?: string): void {
   if (!configDir) return;
@@ -61,6 +61,7 @@ export function runAgentSync(
       spawnOptions: config.acpSpawnOptions,
       skipAuthenticate: config.acpSkipAuthenticate,
       rawDebug: config.acpRawDebug,
+      signal,
     }).then((out) => {
       cacheTokenForAccount(configDir);
       if (tempDir) {
@@ -130,6 +131,7 @@ export function runAgentStream(
         spawnOptions: config.acpSpawnOptions,
         skipAuthenticate: config.acpSkipAuthenticate,
         rawDebug: config.acpRawDebug,
+        signal,
       },
       onLine,
     ).then((result) => {

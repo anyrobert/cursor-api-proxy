@@ -118,7 +118,19 @@ export async function handleAnthropicMessages(
   );
 
   const headerWs = req.headers["x-cursor-workspace"];
-  const { workspaceDir, tempDir } = resolveWorkspace(config, headerWs);
+  let workspaceDir: string;
+  let tempDir: string | undefined;
+  try {
+    const ws = resolveWorkspace(config, headerWs);
+    workspaceDir = ws.workspaceDir;
+    tempDir = ws.tempDir;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Invalid workspace";
+    json(res, 400, {
+      error: { type: "invalid_request_error", message: msg },
+    });
+    return;
+  }
 
   const fixedArgs = buildAgentFixedArgs(
     config,
@@ -133,7 +145,11 @@ export async function handleAnthropicMessages(
   });
   if (!fit.ok) {
     json(res, 500, {
-      error: { type: "api_error", message: fit.error },
+      error: {
+        type: "api_error",
+        message: fit.error,
+        code: "windows_cmdline_limit",
+      },
     });
     return;
   }
@@ -185,6 +201,91 @@ export async function handleAnthropicMessages(
     const abortController = new AbortController();
     req.once("close", () => abortController.abort());
 
+    if (config.useAcp && typeof promptForAgent === "string") {
+      let accumulated = "";
+      runAgentStream(
+        config,
+        workspaceDir,
+        cmdArgs,
+        (chunk) => {
+          accumulated += chunk;
+          writeEvent({
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: chunk },
+          });
+        },
+        tempDir,
+        promptForAgent,
+        configDir,
+        abortController.signal,
+      )
+        .then(({ code, stderr: stderrOut }) => {
+          const latencyMs = Date.now() - streamStart;
+          reportRequestEnd(configDir);
+
+          if (stderrOut && isRateLimited(stderrOut)) {
+            reportRateLimit(configDir, 60000);
+          }
+
+          if (!abortController.signal.aborted) {
+            if (code !== 0) {
+              reportRequestError(configDir, latencyMs);
+              const publicMsg = logAgentError(
+                config.sessionsLogPath,
+                method,
+                pathname,
+                remoteAddress,
+                code,
+                stderrOut,
+              );
+              writeEvent({
+                type: "error",
+                error: { type: "api_error", message: publicMsg },
+              });
+            } else {
+              reportRequestSuccess(configDir, latencyMs);
+              logTrafficResponse(
+                config.verbose,
+                model ?? cursorModel,
+                accumulated,
+                true,
+              );
+              writeEvent({ type: "content_block_stop", index: 0 });
+              writeEvent({
+                type: "message_delta",
+                delta: { stop_reason: "end_turn", stop_sequence: null },
+                usage: { output_tokens: 0 },
+              });
+              writeEvent({ type: "message_stop" });
+            }
+          }
+          logAccountStats(config.verbose, getAccountStats());
+          res.end();
+        })
+        .catch((err) => {
+          reportRequestEnd(configDir);
+          if (!abortController.signal.aborted) {
+            reportRequestError(configDir, Date.now() - streamStart);
+          }
+          console.error(
+            `[${new Date().toISOString()}] Agent stream error:`,
+            err,
+          );
+          if (!abortController.signal.aborted) {
+            writeEvent({
+              type: "error",
+              error: {
+                type: "api_error",
+                message: "The Cursor agent stream failed. See server logs for details.",
+              },
+            });
+          }
+          res.end();
+        });
+      return;
+    }
+
     let accumulated = "";
     const parseLine = createStreamParser(
       (text) => {
@@ -230,7 +331,9 @@ export async function handleAnthropicMessages(
           reportRateLimit(configDir, 60000);
         }
 
-        if (code !== 0 && !abortController.signal.aborted) {
+        if (abortController.signal.aborted) {
+          /* client disconnected — do not count as success or failure */
+        } else if (code !== 0) {
           reportRequestError(configDir, latencyMs);
           logAgentError(
             config.sessionsLogPath,
@@ -248,7 +351,9 @@ export async function handleAnthropicMessages(
       })
       .catch((err) => {
         reportRequestEnd(configDir);
-        reportRequestError(configDir, Date.now() - streamStart);
+        if (!abortController.signal.aborted) {
+          reportRequestError(configDir, Date.now() - streamStart);
+        }
         console.error(
           `[${new Date().toISOString()}] Agent stream error:`,
           err,
@@ -294,7 +399,7 @@ export async function handleAnthropicMessages(
       out.stderr,
     );
     json(res, 500, {
-      error: { type: "api_error", message: errMsg },
+      error: { type: "api_error", message: errMsg, code: "cursor_cli_error" },
     });
     return;
   }
@@ -303,6 +408,8 @@ export async function handleAnthropicMessages(
   const content = out.stdout.trim();
   logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
   logAccountStats(config.verbose, getAccountStats());
+  const inTok = Math.max(1, Math.round(prompt.length / 4));
+  const outTok = Math.max(1, Math.round(content.length / 4));
   json(
     res,
     200,
@@ -313,7 +420,10 @@ export async function handleAnthropicMessages(
       content: [{ type: "text", text: content }],
       model: displayModel ?? cursorModel,
       stop_reason: "end_turn",
-      usage: { input_tokens: 0, output_tokens: 0 },
+      usage: {
+        input_tokens: inTok,
+        output_tokens: outTok,
+      },
     },
     truncatedHeaders,
   );

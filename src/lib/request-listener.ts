@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
 
@@ -43,8 +44,13 @@ export function createRequestListener(opts: BridgeServerOptions) {
 
     try {
       if (config.requiredKey) {
-        const token = extractBearerToken(req);
-        if (token !== config.requiredKey) {
+        const token = extractBearerToken(req) ?? "";
+        const expected = config.requiredKey;
+        const a = Buffer.from(token, "utf8");
+        const b = Buffer.from(expected, "utf8");
+        const match =
+          a.length === b.length && crypto.timingSafeEqual(a, b);
+        if (!match) {
           json(res, 401, {
             error: { message: "Invalid API key", code: "unauthorized" },
           });

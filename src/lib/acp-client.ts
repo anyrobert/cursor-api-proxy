@@ -8,6 +8,8 @@ import * as readline from "node:readline";
 import { spawn } from "node:child_process";
 import { debuglog } from "node:util";
 
+import { trackChildProcess } from "./process.js";
+
 const debugAcp = debuglog("cursor-api-proxy:acp");
 
 export type AcpRunOptions = {
@@ -24,6 +26,8 @@ export type AcpRunOptions = {
   skipAuthenticate?: boolean;
   /** When true, log every raw JSON-RPC line from ACP stdout (very verbose). */
   rawDebug?: boolean;
+  /** When aborted, the ACP child is killed (same as CLI path). */
+  signal?: AbortSignal;
 };
 
 export type AcpSyncResult = {
@@ -38,6 +42,147 @@ export type AcpStreamResult = {
 };
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+
+/** Avoid passing the entire parent environment into ACP children (may contain unrelated secrets). */
+function buildAcpSpawnEnv(
+  extra?: Record<string, string | undefined>,
+): NodeJS.ProcessEnv {
+  const inheritKeys = [
+    "PATH",
+    "PATHEXT",
+    "SystemRoot",
+    "WINDIR",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "USERNAME",
+    "HOME",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMDATA",
+    "PUBLIC",
+    "NODE_OPTIONS",
+  ];
+  const out: NodeJS.ProcessEnv = {};
+  for (const k of inheritKeys) {
+    const v = process.env[k];
+    if (v !== undefined) out[k] = v;
+  }
+  if (extra) {
+    for (const [k, v] of Object.entries(extra)) {
+      if (v !== undefined) out[k] = v;
+    }
+  }
+  return out;
+}
+
+type AcpParsedMsg = {
+  id?: number;
+  method?: string;
+  params?: { update?: { sessionUpdate?: string; content?: { text?: string } } };
+  result?: unknown;
+  error?: { message?: string };
+};
+
+/**
+ * Handle ACP server→client notifications (session/update chunks, permissions, cursor/*).
+ * Returns true if the message was consumed as a notification.
+ */
+function handleAcpNotification(
+  msg: AcpParsedMsg,
+  opts: {
+    rawDebug?: boolean;
+    stdin: NodeJS.WritableStream | null | undefined;
+    onAgentTextChunk?: (text: string) => void;
+  },
+): boolean {
+  if (msg.method === "session/update") {
+    const update = (msg.params?.update ?? msg.params) as {
+      sessionUpdate?: string;
+      content?: { text?: string } | Array<{ content?: { text?: string }; text?: string }>;
+    } | undefined;
+    const content = update?.content;
+    const text =
+      typeof content === "object" && content !== null && !Array.isArray(content) && typeof (content as { text?: string }).text === "string"
+        ? (content as { text: string }).text
+        : Array.isArray(content)
+          ? content
+              .map((c: { content?: { text?: string }; text?: string }) =>
+                typeof c?.content?.text === "string"
+                  ? c.content.text
+                  : typeof c?.text === "string"
+                    ? c.text
+                    : "",
+              )
+              .join("")
+          : "";
+    const sessionUpdate = update?.sessionUpdate;
+    if (
+      (sessionUpdate === "agent_message_chunk" || sessionUpdate === "agent_thought_chunk") &&
+      text
+    ) {
+      opts.onAgentTextChunk?.(text);
+    } else if (
+      sessionUpdate &&
+      sessionUpdate !== "agent_thought_chunk" &&
+      sessionUpdate !== "available_commands_update" &&
+      sessionUpdate !== "tool_call" &&
+      sessionUpdate !== "tool_call_update"
+    ) {
+      debugAcp(
+        "session/update (unhandled): %s",
+        JSON.stringify({
+          sessionUpdate,
+          hasContent: !!content,
+          contentKeys: content && typeof content === "object" && !Array.isArray(content) ? Object.keys(content) : [],
+        }),
+      );
+    }
+    return true;
+  }
+
+  if (msg.method === "session/request_permission") {
+    if (msg.id != null && opts.stdin) {
+      respond(opts.stdin, msg.id, {
+        outcome: { outcome: "selected", optionId: "reject-once" },
+      });
+    }
+    return true;
+  }
+
+  if (msg.id != null && msg.method && opts.stdin) {
+    const method = String(msg.method);
+    if (method.startsWith("cursor/")) {
+      const params = msg.params as Record<string, unknown> | undefined;
+      if (method === "cursor/ask_question" && params?.options && Array.isArray(params.options)) {
+        const options = params.options as Array<{ id?: string; label?: string }>;
+        const first = options[0];
+        console.warn(
+          "[cursor-api-proxy:acp] cursor/ask_question auto-selecting first option: id=%s (total=%d)",
+          first?.id ?? "(none)",
+          options.length,
+        );
+        respond(opts.stdin, msg.id, { selectedId: first?.id ?? "" });
+      } else if (method === "cursor/create_plan") {
+        respond(opts.stdin, msg.id, { approved: true });
+      } else {
+        console.warn(
+          "[cursor-api-proxy:acp] auto-responding to unknown %s with empty result",
+          method,
+        );
+        respond(opts.stdin, msg.id, {});
+      }
+      return true;
+    }
+  }
+
+  return false;
+}
 
 function sendRequest(
   stdin: NodeJS.WritableStream,
@@ -98,18 +243,33 @@ export function runAcpSync(
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: opts.cwd,
-      env: { ...process.env, ...opts.env },
+      env: buildAcpSpawnEnv(opts.env),
       stdio: ["pipe", "pipe", "pipe"],
       windowsVerbatimArguments: opts.spawnOptions?.windowsVerbatimArguments,
     });
+
+    trackChildProcess(child);
 
     let stderr = "";
     let accumulated = "";
     let resolved = false;
 
+    const onAbort = () => {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        /* ignore */
+      }
+    };
+    if (opts.signal) {
+      if (opts.signal.aborted) onAbort();
+      else opts.signal.addEventListener("abort", onAbort, { once: true });
+    }
+
     const finish = (code: number) => {
       if (resolved) return;
       resolved = true;
+      opts.signal?.removeEventListener("abort", onAbort);
       const exitErr = new Error(`ACP child exited with code ${code}`);
       for (const [id, waiter] of Array.from(pending.entries())) {
         pending.delete(id);
@@ -151,13 +311,7 @@ export function runAcpSync(
         if (opts.rawDebug) {
           debugAcp("ACP raw: %s", line);
         }
-        const msg = JSON.parse(line) as {
-          id?: number;
-          method?: string;
-          params?: { update?: { sessionUpdate?: string; content?: { text?: string } } };
-          result?: unknown;
-          error?: { message?: string };
-        };
+        const msg = JSON.parse(line) as AcpParsedMsg;
 
         if (msg.id != null && (msg.result !== undefined || msg.error !== undefined)) {
           const waiter = pending.get(msg.id);
@@ -172,80 +326,13 @@ export function runAcpSync(
           return;
         }
 
-        if (msg.method === "session/update") {
-          const update = (msg.params?.update ?? msg.params) as {
-            sessionUpdate?: string;
-            content?: { text?: string } | Array<{ content?: { text?: string }; text?: string }>;
-          } | undefined;
-          const content = update?.content;
-          const text =
-            typeof content === "object" && content !== null && !Array.isArray(content) && typeof (content as { text?: string }).text === "string"
-              ? (content as { text: string }).text
-              : Array.isArray(content)
-                ? content
-                    .map((c: { content?: { text?: string }; text?: string }) =>
-                      typeof c?.content?.text === "string"
-                        ? c.content.text
-                        : typeof c?.text === "string"
-                          ? c.text
-                          : "",
-                    )
-                    .join("")
-                : "";
-          const sessionUpdate = update?.sessionUpdate;
-          if (
-            (sessionUpdate === "agent_message_chunk" || sessionUpdate === "agent_thought_chunk") &&
-            text
-          ) {
+        handleAcpNotification(msg, {
+          rawDebug: opts.rawDebug,
+          stdin: child.stdin,
+          onAgentTextChunk: (text) => {
             accumulated += text;
-          } else if (
-            sessionUpdate &&
-            sessionUpdate !== "agent_thought_chunk" &&
-            sessionUpdate !== "available_commands_update" &&
-            sessionUpdate !== "tool_call" &&
-            sessionUpdate !== "tool_call_update"
-          ) {
-            debugAcp(
-              "session/update (unhandled): %s",
-              JSON.stringify({
-                sessionUpdate,
-                hasContent: !!content,
-                contentKeys: content && typeof content === "object" && !Array.isArray(content) ? Object.keys(content) : [],
-              }),
-            );
-          }
-          return;
-        }
-
-        if (msg.method === "session/request_permission") {
-          if (msg.id != null && child.stdin) {
-            respond(child.stdin, msg.id, {
-              outcome: { outcome: "selected", optionId: "reject-once" },
-            });
-          }
-          return;
-        }
-
-        if (msg.id != null && msg.method && child.stdin) {
-          const method = String(msg.method);
-          if (method.startsWith("cursor/")) {
-            const params = msg.params as Record<string, unknown> | undefined;
-            if (method === "cursor/ask_question" && params?.options && Array.isArray(params.options)) {
-              const options = params.options as Array<{ id?: string; label?: string }>;
-              const first = options[0];
-              console.warn(
-                "[cursor-api-proxy:acp] cursor/ask_question auto-selecting first option: id=%s (total=%d)",
-                first?.id ?? "(none)",
-                options.length,
-              );
-              respond(child.stdin, msg.id, { selectedId: first?.id ?? "" });
-            } else if (method === "cursor/create_plan") {
-              respond(child.stdin, msg.id, { approved: true });
-            } else {
-              respond(child.stdin, msg.id, {});
-            }
-          }
-        }
+          },
+        });
       } catch {
         /* ignore parse errors */
       }
@@ -253,6 +340,7 @@ export function runAcpSync(
 
     child.on("error", (err) => {
       if (timeout) clearTimeout(timeout);
+      opts.signal?.removeEventListener("abort", onAbort);
       if (!resolved) {
         resolved = true;
         reject(err);
@@ -302,6 +390,18 @@ export function runAcpSync(
         if (!sessionId) {
           finish(1);
           return;
+        }
+
+        if (opts.model) {
+          debugAcp("ACP step: session/set_config_option (model)");
+          await sendRequest(
+            child.stdin,
+            nextId,
+            "session/set_config_option",
+            { sessionId, option: "model", value: opts.model },
+            pending,
+            requestTimeoutMs,
+          );
         }
 
         debugAcp("ACP step: session/prompt");
@@ -341,17 +441,32 @@ export function runAcpStream(
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: opts.cwd,
-      env: { ...process.env, ...opts.env },
+      env: buildAcpSpawnEnv(opts.env),
       stdio: ["pipe", "pipe", "pipe"],
       windowsVerbatimArguments: opts.spawnOptions?.windowsVerbatimArguments,
     });
 
+    trackChildProcess(child);
+
     let stderr = "";
     let resolved = false;
+
+    const onAbort = () => {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        /* ignore */
+      }
+    };
+    if (opts.signal) {
+      if (opts.signal.aborted) onAbort();
+      else opts.signal.addEventListener("abort", onAbort, { once: true });
+    }
 
     const finish = (code: number) => {
       if (resolved) return;
       resolved = true;
+      opts.signal?.removeEventListener("abort", onAbort);
       const exitErr = new Error(`ACP child exited with code ${code}`);
       for (const [id, waiter] of Array.from(pending.entries())) {
         pending.delete(id);
@@ -387,13 +502,7 @@ export function runAcpStream(
         if (opts.rawDebug) {
           debugAcp("ACP raw: %s", line);
         }
-        const msg = JSON.parse(line) as {
-          id?: number;
-          method?: string;
-          params?: { update?: { sessionUpdate?: string; content?: { text?: string } } };
-          result?: unknown;
-          error?: { message?: string };
-        };
+        const msg = JSON.parse(line) as AcpParsedMsg;
 
         if (msg.id != null && (msg.result !== undefined || msg.error !== undefined)) {
           const waiter = pending.get(msg.id);
@@ -408,59 +517,11 @@ export function runAcpStream(
           return;
         }
 
-        if (msg.method === "session/update") {
-          const update = (msg.params?.update ?? msg.params) as {
-            sessionUpdate?: string;
-            content?: { text?: string } | Array<{ content?: { text?: string }; text?: string }>;
-          } | undefined;
-          const content = update?.content;
-          const text =
-            typeof content === "object" && content !== null && !Array.isArray(content) && typeof (content as { text?: string }).text === "string"
-              ? (content as { text: string }).text
-              : Array.isArray(content)
-                ? content
-                    .map((c: { content?: { text?: string }; text?: string }) =>
-                      typeof c?.content?.text === "string"
-                        ? c.content.text
-                        : typeof c?.text === "string"
-                          ? c.text
-                          : "",
-                    )
-                    .join("")
-                : "";
-          const sessionUpdate = update?.sessionUpdate;
-          if (
-            (sessionUpdate === "agent_message_chunk" || sessionUpdate === "agent_thought_chunk") &&
-            text
-          ) {
-            onChunk(text);
-          } else if (
-            sessionUpdate &&
-            sessionUpdate !== "agent_thought_chunk" &&
-            sessionUpdate !== "available_commands_update" &&
-            sessionUpdate !== "tool_call" &&
-            sessionUpdate !== "tool_call_update"
-          ) {
-            debugAcp(
-              "session/update (unhandled): %s",
-              JSON.stringify({
-                sessionUpdate,
-                hasContent: !!content,
-                contentKeys: content && typeof content === "object" && !Array.isArray(content) ? Object.keys(content) : [],
-              }),
-            );
-          }
-          return;
-        }
-
-        if (msg.method === "session/request_permission") {
-          if (msg.id != null && child.stdin) {
-            respond(child.stdin, msg.id, {
-              outcome: { outcome: "selected", optionId: "reject-once" },
-            });
-          }
-          return;
-        }
+        handleAcpNotification(msg, {
+          rawDebug: opts.rawDebug,
+          stdin: child.stdin,
+          onAgentTextChunk: onChunk,
+        });
       } catch {
         /* ignore */
       }
@@ -468,6 +529,7 @@ export function runAcpStream(
 
     child.on("error", (err) => {
       if (timeout) clearTimeout(timeout);
+      opts.signal?.removeEventListener("abort", onAbort);
       if (!resolved) {
         resolved = true;
         reject(err);
@@ -517,6 +579,18 @@ export function runAcpStream(
         if (!sessionId) {
           finish(1);
           return;
+        }
+
+        if (opts.model) {
+          debugAcp("ACP step: session/set_config_option (model)");
+          await sendRequest(
+            child.stdin,
+            nextId,
+            "session/set_config_option",
+            { sessionId, option: "model", value: opts.model },
+            pending,
+            requestTimeoutMs,
+          );
         }
 
         debugAcp("ACP step: session/prompt");
