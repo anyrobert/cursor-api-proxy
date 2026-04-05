@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm pack:*)",
+      "Bash(npm install:*)",
+      "Bash(cursor-api-proxy:*)",
+      "Bash(node:*)",
+      "Bash(npm:*)"
+    ]
+  }
+}

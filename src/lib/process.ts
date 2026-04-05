@@ -13,6 +13,10 @@ export type RunOptions = {
   timeoutMs?: number;
   /** Enable Cursor Max Mode (preflight writes maxMode to cli-config.json). */
   maxMode?: boolean;
+  /** When set, pass this string to the child process stdin and close it (avoids long prompt in argv on Windows). */
+  stdinContent?: string;
+  /** Env overrides for the child (e.g. HOME, CURSOR_CONFIG_DIR to isolate from global rules). */
+  envOverrides?: Record<string, string>;
   /** Custom config dir for round-robin account rotation */
   configDir?: string;
   /** Abort signal — when aborted, the child process is killed immediately */
@@ -41,6 +45,14 @@ export function killAllChildProcesses(): void {
   activeChildren.clear();
 }
 
+/** Register a child (e.g. ACP) for graceful shutdown; removed on close. */
+export function trackChildProcess(child: ChildProcess): void {
+  activeChildren.add(child);
+  child.once("close", () => {
+    activeChildren.delete(child);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -48,7 +60,13 @@ export function killAllChildProcesses(): void {
 function spawnChild(
   cmd: string,
   args: string[],
-  opts?: { cwd?: string; maxMode?: boolean; configDir?: string },
+  opts?: {
+    cwd?: string;
+    maxMode?: boolean;
+    stdinContent?: string;
+    envOverrides?: Record<string, string>;
+    configDir?: string;
+  },
 ) {
   const resolved = resolveAgentCommand(cmd, args);
 
@@ -62,13 +80,24 @@ function spawnChild(
   } else if (resolved.configDir && !env.CURSOR_CONFIG_DIR) {
     env.CURSOR_CONFIG_DIR = resolved.configDir;
   }
+  if (opts?.envOverrides) {
+    Object.assign(env, opts.envOverrides);
+  }
 
-  return spawn(resolved.command, resolved.args, {
+  const useStdin = typeof opts?.stdinContent === "string";
+  const child = spawn(resolved.command, resolved.args, {
     cwd: opts?.cwd,
     env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: useStdin ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: resolved.windowsVerbatimArguments,
   });
+
+  if (useStdin && opts!.stdinContent !== undefined && child.stdin) {
+    child.stdin.write(opts.stdinContent, "utf8");
+    child.stdin.end();
+  }
+
+  return child;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +113,8 @@ export function runStreaming(
     const child = spawnChild(cmd, args, {
       cwd: opts.cwd,
       maxMode: opts.maxMode,
+      stdinContent: opts.stdinContent,
+      envOverrides: opts.envOverrides,
       configDir: opts.configDir,
     });
 
@@ -157,6 +188,8 @@ export function run(
     const child = spawnChild(cmd, args, {
       cwd: opts.cwd,
       maxMode: opts.maxMode,
+      stdinContent: opts.stdinContent,
+      envOverrides: opts.envOverrides,
       configDir: opts.configDir,
     });
 

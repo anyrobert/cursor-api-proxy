@@ -197,5 +197,5 @@ export function logAgentError(
   } catch {
     /* ignore */
   }
-  return errMsg;
+  return `The Cursor agent process exited with code ${exitCode}. See server logs for details.`;
 }

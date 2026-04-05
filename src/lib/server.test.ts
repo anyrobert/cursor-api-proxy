@@ -12,6 +12,7 @@ vi.mock("./cursor-cli.js", () => ({
 }));
 
 vi.mock("./process.js", () => ({
+  killAllChildProcesses: vi.fn(),
   run: vi.fn().mockResolvedValue({
     code: 0,
     stdout: "Hello from agent",
@@ -47,6 +48,9 @@ const tmpLogPath = "/tmp/cursor-proxy-test-sessions.log";
 function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
   return {
     agentBin: "agent",
+    acpCommand: "agent",
+    acpArgs: ["acp"],
+    acpEnv: {},
     host: "127.0.0.1",
     port: 0, // Let OS assign a free port
     defaultModel: "auto",
@@ -60,6 +64,10 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     chatOnlyWorkspace: true,
     verbose: false,
     maxMode: false,
+    promptViaStdin: false,
+    useAcp: false,
+    acpSkipAuthenticate: false,
+    acpRawDebug: false,
     configDirs: overrides.configDirs ?? [],
     multiPort: overrides.multiPort ?? false,
     winCmdlineMax: 30_000,
@@ -218,26 +226,74 @@ describe("startBridgeServer", () => {
     expect(data.choices[0].message.content).toBe("Hello from agent");
   });
 
+  it("returns display model when request is auto and defaultModel is set", async () => {
+    servers = startBridgeServer({
+      version: "0.1.0",
+      config: createTestConfig({ defaultModel: "composer-1.5" }),
+    });
+    await new Promise<void>((resolve) =>
+      servers[0].on("listening", () => resolve()),
+    );
+
+    const { status, body } = await fetchServer(
+      servers[0],
+      "/v1/chat/completions",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          model: "auto",
+          messages: [{ role: "user", content: "Hi" }],
+        }),
+      },
+    );
+    expect(status).toBe(200);
+    const data = JSON.parse(body);
+    expect(data.model).toBe("composer-1.5");
+  });
+
+  it("echoes auto when request is auto and defaultModel is unset", async () => {
+    servers = startBridgeServer({
+      version: "0.1.0",
+      config: createTestConfig({ defaultModel: "auto" }),
+    });
+    await new Promise<void>((resolve) =>
+      servers[0].on("listening", () => resolve()),
+    );
+
+    const { status, body } = await fetchServer(
+      servers[0],
+      "/v1/chat/completions",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          model: "auto",
+          messages: [{ role: "user", content: "Hi" }],
+        }),
+      },
+    );
+    expect(status).toBe(200);
+    const data = JSON.parse(body);
+    expect(data.model).toBe("auto");
+  });
+
   it("should spawn multiple servers when multiPort is true", async () => {
     servers = startBridgeServer({
       version: "1.0.0",
       config: createTestConfig({
         configDirs: ["/dir1", "/dir2"],
         multiPort: true,
-        port: 10000, // Use a safe high port instead of 0
+        port: 10000,
       }),
     });
 
     expect(servers.length).toBe(2);
 
-    // Wait for both to be listening
     await Promise.all(
       servers.map(
         (s) => new Promise<void>((resolve) => s.on("listening", resolve)),
       ),
     );
 
-    // Check that both servers respond
     const res1 = await fetchServer(servers[0], "/health");
     const res2 = await fetchServer(servers[1], "/health");
 

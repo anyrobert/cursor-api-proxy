@@ -166,6 +166,20 @@ describe("AccountPool edge cases", () => {
     expect(new AccountPool(["/x"]).getConfigDirsCount()).toBe(1);
     expect(new AccountPool(["/x", "/y", "/z"]).getConfigDirsCount()).toBe(3);
   });
+
+  it("getStats reflects success, error, and latency totals", () => {
+    const pool = new AccountPool(["/dir1"]);
+    pool.reportRequestStart("/dir1");
+    pool.reportRequestSuccess("/dir1", 100);
+    pool.reportRequestEnd("/dir1");
+    pool.reportRequestStart("/dir1");
+    pool.reportRequestError("/dir1", 50);
+    pool.reportRequestEnd("/dir1");
+    const stats = pool.getStats();
+    expect(stats[0].totalSuccess).toBe(1);
+    expect(stats[0].totalErrors).toBe(1);
+    expect(stats[0].totalLatencyMs).toBe(150);
+  });
 });
 
 describe("Global account pool functions", () => {

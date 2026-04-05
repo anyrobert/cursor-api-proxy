@@ -18,10 +18,13 @@ describe("loadEnvConfig", () => {
     expect(loaded.approveMcps).toBe(false);
     expect(loaded.strictModel).toBe(true);
     expect(loaded.workspace).toBe("/workspace");
-    expect(loaded.sessionsLogPath).toBe("/workspace/sessions.log");
+    expect(loaded.sessionsLogPath).toBe(path.join("/workspace", "sessions.log"));
     expect(loaded.chatOnlyWorkspace).toBe(true);
     expect(loaded.verbose).toBe(false);
     expect(loaded.commandShell).toBe("cmd.exe");
+    expect(loaded.maxMode).toBe(false);
+    expect(loaded.promptViaStdin).toBe(false);
+    expect(loaded.useAcp).toBe(false);
   });
 
   it("applies env aliases with expected precedence", () => {
@@ -74,10 +77,16 @@ describe("loadEnvConfig", () => {
       cwd: "/tmp/project",
     });
 
-    expect(loaded.workspace).toBe("/tmp/project/repo");
-    expect(loaded.sessionsLogPath).toBe("/tmp/project/logs/sessions.log");
-    expect(loaded.tlsCertPath).toBe("/tmp/project/certs/dev.crt");
-    expect(loaded.tlsKeyPath).toBe("/tmp/project/certs/dev.key");
+    expect(loaded.workspace).toBe(path.resolve("/tmp/project", "./repo"));
+    expect(loaded.sessionsLogPath).toBe(
+      path.resolve("/tmp/project", "./logs/sessions.log"),
+    );
+    expect(loaded.tlsCertPath).toBe(
+      path.resolve("/tmp/project", "./certs/dev.crt"),
+    );
+    expect(loaded.tlsKeyPath).toBe(
+      path.resolve("/tmp/project", "./certs/dev.key"),
+    );
   });
 
   it("uses HOME before USERPROFILE for default sessions log path", () => {
@@ -123,7 +132,11 @@ describe("loadEnvConfig", () => {
       env: { CURSOR_CONFIG_DIRS: "/acc/a,/acc/b,/acc/c" },
       cwd: "/workspace",
     });
-    expect(loaded.configDirs).toEqual(["/acc/a", "/acc/b", "/acc/c"]);
+    expect(loaded.configDirs).toEqual([
+      path.resolve("/workspace", "/acc/a"),
+      path.resolve("/workspace", "/acc/b"),
+      path.resolve("/workspace", "/acc/c"),
+    ]);
   });
 
   it("CURSOR_ACCOUNT_DIRS is an alias for CURSOR_CONFIG_DIRS", () => {
@@ -131,7 +144,10 @@ describe("loadEnvConfig", () => {
       env: { CURSOR_ACCOUNT_DIRS: "/acc/x,/acc/y" },
       cwd: "/workspace",
     });
-    expect(loaded.configDirs).toEqual(["/acc/x", "/acc/y"]);
+    expect(loaded.configDirs).toEqual([
+      path.resolve("/workspace", "/acc/x"),
+      path.resolve("/workspace", "/acc/y"),
+    ]);
   });
 
   it("CURSOR_CONFIG_DIRS takes precedence over CURSOR_ACCOUNT_DIRS", () => {
@@ -142,7 +158,9 @@ describe("loadEnvConfig", () => {
       },
       cwd: "/workspace",
     });
-    expect(loaded.configDirs).toEqual(["/primary/a"]);
+    expect(loaded.configDirs).toEqual([
+      path.resolve("/workspace", "/primary/a"),
+    ]);
   });
 
   it("trims whitespace from each dir in CURSOR_CONFIG_DIRS", () => {
@@ -150,7 +168,10 @@ describe("loadEnvConfig", () => {
       env: { CURSOR_CONFIG_DIRS: " /acc/a , /acc/b " },
       cwd: "/workspace",
     });
-    expect(loaded.configDirs).toEqual(["/acc/a", "/acc/b"]);
+    expect(loaded.configDirs).toEqual([
+      path.resolve("/workspace", "/acc/a"),
+      path.resolve("/workspace", "/acc/b"),
+    ]);
   });
 
   it("resolves relative dirs in CURSOR_CONFIG_DIRS against cwd", () => {
@@ -159,8 +180,8 @@ describe("loadEnvConfig", () => {
       cwd: "/workspace",
     });
     expect(loaded.configDirs).toEqual([
-      "/workspace/accounts/a",
-      "/workspace/accounts/b",
+      path.resolve("/workspace", "./accounts/a"),
+      path.resolve("/workspace", "./accounts/b"),
     ]);
   });
 
@@ -226,6 +247,16 @@ describe("loadEnvConfig", () => {
       loadEnvConfig({ env: { CURSOR_BRIDGE_WIN_CMDLINE_MAX: "100" } })
         .winCmdlineMax,
     ).toBe(4096);
+  });
+
+  it("parses CURSOR_BRIDGE_PROMPT_VIA_STDIN and CURSOR_BRIDGE_USE_ACP", () => {
+    expect(
+      loadEnvConfig({ env: { CURSOR_BRIDGE_PROMPT_VIA_STDIN: "true" } })
+        .promptViaStdin,
+    ).toBe(true);
+    expect(loadEnvConfig({ env: { CURSOR_BRIDGE_USE_ACP: "1" } }).useAcp).toBe(
+      true,
+    );
   });
 });
 
@@ -305,7 +336,9 @@ describe("discoverAccountDirs filtering", () => {
       env: { HOME: tmpBase, CURSOR_CONFIG_DIRS: "/explicit/dir" },
       cwd: "/workspace",
     });
-    expect(loaded.configDirs).toEqual(["/explicit/dir"]);
+    expect(loaded.configDirs).toEqual([
+      path.resolve("/workspace", "/explicit/dir"),
+    ]);
   });
 });
 
@@ -356,5 +389,71 @@ describe("resolveAgentCommand", () => {
     expect(command.command).toBe("agent");
     expect(command.args).toEqual(["--help"]);
     expect(command.windowsVerbatimArguments).toBeUndefined();
+  });
+
+  it("uses versioned layout (versions/YYYY.MM.DD-commit) when node.exe/index.js not in agent dir", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-agent-"));
+    try {
+      const agentCmd = path.join(tmp, "agent.cmd");
+      const versionDir = path.join(tmp, "versions", "2026.03.11-6dfa30c");
+      fs.mkdirSync(versionDir, { recursive: true });
+      fs.writeFileSync(path.join(versionDir, "node.exe"), "");
+      fs.writeFileSync(path.join(versionDir, "index.js"), "");
+      fs.writeFileSync(agentCmd, "");
+
+      const command = resolveAgentCommand(agentCmd, ["acp"], {
+        platform: "win32",
+        env: {},
+        cwd: tmp,
+      });
+
+      expect(command.command).toBe(path.join(versionDir, "node.exe"));
+      expect(command.args).toEqual([path.join(versionDir, "index.js"), "acp"]);
+      expect(command.windowsVerbatimArguments).toBeUndefined();
+      expect(command.env.CURSOR_INVOKED_AS).toBe("agent.cmd");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to cmd when versions dir does not exist", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-agent-"));
+    try {
+      const agentCmd = path.join(tmp, "agent.cmd");
+      fs.writeFileSync(agentCmd, "");
+
+      const command = resolveAgentCommand(agentCmd, ["acp"], {
+        platform: "win32",
+        env: { COMSPEC: "C:\\Windows\\System32\\cmd.exe" },
+        cwd: tmp,
+      });
+
+      expect(command.command).toBe("C:\\Windows\\System32\\cmd.exe");
+      expect(command.windowsVerbatimArguments).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to cmd when versions dir has no valid version subdirs", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-agent-"));
+    try {
+      const agentCmd = path.join(tmp, "agent.cmd");
+      const versionsDir = path.join(tmp, "versions");
+      fs.mkdirSync(versionsDir, { recursive: true });
+      fs.writeFileSync(agentCmd, "");
+      fs.mkdirSync(path.join(versionsDir, "not-a-version"), { recursive: true });
+
+      const command = resolveAgentCommand(agentCmd, ["acp"], {
+        platform: "win32",
+        env: { COMSPEC: "C:\\Windows\\System32\\cmd.exe" },
+        cwd: tmp,
+      });
+
+      expect(command.command).toBe("C:\\Windows\\System32\\cmd.exe");
+      expect(command.windowsVerbatimArguments).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

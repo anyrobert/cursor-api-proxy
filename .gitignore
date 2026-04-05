@@ -10,3 +10,6 @@ dist/
 *.ts.net.key
 # Session/request log (optional; path configurable via CURSOR_BRIDGE_SESSIONS_LOG)
 sessions.log
+logs/
+# Local Cursor rules (no-pii etc.) — keep out of public fork
+.cursor/

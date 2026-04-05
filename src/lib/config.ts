@@ -1,9 +1,15 @@
-import { loadEnvConfig, type EnvOptions } from "./env.js";
+import { loadEnvConfig, resolveAgentCommand, type EnvOptions } from "./env.js";
 
 export type CursorExecutionMode = "agent" | "ask" | "plan";
 
 export type BridgeConfig = {
   agentBin: string;
+  /** Resolved command for ACP (node + script on Windows when .cmd); avoids spawn EINVAL and DEP0190. */
+  acpCommand: string;
+  /** Args for ACP (e.g. [scriptPath, "acp"] or ["acp"]). */
+  acpArgs: string[];
+  /** Env to use when spawning ACP (e.g. CURSOR_INVOKED_AS). */
+  acpEnv: Record<string, string | undefined>;
   host: string;
   port: number;
   requiredKey?: string;
@@ -26,6 +32,16 @@ export type BridgeConfig = {
   verbose: boolean;
   /** When true, enable Cursor Max Mode (larger context, more tool calls) via cli-config.json preflight. */
   maxMode: boolean;
+  /** When true, pass the user prompt via stdin instead of argv (avoids Windows argv issues). */
+  promptViaStdin: boolean;
+  /** When true, use ACP (Agent Client Protocol) over stdio; fixes prompt delivery on Windows. */
+  useAcp: boolean;
+  /** Spawn options for ACP (e.g. windowsVerbatimArguments when using cmd.exe fallback). */
+  acpSpawnOptions?: { windowsVerbatimArguments?: boolean };
+  /** When true, skip ACP authenticate step (use when pre-authenticated via --api-key or agent login). */
+  acpSkipAuthenticate: boolean;
+  /** When true, log every raw JSON-RPC line from ACP stdout (very verbose). Set CURSOR_BRIDGE_ACP_RAW_DEBUG=1 to enable. */
+  acpRawDebug: boolean;
   /** Pool of cursor configuration directories for round-robin account rotation. */
   configDirs: string[];
   /** When true, runs each config dir on its own incrementing port starting from `port` */
@@ -36,9 +52,22 @@ export type BridgeConfig = {
 
 export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
   const env = loadEnvConfig(opts);
+  const acpResolved = resolveAgentCommand(env.agentBin, ["acp"], opts);
+  const envSource = opts.env ?? process.env;
+  const apiKey = envSource.CURSOR_API_KEY ?? envSource.CURSOR_AUTH_TOKEN;
+  const acpArgs = acpResolved.args;
+
+  const acpEnv = { ...acpResolved.env } as Record<string, string | undefined>;
+  if (apiKey) {
+    acpEnv.CURSOR_API_KEY = apiKey;
+    acpEnv.CURSOR_AUTH_TOKEN = apiKey;
+  }
 
   return {
     agentBin: env.agentBin,
+    acpCommand: acpResolved.command,
+    acpArgs,
+    acpEnv,
     host: env.host,
     port: env.port,
     requiredKey: env.requiredKey,
@@ -55,6 +84,20 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     chatOnlyWorkspace: env.chatOnlyWorkspace,
     verbose: env.verbose,
     maxMode: env.maxMode,
+    promptViaStdin: env.promptViaStdin,
+    useAcp: env.useAcp,
+    acpSpawnOptions:
+      acpResolved.windowsVerbatimArguments != null
+        ? { windowsVerbatimArguments: acpResolved.windowsVerbatimArguments }
+        : undefined,
+    acpSkipAuthenticate:
+      !!apiKey ||
+      /^(1|true|yes|on)$/i.test(
+        String(envSource.CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE ?? "").trim(),
+      ),
+    acpRawDebug: /^(1|true|yes|on)$/i.test(
+      String(envSource.CURSOR_BRIDGE_ACP_RAW_DEBUG ?? "").trim(),
+    ),
     configDirs: env.configDirs ?? [],
     multiPort: env.multiPort,
     winCmdlineMax: env.winCmdlineMax,

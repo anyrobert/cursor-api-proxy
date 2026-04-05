@@ -20,6 +20,18 @@ describe("run", () => {
     expect(result.stdout).toBe("ok");
   });
 
+  it("passes stdinContent to child stdin", async () => {
+    const result = await run(
+      node,
+      ["-e", "process.stdin.on('data', d => process.stdout.write(d))"],
+      {
+        stdinContent: "hello from stdin",
+      },
+    );
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("hello from stdin");
+  });
+
   it("propagates configDir as CURSOR_CONFIG_DIR env var to child process", async () => {
     const result = await run(
       node,
@@ -166,7 +178,6 @@ describe("runStreaming", () => {
       ["-e", "setTimeout(() => {}, 30000)"],
       { onLine: () => {}, signal: controller.signal },
     );
-    // Abort after 100ms
     setTimeout(() => controller.abort(), 100);
     const result = await resultPromise;
     const elapsed = Date.now() - start;
@@ -205,12 +216,10 @@ describe("run AbortSignal", () => {
 describe("killAllChildProcesses", () => {
   it("kills in-flight processes and subsequent calls are safe no-ops", async () => {
     const resultPromise = run(node, ["-e", "setTimeout(() => {}, 30000)"]);
-    // Give the process a moment to start
     await new Promise((r) => setTimeout(r, 50));
     killAllChildProcesses();
     const result = await resultPromise;
     expect(result.code).not.toBe(0);
-    // Calling again when registry is empty should not throw
     expect(() => killAllChildProcesses()).not.toThrow();
   }, 5000);
 });

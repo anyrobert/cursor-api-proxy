@@ -7,6 +7,12 @@ import { createRequestListener } from "./request-listener.js";
 import { initAccountPool } from "./account-pool.js";
 import { killAllChildProcesses } from "./process.js";
 
+function acpLauncherLabel(acpArgs: string[]): string {
+  const first = acpArgs[0];
+  if (first && /\.[cm]?js$/i.test(first)) return "node + script";
+  return "cmd";
+}
+
 export type BridgeServerOptions = {
   version: string;
   config: BridgeConfig;
@@ -128,6 +134,9 @@ function startSingleServer(
       `cursor-api-proxy listening on ${scheme}://${config.host}:${config.port}`,
     );
     console.log(`- agent bin: ${config.agentBin}`);
+    console.log(
+      `- ACP: ${config.useAcp ? "yes" : "no"}${config.useAcp ? ` (launcher: ${acpLauncherLabel(config.acpArgs)})` : ""}`,
+    );
     console.log(`- workspace: ${config.workspace}`);
     console.log(`- mode: ${config.mode}`);
     console.log(`- default model: ${config.defaultModel}`);
