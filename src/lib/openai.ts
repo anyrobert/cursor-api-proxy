@@ -6,6 +6,7 @@ export type OpenAiChatCompletionRequest = {
   stream?: boolean;
   tools?: any[];
   tool_choice?: any;
+  parallel_tool_calls?: boolean;
   functions?: any[];
   function_call?: any;
 };

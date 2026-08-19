@@ -19,6 +19,10 @@ export type AcpRunOptions = {
   env?: Record<string, string | undefined>;
   /** When set, call session/set_config_option for "model" after session/new (ACP session config). */
   model?: string;
+  /** Additional catalog names for model matching (typically `agent --list-models` display name). */
+  modelAliases?: string[];
+  /** Reject a requested model when the ACP catalog cannot match it. */
+  strictModel?: boolean;
   /** Per-request timeout in ms (default 60000). Rejects and clears pending on timeout. */
   requestTimeoutMs?: number;
   /** Spawn options (e.g. windowsVerbatimArguments for cmd.exe fallback on Windows). */
@@ -232,9 +236,23 @@ export type AcpAvailableModel = { modelId: string; name: string };
 export function resolveAcpModelConfigValue(
   displayName: string,
   availableModels: AcpAvailableModel[] | undefined,
+  aliases: readonly string[] = [],
 ): string {
   if (!availableModels?.length) return displayName;
-  const hit = availableModels.find((m) => m.name === displayName);
+  const candidates = new Set(
+    [displayName, ...aliases]
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const hit = availableModels.find((model) => {
+    const modelId = model.modelId.trim().toLowerCase();
+    const baseModelId = modelId.replace(/\[.*$/, "");
+    return (
+      candidates.has(model.name.trim().toLowerCase()) ||
+      candidates.has(modelId) ||
+      candidates.has(baseModelId)
+    );
+  });
   if (!hit) {
     debugAcp(
       "ACP model: no catalog match for display name %j; falling back to default[]",
@@ -465,7 +483,17 @@ export function runAcpSync(
           const resolvedModelId = resolveAcpModelConfigValue(
             opts.model,
             sessionResult.models?.availableModels,
+            opts.modelAliases,
           );
+          if (
+            resolvedModelId === "default[]" &&
+            opts.strictModel &&
+            opts.model !== "default"
+          ) {
+            throw new Error(
+              `ACP model catalog has no match for ${JSON.stringify(opts.model)}`,
+            );
+          }
           if (resolvedModelId !== "default" && resolvedModelId !== "default[]") {
             debugAcp("ACP step: session/set_config_option (model)");
             await sendRequest(
@@ -665,7 +693,17 @@ export function runAcpStream(
           const resolvedModelId = resolveAcpModelConfigValue(
             opts.model,
             sessionResult.models?.availableModels,
+            opts.modelAliases,
           );
+          if (
+            resolvedModelId === "default[]" &&
+            opts.strictModel &&
+            opts.model !== "default"
+          ) {
+            throw new Error(
+              `ACP model catalog has no match for ${JSON.stringify(opts.model)}`,
+            );
+          }
           if (resolvedModelId !== "default" && resolvedModelId !== "default[]") {
             debugAcp("ACP step: session/set_config_option (model)");
             await sendRequest(

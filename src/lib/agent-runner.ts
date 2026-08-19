@@ -1,9 +1,11 @@
 import * as fs from "node:fs";
 
 import { runAcpStream, runAcpSync } from "./acp-client.js";
+import { AcpToolSession } from "./acp-tool-session.js";
 import type { BridgeConfig } from "./config.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
 import { run, runStreaming } from "./process.js";
+import type { ClientToolDefinition } from "./tool-types.js";
 import { getChatOnlyEnvOverrides } from "./workspace.js";
 import { readKeychainToken, writeCachedToken } from "./token-cache.js";
 
@@ -52,6 +54,31 @@ function extractModeFromCmdArgs(cmdArgs: string[]): CursorExecutionMode {
   return "ask";
 }
 
+function acpInvocation(
+  config: BridgeConfig,
+  workspaceDir: string,
+  effectiveChatOnly: boolean,
+  cmdArgs: string[],
+  configDir?: string,
+): {
+  args: string[];
+  env: Record<string, string | undefined>;
+  model?: string;
+} {
+  const model = extractModelFromCmdArgs(cmdArgs);
+  const mode = extractModeFromCmdArgs(cmdArgs);
+  let args = acpArgsWithWorkspace(config.acpArgs, workspaceDir);
+  args = model ? acpArgsWithModel(args, model) : args;
+  args = acpArgsWithMode(args, mode);
+  const env = { ...config.acpEnv };
+  if (effectiveChatOnly) {
+    Object.assign(env, getChatOnlyEnvOverrides(workspaceDir, configDir));
+  } else if (configDir) {
+    env.CURSOR_CONFIG_DIR = configDir;
+  }
+  return { args, env, model };
+}
+
 export function runAgentSync(
   config: BridgeConfig,
   workspaceDir: string,
@@ -61,22 +88,23 @@ export function runAgentSync(
   stdinPrompt?: string,
   configDir?: string,
   signal?: AbortSignal,
+  modelDisplayName?: string,
 ): Promise<AgentRunResult> {
   if (config.useAcp && typeof stdinPrompt === "string") {
-    const acpModel = extractModelFromCmdArgs(cmdArgs);
-    const acpMode = extractModeFromCmdArgs(cmdArgs);
-    let args = acpArgsWithWorkspace(config.acpArgs, workspaceDir);
-    args = acpModel ? acpArgsWithModel(args, acpModel) : args;
-    args = acpArgsWithMode(args, acpMode);
-    const acpEnv = { ...config.acpEnv };
-    if (effectiveChatOnly) {
-      Object.assign(acpEnv, getChatOnlyEnvOverrides(workspaceDir, configDir));
-    }
-    return runAcpSync(config.acpCommand, args, stdinPrompt, {
+    const invocation = acpInvocation(
+      config,
+      workspaceDir,
+      effectiveChatOnly,
+      cmdArgs,
+      configDir,
+    );
+    return runAcpSync(config.acpCommand, invocation.args, stdinPrompt, {
       cwd: workspaceDir,
       timeoutMs: config.timeoutMs,
-      env: acpEnv,
-      model: acpModel,
+      env: invocation.env,
+      model: invocation.model,
+      modelAliases: modelDisplayName ? [modelDisplayName] : undefined,
+      strictModel: config.strictModel,
       requestTimeoutMs: config.timeoutMs,
       spawnOptions: config.acpSpawnOptions,
       skipAuthenticate: config.acpSkipAuthenticate,
@@ -130,26 +158,27 @@ export function runAgentStream(
   stdinPrompt?: string,
   configDir?: string,
   signal?: AbortSignal,
+  modelDisplayName?: string,
 ): Promise<{ code: number; stderr: string }> {
   if (config.useAcp && typeof stdinPrompt === "string") {
-    const acpModel = extractModelFromCmdArgs(cmdArgs);
-    const acpMode = extractModeFromCmdArgs(cmdArgs);
-    let args = acpArgsWithWorkspace(config.acpArgs, workspaceDir);
-    args = acpModel ? acpArgsWithModel(args, acpModel) : args;
-    args = acpArgsWithMode(args, acpMode);
-    const acpEnv = { ...config.acpEnv };
-    if (effectiveChatOnly) {
-      Object.assign(acpEnv, getChatOnlyEnvOverrides(workspaceDir, configDir));
-    }
+    const invocation = acpInvocation(
+      config,
+      workspaceDir,
+      effectiveChatOnly,
+      cmdArgs,
+      configDir,
+    );
     return runAcpStream(
       config.acpCommand,
-      args,
+      invocation.args,
       stdinPrompt,
       {
         cwd: workspaceDir,
         timeoutMs: config.timeoutMs,
-        env: acpEnv,
-        model: acpModel,
+        env: invocation.env,
+        model: invocation.model,
+        modelAliases: modelDisplayName ? [modelDisplayName] : undefined,
+        strictModel: config.strictModel,
         requestTimeoutMs: config.timeoutMs,
         spawnOptions: config.acpSpawnOptions,
         skipAuthenticate: config.acpSkipAuthenticate,
@@ -192,4 +221,70 @@ export function runAgentStream(
     }
     return result;
   });
+}
+
+export async function startAgentToolSession(opts: {
+  config: BridgeConfig;
+  workspaceDir: string;
+  effectiveChatOnly: boolean;
+  cmdArgs: string[];
+  prompt: string;
+  tools: readonly ClientToolDefinition[];
+  tempDir?: string;
+  configDir?: string;
+  signal?: AbortSignal;
+  modelDisplayName?: string;
+  requireToolCall?: boolean;
+  maxParallelToolCalls?: number;
+}): Promise<AcpToolSession> {
+  if (!opts.config.useAcp) {
+    throw new Error("Structured tool passthrough requires ACP mode");
+  }
+  const invocation = acpInvocation(
+    opts.config,
+    opts.workspaceDir,
+    opts.effectiveChatOnly,
+    opts.cmdArgs,
+    opts.configDir,
+  );
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    cacheTokenForAccount(opts.configDir);
+    if (opts.tempDir) {
+      try {
+        fs.rmSync(opts.tempDir, { recursive: true, force: true });
+      } catch {
+        // best effort
+      }
+    }
+  };
+  const session = new AcpToolSession({
+    command: opts.config.acpCommand,
+    args: invocation.args,
+    cwd: opts.workspaceDir,
+    env: invocation.env,
+    timeoutMs: opts.config.timeoutMs,
+    spawnOptions: opts.config.acpSpawnOptions,
+    skipAuthenticate: opts.config.acpSkipAuthenticate,
+    rawDebug: opts.config.acpRawDebug,
+    signal: opts.signal,
+    modelCandidates: [
+      invocation.model,
+      opts.modelDisplayName,
+    ].filter((value): value is string => Boolean(value)),
+    strictModel: opts.config.strictModel,
+    tools: opts.tools,
+    requireToolCall: opts.requireToolCall,
+    maxParallelToolCalls: opts.maxParallelToolCalls,
+    onClose: cleanup,
+  });
+  try {
+    await session.start(opts.prompt);
+    return session;
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 }

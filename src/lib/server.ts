@@ -6,6 +6,7 @@ import type { BridgeConfig } from "./config.js";
 import { createRequestListener } from "./request-listener.js";
 import { initAccountPool } from "./account-pool.js";
 import { killAllChildProcesses } from "./process.js";
+import { ToolSessionRegistry } from "./tool-session-registry.js";
 
 function acpLauncherLabel(acpArgs: string[]): string {
   const first = acpArgs[0];
@@ -104,7 +105,8 @@ function startSingleServer(
 ): http.Server | https.Server {
   const { config } = opts;
 
-  const requestListener = createRequestListener(opts);
+  const toolSessions = new ToolSessionRegistry();
+  const requestListener = createRequestListener(opts, { toolSessions });
 
   const useTls = Boolean(config.tlsCertPath && config.tlsKeyPath);
   let server: http.Server | https.Server;
@@ -126,6 +128,9 @@ function startSingleServer(
       console.error(`\u274c Server error:`, err.message);
     }
     process.exit(1);
+  });
+  server.once("close", () => {
+    void toolSessions.closeAll();
   });
 
   server.listen(config.port, config.host, () => {

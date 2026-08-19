@@ -64,6 +64,21 @@ describe("resolveAcpModelConfigValue", () => {
       ]),
     ).toBe("first[]");
   });
+
+  it("maps CLI ids through their catalog display-name alias", () => {
+    expect(
+      resolveAcpModelConfigValue(
+        "gpt-5.6-sol-high",
+        [
+          {
+            modelId: "gpt-5.6-sol[reasoning=high]",
+            name: "GPT-5.6 Sol High",
+          },
+        ],
+        ["GPT-5.6 Sol High"],
+      ),
+    ).toBe("gpt-5.6-sol[reasoning=high]");
+  });
 });
 
 describe("runAcpSync", () => {

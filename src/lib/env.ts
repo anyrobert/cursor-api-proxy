@@ -151,6 +151,53 @@ function resolveAbsolutePath(
   return path.resolve(cwd, raw);
 }
 
+function executableOnPath(
+  name: string,
+  env: EnvSource,
+  platform: NodeJS.Platform,
+): string | undefined {
+  const rawPath = env.PATH ?? env.Path ?? env.path;
+  if (!rawPath) return undefined;
+  const extensions =
+    platform === "win32"
+      ? (env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";")
+      : [""];
+  for (const directory of rawPath.split(path.delimiter).filter(Boolean)) {
+    for (const extension of extensions) {
+      const candidate = path.join(
+        directory,
+        platform === "win32" ? `${name}${extension}` : name,
+      );
+      try {
+        const stat = fs.statSync(candidate);
+        if (!stat.isFile()) continue;
+        if (platform !== "win32") fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      } catch {
+        // Try the next PATH entry.
+      }
+    }
+  }
+  return undefined;
+}
+
+function resolveAgentBinary(
+  env: EnvSource,
+  platform: NodeJS.Platform,
+): string {
+  const explicit = envString(env, [
+    "CURSOR_AGENT_BIN",
+    "CURSOR_CLI_BIN",
+    "CURSOR_CLI_PATH",
+  ]);
+  if (explicit) return explicit;
+  return (
+    executableOnPath("cursor-agent", env, platform) ??
+    executableOnPath("agent", env, platform) ??
+    "agent"
+  );
+}
+
 /** Version dir name format: YYYY.MM.DD-commit (matches cursor-agent.ps1). */
 const VERSION_DIR_REGEX = /^(\d{4})\.(\d{1,2})\.(\d{1,2})-[a-f0-9]+$/;
 
@@ -279,6 +326,7 @@ function discoverAccountDirs(homeDir: string | undefined): string[] {
 export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
   const env = getEnvSource(opts.env);
   const cwd = getCwd(opts.cwd);
+  const platform = opts.platform ?? process.platform;
 
   const host =
     envString(env, ["CURSOR_BRIDGE_HOST"]) ??
@@ -342,12 +390,7 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
   const mode = tryParseExecutionModeEnv(firstDefined(env, ["CURSOR_BRIDGE_MODE"]));
 
   return {
-    agentBin:
-      envString(env, [
-        "CURSOR_AGENT_BIN",
-        "CURSOR_CLI_BIN",
-        "CURSOR_CLI_PATH",
-      ]) ?? "agent",
+    agentBin: resolveAgentBinary(env, platform),
     agentNode: envString(env, ["CURSOR_AGENT_NODE"]),
     agentScript: envString(env, ["CURSOR_AGENT_SCRIPT"]),
     commandShell: envString(env, ["COMSPEC"]) ?? "cmd.exe",

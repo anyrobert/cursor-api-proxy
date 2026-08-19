@@ -48,8 +48,25 @@ export async function listCursorCliModels(args: {
   });
 
   if (list.code !== 0) {
-    throw new Error(`agent --list-models failed: ${list.stderr.trim()}`);
+    throw new Error(
+      `Cursor CLI check failed for ${JSON.stringify(
+        args.agentBin,
+      )}: --list-models exited ${list.code}: ${
+        list.stderr.trim() || "no diagnostic output"
+      }. Set CURSOR_AGENT_BIN to the Cursor cursor-agent executable.`,
+    );
   }
 
-  return parseCursorCliModels(list.stdout);
+  const models = parseCursorCliModels(list.stdout);
+  if (models.length === 0) {
+    const sample = stripAnsi(`${list.stdout}\n${list.stderr}`).trim().slice(0, 240);
+    throw new Error(
+      `${JSON.stringify(
+        args.agentBin,
+      )} did not return a Cursor model catalog and may be another vendor's "agent" binary.${
+        sample ? ` Output: ${sample}` : ""
+      } Set CURSOR_AGENT_BIN to the Cursor cursor-agent executable.`,
+    );
+  }
+  return models;
 }

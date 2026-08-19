@@ -25,6 +25,75 @@ export type CursorProxyClientOptions = {
   startProxy?: boolean;
 };
 
+export type CursorProxyFunctionTool = {
+  type: "function";
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+};
+
+export type CursorProxyToolCall = {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+};
+
+export type CursorProxyChatMessage = {
+  role: string;
+  content?: unknown;
+  tool_calls?: CursorProxyToolCall[];
+  tool_call_id?: string;
+  name?: string;
+};
+
+export type CursorProxyChatCompletionsParams = {
+  model?: string;
+  messages: CursorProxyChatMessage[];
+  stream?: false;
+  tools?: CursorProxyFunctionTool[];
+  tool_choice?: unknown;
+  functions?: Array<{
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  }>;
+  function_call?: unknown;
+  parallel_tool_calls?: boolean;
+};
+
+export type CursorProxyResponsesParams = {
+  model?: string;
+  input: unknown;
+  stream?: false;
+  tools?: Array<{
+    type: "function";
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  }>;
+  tool_choice?: unknown;
+  parallel_tool_calls?: boolean;
+  previous_response_id?: string;
+  store?: boolean;
+  [key: string]: unknown;
+};
+
+export type CursorProxyAnthropicMessagesParams = {
+  model?: string;
+  max_tokens: number;
+  messages: Array<{ role: "user" | "assistant"; content: unknown }>;
+  stream?: false;
+  tools?: Array<{
+    name: string;
+    description?: string;
+    input_schema: Record<string, unknown>;
+  }>;
+  tool_choice?: unknown;
+  [key: string]: unknown;
+};
+
 let _proxyProcess: import("node:child_process").ChildProcess | null = null;
 let _managedProxyStartupPromise: Promise<string> | null = null;
 let _managedProxyStartedBySdk = false;
@@ -365,19 +434,62 @@ export function createCursorProxyClient(options: CursorProxyClientOptions = {}) 
     },
 
     /** OpenAI-style chat completions (non-streaming). */
-    async chatCompletionsCreate(params: {
-      model?: string;
-      messages: Array<{ role: string; content: string }>;
-      stream?: false;
-    }) {
+    async chatCompletionsCreate(params: CursorProxyChatCompletionsParams) {
       const { data, ok, status } = await this.request<{
-        choices?: Array<{ message?: { content?: string } }>;
+        choices?: Array<{
+          message?: {
+            content?: string | null;
+            tool_calls?: CursorProxyToolCall[];
+          };
+          finish_reason?: "stop" | "tool_calls" | string;
+        }>;
         error?: { message?: string };
       }>("/v1/chat/completions", {
+        ...params,
         model: params.model ?? "default",
-        messages: params.messages,
         stream: false,
       });
+      if (!ok) {
+        const err = data?.error?.message ?? JSON.stringify(data);
+        throw new Error(`cursor-api-proxy error (${status}): ${err}`);
+      }
+      return data;
+    },
+
+    /** OpenAI Responses API (non-streaming), including function_call output. */
+    async responsesCreate(params: CursorProxyResponsesParams) {
+      const { data, ok, status } = await this.request<{
+        id?: string;
+        output_text?: string;
+        output?: Array<{
+          type?: string;
+          call_id?: string;
+          name?: string;
+          arguments?: string;
+        }>;
+        error?: { message?: string };
+      }>("/v1/responses", { ...params, stream: false });
+      if (!ok) {
+        const err = data?.error?.message ?? JSON.stringify(data);
+        throw new Error(`cursor-api-proxy error (${status}): ${err}`);
+      }
+      return data;
+    },
+
+    /** Anthropic Messages API (non-streaming), including tool_use blocks. */
+    async anthropicMessagesCreate(params: CursorProxyAnthropicMessagesParams) {
+      const { data, ok, status } = await this.request<{
+        id?: string;
+        content?: Array<{
+          type?: string;
+          text?: string;
+          id?: string;
+          name?: string;
+          input?: unknown;
+        }>;
+        stop_reason?: string;
+        error?: { message?: string };
+      }>("/v1/messages", { ...params, stream: false });
       if (!ok) {
         const err = data?.error?.message ?? JSON.stringify(data);
         throw new Error(`cursor-api-proxy error (${status}): ${err}`);

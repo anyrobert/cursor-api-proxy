@@ -1,6 +1,6 @@
 {
   "name": "cursor-api-proxy",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "OpenAI-compatible proxy for Cursor CLI — use Cursor models from any LLM client on localhost",
   "private": false,
   "type": "module",
@@ -51,6 +51,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "chrome-launcher": "^1.2.1"
   }
 }

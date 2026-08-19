@@ -308,6 +308,58 @@ describe("loadEnvConfig", () => {
   });
 });
 
+describe("agent binary auto-detection", () => {
+  let binDir: string | undefined;
+
+  afterEach(() => {
+    if (binDir) fs.rmSync(binDir, { recursive: true, force: true });
+    binDir = undefined;
+  });
+
+  function executable(name: string): string {
+    binDir ??= fs.mkdtempSync(path.join(os.tmpdir(), "cap-bin-"));
+    const file = path.join(binDir, name);
+    fs.writeFileSync(file, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(file, 0o755);
+    return file;
+  }
+
+  it("prefers cursor-agent over a conflicting agent binary", () => {
+    const agent = executable("agent");
+    const cursorAgent = executable("cursor-agent");
+    expect(
+      loadEnvConfig({
+        env: { PATH: path.dirname(agent) },
+        platform: "darwin",
+      }).agentBin,
+    ).toBe(cursorAgent);
+  });
+
+  it("falls back to agent when cursor-agent is unavailable", () => {
+    const agent = executable("agent");
+    expect(
+      loadEnvConfig({
+        env: { PATH: path.dirname(agent) },
+        platform: "darwin",
+      }).agentBin,
+    ).toBe(agent);
+  });
+
+  it("honors explicit binary configuration", () => {
+    const agent = executable("agent");
+    executable("cursor-agent");
+    expect(
+      loadEnvConfig({
+        env: {
+          PATH: path.dirname(agent),
+          CURSOR_AGENT_BIN: "/custom/cursor",
+        },
+        platform: "darwin",
+      }).agentBin,
+    ).toBe("/custom/cursor");
+  });
+});
+
 describe("discoverAccountDirs filtering", () => {
   let tmpBase: string;
 

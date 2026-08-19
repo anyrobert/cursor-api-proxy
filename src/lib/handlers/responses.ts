@@ -18,7 +18,12 @@ import {
 import type { BridgeConfig } from "../config.js";
 import type { CursorExecutionMode } from "../execution-mode.js";
 import { json, writeSseHeaders } from "../http.js";
-import { runAgentStream, runAgentSync } from "../agent-runner.js";
+import {
+  runAgentStream,
+  runAgentSync,
+  startAgentToolSession,
+} from "../agent-runner.js";
+import type { ToolTurnEvent, ToolTurnResult } from "../acp-tool-session.js";
 import { createStreamParser } from "../cli-stream-parser.js";
 import { resolveModelForExecution } from "../model-map.js";
 import {
@@ -46,6 +51,18 @@ import {
   warnPromptTruncated,
 } from "../win-cmdline-limit.js";
 import { abortOnClientDisconnect } from "../client-disconnect.js";
+import {
+  parseOpenAiFunctionTools,
+  resolveToolChoice,
+  responsesToolOutputs,
+  type PendingClientToolCall,
+} from "../tool-types.js";
+import {
+  ToolSessionError,
+  toolSessionOwnerKey,
+  type ToolSessionRecord,
+  type ToolSessionRegistry,
+} from "../tool-session-registry.js";
 import { getCachedCursorModels, type ModelCacheRef } from "./models.js";
 
 function isRateLimited(stderr: string): boolean {
@@ -56,9 +73,260 @@ export type ResponsesCtx = {
   config: BridgeConfig;
   lastRequestedModelRef: { current?: string };
   modelCacheRef: ModelCacheRef;
+  toolSessions: ToolSessionRegistry;
 };
 
 type ResponseStatus = "in_progress" | "completed" | "failed";
+
+function functionCallItem(call: PendingClientToolCall) {
+  return {
+    id: call.itemId,
+    type: "function_call",
+    status: "completed",
+    call_id: call.callId,
+    name: call.name,
+    arguments: call.arguments,
+  };
+}
+
+function structuredResponseObject(opts: {
+  body: OpenAiResponsesRequest;
+  id: string;
+  createdAt: number;
+  model: string | undefined;
+  result: ToolTurnResult;
+  previousResponseId?: string | null;
+  promptLength: number;
+  messageId?: string;
+}) {
+  const output: Array<Record<string, unknown>> = [];
+  if (opts.result.text) {
+    output.push({
+      id: opts.messageId ?? `msg_${randomUUID().replace(/-/g, "")}`,
+      type: "message",
+      status: "completed",
+      role: "assistant",
+      content: [
+        {
+          type: "output_text",
+          text: opts.result.text,
+          annotations: [],
+        },
+      ],
+    });
+  }
+  if (opts.result.status === "tool_calls") {
+    output.push(...opts.result.toolCalls.map(functionCallItem));
+  }
+  const inputTokens = Math.max(1, Math.round(opts.promptLength / 4));
+  const outputTokens = Math.max(1, Math.round(opts.result.text.length / 4));
+  return {
+    id: opts.id,
+    object: "response",
+    created_at: opts.createdAt,
+    status: "completed",
+    background: false,
+    error: null,
+    incomplete_details: null,
+    instructions: opts.body.instructions ?? null,
+    max_output_tokens: opts.body.max_output_tokens ?? null,
+    model: opts.model,
+    output,
+    output_text: opts.result.text,
+    parallel_tool_calls: opts.body.parallel_tool_calls ?? true,
+    previous_response_id:
+      opts.previousResponseId ?? opts.body.previous_response_id ?? null,
+    reasoning: opts.body.reasoning ?? null,
+    service_tier: opts.body.service_tier ?? "default",
+    store: opts.body.store ?? true,
+    temperature: opts.body.temperature ?? null,
+    text: opts.body.text ?? { format: { type: "text" } },
+    tool_choice: opts.body.tool_choice ?? "auto",
+    tools: opts.body.tools ?? [],
+    top_p: opts.body.top_p ?? null,
+    truncation: opts.body.truncation ?? "disabled",
+    usage: {
+      input_tokens: inputTokens,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens: outputTokens,
+      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: inputTokens + outputTokens,
+    },
+    user: opts.body.user ?? null,
+    metadata: opts.body.metadata ?? null,
+  };
+}
+
+async function writeStructuredResponseTurn(opts: {
+  res: http.ServerResponse;
+  body: OpenAiResponsesRequest;
+  stream: boolean;
+  id: string;
+  createdAt: number;
+  model: string | undefined;
+  previousResponseId?: string | null;
+  promptLength: number;
+  run: (
+    listener?: (event: ToolTurnEvent) => void,
+  ) => Promise<ToolTurnResult>;
+}): Promise<ToolTurnResult> {
+  const messageId = `msg_${randomUUID().replace(/-/g, "")}`;
+  if (!opts.stream) {
+    const result = await opts.run();
+    json(
+      opts.res,
+      200,
+      structuredResponseObject({
+        body: opts.body,
+        id: opts.id,
+        createdAt: opts.createdAt,
+        model: opts.model,
+        result,
+        previousResponseId: opts.previousResponseId,
+        promptLength: opts.promptLength,
+        messageId,
+      }),
+    );
+    return result;
+  }
+
+  writeSseHeaders(opts.res);
+  const initial = {
+    id: opts.id,
+    object: "response",
+    created_at: opts.createdAt,
+    status: "in_progress",
+    model: opts.model,
+    output: [],
+  };
+  writeResponseEvent(opts.res, "response.created", { response: initial });
+  let textStarted = false;
+  let emittedText = "";
+  const emitText = (text: string) => {
+    if (!textStarted) {
+      textStarted = true;
+      writeResponseEvent(opts.res, "response.output_item.added", {
+        response_id: opts.id,
+        output_index: 0,
+        item: {
+          id: messageId,
+          type: "message",
+          status: "in_progress",
+          role: "assistant",
+          content: [],
+        },
+      });
+      writeResponseEvent(opts.res, "response.content_part.added", {
+        response_id: opts.id,
+        item_id: messageId,
+        output_index: 0,
+        content_index: 0,
+        part: { type: "output_text", text: "", annotations: [] },
+      });
+    }
+    emittedText += text;
+    writeResponseEvent(opts.res, "response.output_text.delta", {
+      response_id: opts.id,
+      item_id: messageId,
+      output_index: 0,
+      content_index: 0,
+      delta: text,
+    });
+  };
+  const result = await opts.run((event) => {
+    if (event.type === "text") emitText(event.text);
+  });
+  if (result.text.length > emittedText.length) {
+    emitText(result.text.slice(emittedText.length));
+  }
+  let outputIndex = textStarted ? 1 : 0;
+  if (textStarted) {
+    writeResponseEvent(opts.res, "response.output_text.done", {
+      response_id: opts.id,
+      item_id: messageId,
+      output_index: 0,
+      content_index: 0,
+      text: result.text,
+    });
+    writeResponseEvent(opts.res, "response.content_part.done", {
+      response_id: opts.id,
+      item_id: messageId,
+      output_index: 0,
+      content_index: 0,
+      part: { type: "output_text", text: result.text, annotations: [] },
+    });
+    writeResponseEvent(opts.res, "response.output_item.done", {
+      response_id: opts.id,
+      output_index: 0,
+      item: {
+        id: messageId,
+        type: "message",
+        status: "completed",
+        role: "assistant",
+        content: [
+          { type: "output_text", text: result.text, annotations: [] },
+        ],
+      },
+    });
+  }
+  if (result.status === "tool_calls") {
+    for (const call of result.toolCalls) {
+      writeResponseEvent(opts.res, "response.output_item.added", {
+        response_id: opts.id,
+        output_index: outputIndex,
+        item: {
+          id: call.itemId,
+          type: "function_call",
+          status: "in_progress",
+          call_id: call.callId,
+          name: call.name,
+          arguments: "",
+        },
+      });
+      writeResponseEvent(
+        opts.res,
+        "response.function_call_arguments.delta",
+        {
+          response_id: opts.id,
+          item_id: call.itemId,
+          output_index: outputIndex,
+          delta: call.arguments,
+        },
+      );
+      writeResponseEvent(
+        opts.res,
+        "response.function_call_arguments.done",
+        {
+          response_id: opts.id,
+          item_id: call.itemId,
+          output_index: outputIndex,
+          arguments: call.arguments,
+        },
+      );
+      writeResponseEvent(opts.res, "response.output_item.done", {
+        response_id: opts.id,
+        output_index: outputIndex,
+        item: functionCallItem(call),
+      });
+      outputIndex += 1;
+    }
+  }
+  writeResponseEvent(opts.res, "response.completed", {
+    response: structuredResponseObject({
+      body: opts.body,
+      id: opts.id,
+      createdAt: opts.createdAt,
+      model: opts.model,
+      result,
+      previousResponseId: opts.previousResponseId,
+      promptLength: opts.promptLength,
+      messageId,
+    }),
+  });
+  opts.res.write("data: [DONE]\n\n");
+  opts.res.end();
+  return result;
+}
 
 function createResponseObject(opts: {
   body: OpenAiResponsesRequest;
@@ -181,6 +449,64 @@ export async function handleResponses(
 ): Promise<void> {
   const { config, lastRequestedModelRef, modelCacheRef } = ctx;
   const body = JSON.parse(rawBody || "{}") as OpenAiResponsesRequest;
+  let selectedTools;
+  let toolInstruction: string | undefined;
+  let requireToolCall = false;
+  let maxParallelToolCalls: number | undefined;
+  let submittedToolOutputs;
+  try {
+    const parsedTools = parseOpenAiFunctionTools(body.tools);
+    const choice = resolveToolChoice(parsedTools, body.tool_choice, {
+      parallelToolCalls: body.parallel_tool_calls,
+    });
+    selectedTools = choice.tools;
+    toolInstruction = choice.instruction;
+    requireToolCall = choice.required;
+    maxParallelToolCalls = choice.maxParallelToolCalls;
+    submittedToolOutputs = responsesToolOutputs(body.input);
+  } catch (error) {
+    json(res, 400, {
+      error: {
+        message: error instanceof Error ? error.message : String(error),
+        code: "invalid_tools",
+        type: "invalid_request_error",
+      },
+    });
+    return;
+  }
+  if (config.useAcp && submittedToolOutputs.length > 0) {
+    if (
+      Array.isArray(body.input) &&
+      body.input.some(
+        (item) =>
+          !item ||
+          typeof item !== "object" ||
+          (item as { type?: unknown }).type !== "function_call_output",
+      )
+    ) {
+      json(res, 400, {
+        error: {
+          message:
+            "A function_call_output resume cannot include other input item types",
+          code: "invalid_tool_resume",
+          type: "invalid_request_error",
+        },
+      });
+      return;
+    }
+    if (body.instructions != null) {
+      json(res, 400, {
+        error: {
+          message:
+            "instructions cannot change while an ACP tool turn is active",
+          code: "invalid_tool_resume",
+          type: "invalid_request_error",
+        },
+      });
+      return;
+    }
+  }
+  const ownerKey = toolSessionOwnerKey(req, remoteAddress);
   const requested = normalizeModelId(body.model);
   const model = resolveModel(requested, lastRequestedModelRef, config);
   const models = await getCachedCursorModels(config, modelCacheRef);
@@ -196,12 +522,40 @@ export async function handleResponses(
     decision.requestedWasDefault && config.defaultModel !== "default"
       ? config.defaultModel
       : model;
+  const modelCatalogName = models.find(
+    (item) => item.id === cursorModel,
+  )?.name;
+  const id = `resp_${randomUUID().replace(/-/g, "")}`;
+  const createdAt = Math.floor(Date.now() / 1000);
 
   const cleanMessages = sanitizeMessages(responsesInputToMessages(body));
-  const toolsText = toolsToSystemText(body.tools);
-  const messagesWithTools = toolsText
-    ? [{ role: "system", content: toolsText }, ...cleanMessages]
-    : cleanMessages;
+  const structuredToolStart =
+    config.useAcp &&
+    selectedTools.length > 0 &&
+    submittedToolOutputs.length === 0;
+  if (structuredToolStart && body.store === false) {
+    json(res, 400, {
+      error: {
+        message:
+          "store=false is incompatible with stateful ACP tool passthrough",
+        code: "invalid_store",
+        type: "invalid_request_error",
+      },
+    });
+    return;
+  }
+  const toolsText = structuredToolStart
+    ? undefined
+    : body.tool_choice === "none"
+      ? undefined
+      : toolsToSystemText(body.tools);
+  const messagesWithTools = [
+    ...(toolInstruction && structuredToolStart
+      ? [{ role: "system", content: toolInstruction }]
+      : []),
+    ...(toolsText ? [{ role: "system", content: toolsText }] : []),
+    ...cleanMessages,
+  ];
   const prompt = buildPromptFromMessages(messagesWithTools);
 
   const trafficMessages: TrafficMessage[] = cleanMessages.map((m: any) => ({
@@ -214,6 +568,102 @@ export async function handleResponses(
     trafficMessages,
     !!body.stream,
   );
+
+  if (config.useAcp && submittedToolOutputs.length > 0) {
+    const previousResponseId = body.previous_response_id;
+    const record =
+      typeof previousResponseId === "string"
+        ? ctx.toolSessions.findByResponseId(ownerKey, previousResponseId)
+        : undefined;
+    if (
+      !record ||
+      record.api !== "responses" ||
+      !submittedToolOutputs.every((output) =>
+        record.session.hasCall(output.callId),
+      )
+    ) {
+      json(res, 409, {
+        error: {
+          message:
+            "Response tool session is missing or expired; resend the original input",
+          code: "tool_session_expired",
+          type: "invalid_request_error",
+        },
+      });
+      return;
+    }
+    const configDir = record.configDir;
+    logAccountAssigned(configDir);
+    reportRequestStart(configDir);
+    const startedAt = Date.now();
+    const abortController = new AbortController();
+    abortOnClientDisconnect(res, abortController);
+    abortController.signal.addEventListener(
+      "abort",
+      () => void record.session.close(),
+      { once: true },
+    );
+    try {
+      const result = await writeStructuredResponseTurn({
+        res,
+        body,
+        stream: !!body.stream,
+        id,
+        createdAt,
+        model: displayModel,
+        previousResponseId,
+        promptLength: prompt.length,
+        run: async (listener) => {
+          const turn = await ctx.toolSessions.resume(
+            record,
+            submittedToolOutputs,
+            listener,
+          );
+          if (turn.status === "tool_calls") {
+            ctx.toolSessions.aliasResponse(record, id);
+          }
+          return turn;
+        },
+      });
+      reportRequestSuccess(configDir, Date.now() - startedAt);
+      logTrafficResponse(
+        config.verbose,
+        model ?? cursorModel,
+        result.text,
+        !!body.stream,
+      );
+    } catch (error) {
+      reportRequestError(configDir, Date.now() - startedAt);
+      if (!res.headersSent) {
+        json(res, error instanceof ToolSessionError ? error.status : 500, {
+          error: {
+            message: error instanceof Error ? error.message : String(error),
+            code:
+              error instanceof ToolSessionError
+                ? error.code
+                : "tool_session_error",
+          },
+        });
+      } else if (!res.writableEnded) {
+        writeResponseEvent(res, "response.failed", {
+          response: {
+            id,
+            object: "response",
+            status: "failed",
+            error: {
+              message: error instanceof Error ? error.message : String(error),
+              code: "tool_session_error",
+            },
+          },
+        });
+        res.end();
+      }
+    } finally {
+      reportRequestEnd(configDir);
+      logAccountStats(config.verbose, getAccountStats());
+    }
+    return;
+  }
 
   let mode: CursorExecutionMode;
   try {
@@ -289,14 +739,113 @@ export async function handleResponses(
   const cmdArgs =
     config.promptViaStdin || config.useAcp ? fixedArgs : fit.args;
 
-  const id = `resp_${randomUUID().replace(/-/g, "")}`;
   const itemId = `msg_${randomUUID().replace(/-/g, "")}`;
-  const createdAt = Math.floor(Date.now() / 1000);
   const promptForAgent =
     config.promptViaStdin || config.useAcp ? agentPrompt : undefined;
   const truncatedHeaders = fit.truncated
     ? { "X-Cursor-Proxy-Prompt-Truncated": "true" }
     : undefined;
+
+  if (structuredToolStart) {
+    const configDir = getNextAccountConfigDir();
+    logAccountAssigned(configDir);
+    reportRequestStart(configDir);
+    const startedAt = Date.now();
+    const abortController = new AbortController();
+    abortOnClientDisconnect(res, abortController);
+    let record: ToolSessionRecord | undefined;
+    try {
+      const session = await startAgentToolSession({
+        config,
+        workspaceDir,
+        effectiveChatOnly,
+        cmdArgs,
+        prompt: agentPrompt,
+        tools: selectedTools,
+        tempDir,
+        configDir,
+        signal: abortController.signal,
+        modelDisplayName: modelCatalogName,
+        requireToolCall,
+        maxParallelToolCalls,
+      });
+      record = ctx.toolSessions.createRecord({
+        api: "responses",
+        ownerKey,
+        model: displayModel ?? cursorModel,
+        configDir,
+        session,
+      });
+      abortController.signal.addEventListener(
+        "abort",
+        () => void session.close(),
+        { once: true },
+      );
+      const result = await writeStructuredResponseTurn({
+        res,
+        body,
+        stream: !!body.stream,
+        id,
+        createdAt,
+        model: displayModel,
+        previousResponseId: body.previous_response_id,
+        promptLength: agentPrompt.length,
+        run: async (listener) => {
+          const turn = await ctx.toolSessions.collect(record!, listener);
+          if (turn.status === "tool_calls") {
+            ctx.toolSessions.aliasResponse(record!, id);
+          }
+          return turn;
+        },
+      });
+      reportRequestSuccess(configDir, Date.now() - startedAt);
+      if (
+        result.status === "completed" &&
+        result.stderr &&
+        isRateLimited(result.stderr)
+      ) {
+        reportRateLimit(configDir, 60_000);
+      }
+      logTrafficResponse(
+        config.verbose,
+        model ?? cursorModel,
+        result.text,
+        !!body.stream,
+      );
+    } catch (error) {
+      if (record) {
+        ctx.toolSessions.remove(record);
+        await record.session.close().catch(() => undefined);
+      }
+      reportRequestError(configDir, Date.now() - startedAt);
+      if (!res.headersSent) {
+        json(res, 500, {
+          error: {
+            message: error instanceof Error ? error.message : String(error),
+            code: "tool_session_error",
+            type: "api_error",
+          },
+        });
+      } else if (!res.writableEnded) {
+        writeResponseEvent(res, "response.failed", {
+          response: {
+            id,
+            object: "response",
+            status: "failed",
+            error: {
+              message: error instanceof Error ? error.message : String(error),
+              code: "tool_session_error",
+            },
+          },
+        });
+        res.end();
+      }
+    } finally {
+      reportRequestEnd(configDir);
+      logAccountStats(config.verbose, getAccountStats());
+    }
+    return;
+  }
 
   if (body.stream) {
     const configDir = getNextAccountConfigDir();
@@ -402,6 +951,7 @@ export async function handleResponses(
         promptForAgent,
         configDir,
         abortController.signal,
+        modelCatalogName,
       )
         .then(({ code, stderr: stderrOut }) => {
           const latencyMs = Date.now() - streamStart;
@@ -479,6 +1029,7 @@ export async function handleResponses(
       promptForAgent,
       configDir,
       abortController.signal,
+      modelCatalogName,
     )
       .then(({ code, stderr: stderrOut }) => {
         const latencyMs = Date.now() - streamStart;
@@ -537,6 +1088,7 @@ export async function handleResponses(
     promptForAgent,
     configDir,
     abortController.signal,
+    modelCatalogName,
   );
   const syncLatency = Date.now() - syncStart;
   reportRequestEnd(configDir);

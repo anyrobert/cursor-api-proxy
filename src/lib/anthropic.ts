@@ -7,7 +7,18 @@ import { buildPromptFromMessages } from "./openai.js";
 
 export type AnthropicMessageParam = {
   role: "user" | "assistant";
-  content: string | Array<{ type?: string; text?: string }>;
+  content:
+    | string
+    | Array<{
+        type?: string;
+        text?: string;
+        id?: string;
+        name?: string;
+        input?: unknown;
+        tool_use_id?: string;
+        content?: unknown;
+        is_error?: boolean;
+      }>;
 };
 
 export type AnthropicMessagesRequest = {
@@ -18,6 +29,14 @@ export type AnthropicMessagesRequest = {
   messages: AnthropicMessageParam[];
   system?: string | Array<{ type?: string; text?: string }>;
   stream?: boolean;
+  tools?: Array<{
+    name: string;
+    description?: string;
+    input_schema: Record<string, unknown>;
+  }>;
+  tool_choice?:
+    | { type: "auto" | "any" | "none"; disable_parallel_tool_use?: boolean }
+    | { type: "tool"; name: string; disable_parallel_tool_use?: boolean };
 };
 
 function systemToText(system: AnthropicMessagesRequest["system"]): string {

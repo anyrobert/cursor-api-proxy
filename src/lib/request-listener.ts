@@ -15,13 +15,21 @@ import {
 } from "./admin-dashboard.js";
 import { extractBearerToken, json, readBody } from "./http.js";
 import { appendSessionLine, logIncoming } from "./request-log.js";
+import type { ToolSessionRegistry } from "./tool-session-registry.js";
 
 export type BridgeServerOptions = {
   version: string;
   config: BridgeConfig;
 };
 
-export function createRequestListener(opts: BridgeServerOptions) {
+export type BridgeRequestRuntime = {
+  toolSessions: ToolSessionRegistry;
+};
+
+export function createRequestListener(
+  opts: BridgeServerOptions,
+  runtime: BridgeRequestRuntime,
+) {
   const { config } = opts;
   const modelCacheRef: ModelCacheRef = { current: undefined };
   const lastRequestedModelRef: { current?: string } = {};
@@ -97,7 +105,12 @@ export function createRequestListener(opts: BridgeServerOptions) {
         await handleChatCompletions(
           req,
           res,
-          { config, lastRequestedModelRef, modelCacheRef },
+          {
+            config,
+            lastRequestedModelRef,
+            modelCacheRef,
+            toolSessions: runtime.toolSessions,
+          },
           raw,
           method,
           pathname,
@@ -111,7 +124,12 @@ export function createRequestListener(opts: BridgeServerOptions) {
         await handleResponses(
           req,
           res,
-          { config, lastRequestedModelRef, modelCacheRef },
+          {
+            config,
+            lastRequestedModelRef,
+            modelCacheRef,
+            toolSessions: runtime.toolSessions,
+          },
           raw,
           method,
           pathname,
@@ -125,7 +143,12 @@ export function createRequestListener(opts: BridgeServerOptions) {
         await handleAnthropicMessages(
           req,
           res,
-          { config, lastRequestedModelRef, modelCacheRef },
+          {
+            config,
+            lastRequestedModelRef,
+            modelCacheRef,
+            toolSessions: runtime.toolSessions,
+          },
           raw,
           method,
           pathname,
