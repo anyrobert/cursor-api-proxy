@@ -90,4 +90,35 @@ describe("ACP requestTimeoutMs", () => {
       requestTimeoutMs: 123_456,
     });
   });
+
+  it("passes --force and --trust before acp when configured", async () => {
+    await runAgentSync(
+      config({ force: true }),
+      "/tmp/ws",
+      true,
+      ["--print", "--mode", "ask", "--model", "auto"],
+      undefined,
+      "hello",
+    );
+    const args = vi.mocked(runAcpSync).mock.calls[0][1] as string[];
+    const acpAt = args.indexOf("acp");
+    expect(acpAt).toBeGreaterThan(0);
+    expect(args.slice(0, acpAt)).toEqual(
+      expect.arrayContaining(["--force", "--trust", "--workspace", "/tmp/ws"]),
+    );
+  });
+
+  it("omits --force/--trust on ACP argv when not configured", async () => {
+    await runAgentSync(
+      config({ force: false }),
+      "/tmp/ws",
+      false,
+      ["--print", "--mode", "ask", "--model", "auto"],
+      undefined,
+      "hello",
+    );
+    const args = vi.mocked(runAcpSync).mock.calls[0][1] as string[];
+    expect(args).not.toContain("--force");
+    expect(args).not.toContain("--trust");
+  });
 });

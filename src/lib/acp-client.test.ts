@@ -79,6 +79,25 @@ describe("resolveAcpModelConfigValue", () => {
       ),
     ).toBe("gpt-5.6-sol[reasoning=high]");
   });
+
+  it("maps cursor-*-high CLI ids onto ACP catalog base modelId", () => {
+    expect(
+      resolveAcpModelConfigValue("cursor-grok-4.5-high", [
+        {
+          modelId: "grok-4.5[effort=high,fast=true]",
+          name: "Grok 4.5",
+        },
+      ]),
+    ).toBe("grok-4.5[effort=high,fast=true]");
+  });
+
+  it("maps auto to default[] when catalog has no auto row", () => {
+    expect(
+      resolveAcpModelConfigValue("auto", [
+        { modelId: "composer-2[fast=true]", name: "composer-2" },
+      ]),
+    ).toBe("default[]");
+  });
 });
 
 describe("runAcpSync", () => {

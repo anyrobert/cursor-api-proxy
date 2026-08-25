@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 
 import { runAcpStream, runAcpSync } from "./acp-client.js";
 import { AcpToolSession } from "./acp-tool-session.js";
@@ -21,6 +22,31 @@ export type AgentRunResult = {
   stderr: string;
 };
 
+/** Match cursor-agent project id: drive + path, `\`/`/` → `-`, dots stripped. */
+function projectSlugFromPath(dir: string): string {
+  let s = path.resolve(dir);
+  if (process.platform === "win32") {
+    s = s.replace(/^([A-Za-z]):[\\/]/, "$1-");
+  } else if (s.startsWith("/")) {
+    s = s.slice(1);
+  }
+  return s.replace(/[\\/]+/g, "-").replace(/\./g, "");
+}
+
+/**
+ * cursor-agent writeFileSync's worker.log under CURSOR_CONFIG_DIR/projects/<slug>
+ * without mkdir. With chat-only + CURSOR_CONFIG_DIRS that is ~/.cursor/projects/<temp-slug>.
+ */
+function ensureAgentProjectDir(
+  workspaceDir: string,
+  configDir?: string,
+): void {
+  const cursorDir = configDir ?? path.join(workspaceDir, ".cursor");
+  fs.mkdirSync(path.join(cursorDir, "projects", projectSlugFromPath(workspaceDir)), {
+    recursive: true,
+  });
+}
+
 function acpArgsWithModel(acpArgs: string[], model: string): string[] {
   const i = acpArgs.indexOf("acp");
   if (i === -1) return acpArgs;
@@ -39,6 +65,14 @@ function acpArgsWithWorkspace(acpArgs: string[], workspaceDir: string): string[]
   const i = acpArgs.indexOf("acp");
   if (i === -1) return acpArgs;
   return [...acpArgs.slice(0, i), "--workspace", workspaceDir, ...acpArgs.slice(i)];
+}
+
+/** Insert CLI flags before the `acp` subcommand (same place as --workspace). */
+function acpArgsWithPreFlags(acpArgs: string[], flags: string[]): string[] {
+  if (!flags.length) return acpArgs;
+  const i = acpArgs.indexOf("acp");
+  if (i === -1) return acpArgs;
+  return [...acpArgs.slice(0, i), ...flags, ...acpArgs.slice(i)];
 }
 
 function extractModelFromCmdArgs(cmdArgs: string[]): string | undefined {
@@ -68,6 +102,11 @@ function acpInvocation(
   const model = extractModelFromCmdArgs(cmdArgs);
   const mode = extractModeFromCmdArgs(cmdArgs);
   let args = acpArgsWithWorkspace(config.acpArgs, workspaceDir);
+  // Non-ACP path already passes these via buildAgentFixedArgs; ACP previously ignored FORCE.
+  const preFlags: string[] = [];
+  if (config.force) preFlags.push("--force");
+  if (effectiveChatOnly) preFlags.push("--trust");
+  args = acpArgsWithPreFlags(args, preFlags);
   args = model ? acpArgsWithModel(args, model) : args;
   args = acpArgsWithMode(args, mode);
   const env = { ...config.acpEnv };
@@ -90,6 +129,7 @@ export function runAgentSync(
   signal?: AbortSignal,
   modelDisplayName?: string,
 ): Promise<AgentRunResult> {
+  ensureAgentProjectDir(workspaceDir, configDir);
   if (config.useAcp && typeof stdinPrompt === "string") {
     const invocation = acpInvocation(
       config,
@@ -160,6 +200,7 @@ export function runAgentStream(
   signal?: AbortSignal,
   modelDisplayName?: string,
 ): Promise<{ code: number; stderr: string }> {
+  ensureAgentProjectDir(workspaceDir, configDir);
   if (config.useAcp && typeof stdinPrompt === "string") {
     const invocation = acpInvocation(
       config,
@@ -240,6 +281,7 @@ export async function startAgentToolSession(opts: {
   if (!opts.config.useAcp) {
     throw new Error("Structured tool passthrough requires ACP mode");
   }
+  ensureAgentProjectDir(opts.workspaceDir, opts.configDir);
   const invocation = acpInvocation(
     opts.config,
     opts.workspaceDir,
