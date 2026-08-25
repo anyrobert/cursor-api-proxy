@@ -32,6 +32,12 @@ export type BridgeConfig = {
   requiredKey?: string;
   defaultModel: string;
   mode: CursorExecutionMode;
+  /** Infer agent/plan from trusted DSH system prompt markers when no explicit mode is provided. */
+  dshAutoMode?: boolean;
+  /** Stable marker identifying a DSH-owned system prompt. */
+  dshSystemMarker?: string;
+  /** Stable marker present only while DSH plan mode is active. */
+  dshPlanMarker?: string;
   force: boolean;
   approveMcps: boolean;
   strictModel: boolean;
@@ -98,6 +104,9 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     requiredKey: env.requiredKey,
     defaultModel: env.defaultModel,
     mode: env.mode ?? opts.mode ?? "ask",
+    dshAutoMode: env.dshAutoMode,
+    dshSystemMarker: env.dshSystemMarker,
+    dshPlanMarker: env.dshPlanMarker,
     force: env.force,
     approveMcps: env.approveMcps,
     strictModel: env.strictModel,

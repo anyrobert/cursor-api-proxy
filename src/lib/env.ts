@@ -36,6 +36,9 @@ export type LoadedEnv = {
   /** True when CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE key exists in env. */
   chatOnlyWorkspaceExplicit: boolean;
   mode?: CursorExecutionMode;
+  dshAutoMode: boolean;
+  dshSystemMarker?: string;
+  dshPlanMarker?: string;
   verbose: boolean;
   /** When true, set maxMode in cli-config.json before each run (larger context, more tools). */
   maxMode: boolean;
@@ -388,6 +391,7 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
   );
 
   const mode = tryParseExecutionModeEnv(firstDefined(env, ["CURSOR_BRIDGE_MODE"]));
+  const dshAutoMode = envBool(env, ["CURSOR_BRIDGE_DSH_AUTO_MODE"], false);
 
   return {
     agentBin: resolveAgentBinary(env, platform),
@@ -423,6 +427,9 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
       true,
     ),
     mode,
+    dshAutoMode,
+    dshSystemMarker: envString(env, ["CURSOR_BRIDGE_DSH_SYSTEM_MARKER"]),
+    dshPlanMarker: envString(env, ["CURSOR_BRIDGE_DSH_PLAN_MARKER"]),
     verbose: envBool(env, ["CURSOR_BRIDGE_VERBOSE"], false),
     maxMode: envBool(env, ["CURSOR_BRIDGE_MAX_MODE"], false),
     promptViaStdin: envBool(env, ["CURSOR_BRIDGE_PROMPT_VIA_STDIN"], false),

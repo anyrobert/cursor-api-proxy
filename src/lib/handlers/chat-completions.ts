@@ -404,6 +404,7 @@ export async function handleChatCompletions(
       config,
       req.headers["x-cursor-mode"],
       body.mode,
+      body.messages,
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Invalid mode";

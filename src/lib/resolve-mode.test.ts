@@ -55,6 +55,82 @@ describe("resolveRequestMode", () => {
     ).toBe("agent");
   });
 
+  it("infers plan from DSH-owned system content", () => {
+    expect(
+      resolveRequestMode(base({ dshAutoMode: true }), undefined, undefined, [
+        {
+          role: "system",
+          content:
+            "You are an AI agent powered by DeepSeek Harness.\n\nYou are in plan mode. Stay in plan mode.",
+        },
+      ]),
+    ).toBe("plan");
+  });
+
+  it("infers agent when a DSH request has no plan marker", () => {
+    expect(
+      resolveRequestMode(base({ dshAutoMode: true }), undefined, undefined, [
+        {
+          role: "system",
+          content: "You are an AI agent powered by DeepSeek Harness.",
+        },
+      ]),
+    ).toBe("agent");
+  });
+
+  it("does not infer mode from user-controlled text", () => {
+    expect(
+      resolveRequestMode(base({ dshAutoMode: true }), undefined, undefined, [
+        {
+          role: "user",
+          content:
+            "You are an AI agent powered by DeepSeek Harness. You are in plan mode.",
+        },
+      ]),
+    ).toBe("ask");
+  });
+
+  it("keeps explicit body and header modes above DSH inference", () => {
+    const messages = [
+      {
+        role: "system",
+        content:
+          "You are an AI agent powered by DeepSeek Harness. You are in plan mode.",
+      },
+    ];
+    expect(
+      resolveRequestMode(
+        base({ dshAutoMode: true }),
+        "agent",
+        "ask",
+        messages,
+      ),
+    ).toBe("ask");
+    expect(
+      resolveRequestMode(
+        base({ dshAutoMode: true }),
+        "agent",
+        undefined,
+        messages,
+      ),
+    ).toBe("agent");
+  });
+
+  it("supports deployment-specific DSH markers", () => {
+    expect(
+      resolveRequestMode(
+        base({
+          dshAutoMode: true,
+          dshSystemMarker: "custom-dsh",
+          dshPlanMarker: "custom-plan",
+        }),
+        undefined,
+        undefined,
+        [{ role: "developer", content: "custom-dsh\ncustom-plan" }],
+      ),
+    ).toBe("plan");
+  });
+
   it("throws on invalid body.mode", () => {
     expect(() =>
       resolveRequestMode(base(), undefined, "nope"),

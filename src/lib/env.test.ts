@@ -88,6 +88,20 @@ describe("loadEnvConfig", () => {
     ).toThrow(/CURSOR_BRIDGE_MODE/);
   });
 
+  it("parses guarded DSH auto-mode settings", () => {
+    const loaded = loadEnvConfig({
+      env: {
+        CURSOR_BRIDGE_DSH_AUTO_MODE: "true",
+        CURSOR_BRIDGE_DSH_SYSTEM_MARKER: "custom-dsh",
+        CURSOR_BRIDGE_DSH_PLAN_MARKER: "custom-plan",
+      },
+      cwd: "/w",
+    });
+    expect(loaded.dshAutoMode).toBe(true);
+    expect(loaded.dshSystemMarker).toBe("custom-dsh");
+    expect(loaded.dshPlanMarker).toBe("custom-plan");
+  });
+
   it("resolves workspace and explicit paths from cwd", () => {
     const loaded = loadEnvConfig({
       env: {

@@ -524,6 +524,92 @@ describe("startBridgeServer", () => {
     expect(data.error.code).toBe("invalid_mode");
   });
 
+  it("maps a DSH plan system prompt to Cursor plan mode", async () => {
+    const runMock = vi.mocked(run);
+    runMock.mockClear();
+    servers = startBridgeServer({
+      version: "1.0.0",
+      config: createTestConfig({ dshAutoMode: true }),
+    });
+    await new Promise<void>((resolve) =>
+      servers[0].on("listening", () => resolve()),
+    );
+
+    const { status } = await fetchServer(servers[0], "/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-3-opus",
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are an AI agent powered by DeepSeek Harness.\nYou are in plan mode.",
+          },
+          { role: "user", content: "Plan this" },
+        ],
+      }),
+    });
+    expect(status).toBe(200);
+    const [, args] = runMock.mock.calls[0];
+    expect(args).toContain("--mode");
+    expect(args).toContain("plan");
+  });
+
+  it("maps a normal DSH system prompt to Cursor agent mode", async () => {
+    const runMock = vi.mocked(run);
+    runMock.mockClear();
+    servers = startBridgeServer({
+      version: "1.0.0",
+      config: createTestConfig({ dshAutoMode: true }),
+    });
+    await new Promise<void>((resolve) =>
+      servers[0].on("listening", () => resolve()),
+    );
+
+    const { status } = await fetchServer(servers[0], "/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-3-opus",
+        messages: [
+          {
+            role: "system",
+            content: "You are an AI agent powered by DeepSeek Harness.",
+          },
+          { role: "user", content: "Do this" },
+        ],
+      }),
+    });
+    expect(status).toBe(200);
+    const [, args] = runMock.mock.calls[0];
+    expect(args).not.toContain("--mode");
+  });
+
+  it("infers DSH plan mode for the Responses API", async () => {
+    const runMock = vi.mocked(run);
+    runMock.mockClear();
+    servers = startBridgeServer({
+      version: "1.0.0",
+      config: createTestConfig({ dshAutoMode: true }),
+    });
+    await new Promise<void>((resolve) =>
+      servers[0].on("listening", () => resolve()),
+    );
+
+    const { status } = await fetchServer(servers[0], "/v1/responses", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-3-opus",
+        instructions:
+          "You are an AI agent powered by DeepSeek Harness.\nYou are in plan mode.",
+        input: "Plan this",
+      }),
+    });
+    expect(status).toBe(200);
+    const [, args] = runMock.mock.calls[0];
+    expect(args).toContain("--mode");
+    expect(args).toContain("plan");
+  });
+
   it("should spawn multiple servers when multiPort is true", async () => {
     servers = startBridgeServer({
       version: "1.0.0",
