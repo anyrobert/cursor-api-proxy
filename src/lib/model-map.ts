@@ -7,11 +7,33 @@ export type ModelResolutionDecision = {
   requested?: string;
   mapped?: string;
   final: string;
+  reasoningEffort?: CursorReasoningEffort;
   requestedWasDefault: boolean;
   validated: boolean;
   fallbackUsed: boolean;
   fallbackReason?: string;
 };
+
+export type CursorReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
+export class UnsupportedReasoningEffortError extends Error {
+  readonly code = "unsupported_reasoning_effort";
+
+  constructor(
+    readonly model: string,
+    readonly effort: string,
+  ) {
+    super(`Cursor model "${model}" does not offer reasoning effort "${effort}"`);
+    this.name = "UnsupportedReasoningEffortError";
+  }
+}
 
 /** Anthropic-style model name (any case) -> Cursor CLI model id */
 const ANTHROPIC_TO_CURSOR: Record<string, string> = {
@@ -93,16 +115,112 @@ function matchAvailableModel(
   return byLower.get(candidate.toLowerCase());
 }
 
+const EFFORT_ALIASES: Record<string, CursorReasoningEffort> = {
+  off: "none",
+  none: "none",
+  minimal: "minimal",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "xhigh",
+  "extra-high": "xhigh",
+  extra_high: "xhigh",
+  max: "max",
+};
+
+const EFFORT_SUFFIXES = [
+  "extra-high",
+  "minimal",
+  "medium",
+  "xhigh",
+  "high",
+  "none",
+  "low",
+  "max",
+] as const;
+
+function normalizeReasoningEffort(
+  effort: string | undefined,
+): CursorReasoningEffort | undefined {
+  if (!effort?.trim()) return undefined;
+  return EFFORT_ALIASES[effort.trim().toLowerCase()];
+}
+
+function splitFastSuffix(model: string): { base: string; fast: boolean } {
+  return model.toLowerCase().endsWith("-fast")
+    ? { base: model.slice(0, -5), fast: true }
+    : { base: model, fast: false };
+}
+
+function stripEffortSuffix(model: string): string {
+  const lower = model.toLowerCase();
+  const suffix = EFFORT_SUFFIXES.find((value) =>
+    lower.endsWith(`-${value}`),
+  );
+  return suffix ? model.slice(0, -(suffix.length + 1)) : model;
+}
+
+function effortSuffixCandidates(effort: CursorReasoningEffort): string[] {
+  if (effort === "xhigh") return ["xhigh", "extra-high"];
+  return [effort];
+}
+
+function resolveReasoningModel(args: {
+  model: string;
+  effort: CursorReasoningEffort;
+  availableCursorIds: string[];
+}): string | undefined {
+  if (args.model === "default" || args.model === "auto") return undefined;
+
+  const { base: withoutFast, fast } = splitFastSuffix(args.model);
+  const base = stripEffortSuffix(withoutFast);
+  for (const suffix of effortSuffixCandidates(args.effort)) {
+    const candidate = `${base}-${suffix}${fast ? "-fast" : ""}`;
+    const matched = matchAvailableModel(candidate, args.availableCursorIds);
+    if (matched) return matched;
+  }
+  return undefined;
+}
+
 export function resolveModelForExecution(args: {
   requested: string | undefined;
   defaultModel: string;
   availableCursorIds: string[];
+  reasoningEffort?: string;
 }): ModelResolutionDecision {
   const requested = args.requested?.trim();
   const requestedWasDefault = requested === "default";
   const mapped = requestedWasDefault
     ? "default"
     : resolveToCursorModel(requested) ?? args.defaultModel;
+  const reasoningEffort = normalizeReasoningEffort(args.reasoningEffort);
+
+  if (args.reasoningEffort && !reasoningEffort) {
+    throw new UnsupportedReasoningEffortError(
+      mapped,
+      args.reasoningEffort,
+    );
+  }
+
+  if (reasoningEffort) {
+    const reasoningModel = resolveReasoningModel({
+      model: mapped,
+      effort: reasoningEffort,
+      availableCursorIds: args.availableCursorIds,
+    });
+    if (!reasoningModel) {
+      throw new UnsupportedReasoningEffortError(mapped, reasoningEffort);
+    }
+    return {
+      requested,
+      mapped,
+      final: reasoningModel,
+      reasoningEffort,
+      requestedWasDefault,
+      validated: true,
+      fallbackUsed: false,
+    };
+  }
 
   if (mapped === "default") {
     return {

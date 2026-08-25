@@ -9,6 +9,7 @@ export type OpenAiChatCompletionRequest = {
   parallel_tool_calls?: boolean;
   functions?: any[];
   function_call?: any;
+  reasoning_effort?: string;
 };
 
 export type OpenAiResponsesRequest = {

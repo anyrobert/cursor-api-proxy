@@ -25,7 +25,10 @@ import {
 } from "../agent-runner.js";
 import type { ToolTurnEvent, ToolTurnResult } from "../acp-tool-session.js";
 import { createStreamParser } from "../cli-stream-parser.js";
-import { resolveModelForExecution } from "../model-map.js";
+import {
+  resolveModelForExecution,
+  UnsupportedReasoningEffortError,
+} from "../model-map.js";
 import {
   buildPromptFromMessages,
   normalizeModelId,
@@ -510,11 +513,28 @@ export async function handleResponses(
   const requested = normalizeModelId(body.model);
   const model = resolveModel(requested, lastRequestedModelRef, config);
   const models = await getCachedCursorModels(config, modelCacheRef);
-  const decision = resolveModelForExecution({
-    requested: model,
-    defaultModel: config.defaultModel,
-    availableCursorIds: models.map((m) => m.id),
-  });
+  let decision;
+  try {
+    decision = resolveModelForExecution({
+      requested: model,
+      defaultModel: config.defaultModel,
+      availableCursorIds: models.map((m) => m.id),
+      reasoningEffort:
+        typeof body.reasoning?.effort === "string"
+          ? body.reasoning.effort
+          : undefined,
+    });
+  } catch (error) {
+    if (!(error instanceof UnsupportedReasoningEffortError)) throw error;
+    json(res, 400, {
+      error: {
+        message: error.message,
+        code: error.code,
+        type: "invalid_request_error",
+      },
+    });
+    return;
+  }
   const cursorModel = decision.final;
   rememberResolvedModel(cursorModel, lastRequestedModelRef);
   logModelResolution(config.verbose, decision);

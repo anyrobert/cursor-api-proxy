@@ -234,6 +234,23 @@ const client = new OpenAI({
 | POST   | `/v1/responses`        | Responses text + `function_call`; supports semantic SSE streaming     |
 | POST   | `/v1/messages`         | Anthropic Messages + `tool_use`; supports `stream: true`              |
 
+### Reasoning effort
+
+OpenAI clients can select a Cursor reasoning variant without hard-coding its
+full Cursor model ID:
+
+- Chat Completions: `reasoning_effort`
+- Responses: `reasoning.effort`
+
+For example, model `gpt-5.6-sol` with effort `high` resolves to
+`gpt-5.6-sol-high` when that ID is present in the live `agent --list-models`
+catalog. Explicit variants can be retargeted, and `-fast` is preserved
+(`gpt-5.6-sol-high-fast` plus `low` resolves to
+`gpt-5.6-sol-low-fast`). Supported spellings are `none`/`off`, `minimal`,
+`low`, `medium`, `high`, `xhigh`/`extra-high`, and `max`. The API returns
+`400 unsupported_reasoning_effort` instead of silently choosing another model
+when the requested family does not offer that level.
+
 Usage and token fields: responses may include `usage` token fields (`prompt_tokens`/`completion_tokens` for Chat Completions, `input_tokens`/`output_tokens` for Responses). These are heuristic estimates (character count ÷ 4), not Cursor billing meters. Do not use them for invoicing.
 
 ## Environment variables

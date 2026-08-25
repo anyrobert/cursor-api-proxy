@@ -11,6 +11,8 @@ vi.mock("./cursor-cli.js", () => ({
   listCursorCliModels: vi.fn().mockResolvedValue([
     { id: "claude-3-opus", name: "Claude 3 Opus" },
     { id: "claude-3-sonnet", name: "Claude 3 Sonnet" },
+    { id: "gpt-5.6-sol-low", name: "GPT-5.6 Sol Low" },
+    { id: "gpt-5.6-sol-high", name: "GPT-5.6 Sol High" },
   ]),
 }));
 
@@ -160,7 +162,7 @@ describe("startBridgeServer", () => {
     expect(status).toBe(200);
     const data = JSON.parse(body);
     expect(data.object).toBe("list");
-    expect(data.data).toHaveLength(2);
+    expect(data.data).toHaveLength(4);
     expect(data.data[0].id).toBe("claude-3-opus");
   });
 
@@ -367,6 +369,79 @@ describe("startBridgeServer", () => {
     expect(data.output_text).toBe("Hello from agent");
     expect(data.usage.input_tokens).toBeGreaterThan(0);
     expect(data.usage.output_tokens).toBeGreaterThan(0);
+  });
+
+  it("maps Chat Completions reasoning_effort to a Cursor model variant", async () => {
+    const runMock = vi.mocked(run);
+    runMock.mockClear();
+    servers = startBridgeServer({
+      version: "1.0.0",
+      config: createTestConfig(),
+    });
+    await new Promise<void>((resolve) =>
+      servers[0].on("listening", () => resolve()),
+    );
+
+    const { status } = await fetchServer(servers[0], "/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "gpt-5.6-sol",
+        reasoning_effort: "high",
+        messages: [{ role: "user", content: "Hi" }],
+      }),
+    });
+    expect(status).toBe(200);
+    const [, args] = runMock.mock.calls[0];
+    expect(args).toContain("gpt-5.6-sol-high");
+  });
+
+  it("maps Responses reasoning.effort to a Cursor model variant", async () => {
+    const runMock = vi.mocked(run);
+    runMock.mockClear();
+    servers = startBridgeServer({
+      version: "1.0.0",
+      config: createTestConfig(),
+    });
+    await new Promise<void>((resolve) =>
+      servers[0].on("listening", () => resolve()),
+    );
+
+    const { status } = await fetchServer(servers[0], "/v1/responses", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "gpt-5.6-sol",
+        reasoning: { effort: "low" },
+        input: "Hi",
+      }),
+    });
+    expect(status).toBe(200);
+    const [, args] = runMock.mock.calls[0];
+    expect(args).toContain("gpt-5.6-sol-low");
+  });
+
+  it("rejects reasoning effort unavailable for the model family", async () => {
+    servers = startBridgeServer({
+      version: "1.0.0",
+      config: createTestConfig(),
+    });
+    await new Promise<void>((resolve) =>
+      servers[0].on("listening", () => resolve()),
+    );
+
+    const { status, body } = await fetchServer(
+      servers[0],
+      "/v1/chat/completions",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          model: "claude-3-opus",
+          reasoning_effort: "max",
+          messages: [{ role: "user", content: "Hi" }],
+        }),
+      },
+    );
+    expect(status).toBe(400);
+    expect(JSON.parse(body).error.code).toBe("unsupported_reasoning_effort");
   });
 
   it("streams OpenAI Responses semantic SSE events", async () => {
