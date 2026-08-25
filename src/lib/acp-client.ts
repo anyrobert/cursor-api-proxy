@@ -239,10 +239,21 @@ export function resolveAcpModelConfigValue(
   aliases: readonly string[] = [],
 ): string {
   if (!availableModels?.length) return displayName;
+  const expand = (value: string): string[] => {
+    const v = value.trim().toLowerCase();
+    if (!v) return [];
+    const out = new Set([v]);
+    // CLI ids like cursor-grok-4.5-high / cursor-grok-4.5-high-fast → grok-4.5
+    const stripped = v
+      .replace(/^cursor-/, "")
+      .replace(/-(?:low|medium|high|xhigh|extra-high)(?:-fast)?$/, "")
+      .replace(/-fast$/, "");
+    out.add(stripped);
+    if (v === "auto") out.add("default[]");
+    return [...out];
+  };
   const candidates = new Set(
-    [displayName, ...aliases]
-      .map((value) => value.trim().toLowerCase())
-      .filter(Boolean),
+    [displayName, ...aliases].flatMap(expand).filter(Boolean),
   );
   const hit = availableModels.find((model) => {
     const modelId = model.modelId.trim().toLowerCase();
@@ -488,7 +499,8 @@ export function runAcpSync(
           if (
             resolvedModelId === "default[]" &&
             opts.strictModel &&
-            opts.model !== "default"
+            opts.model !== "default" &&
+            opts.model !== "auto"
           ) {
             throw new Error(
               `ACP model catalog has no match for ${JSON.stringify(opts.model)}`,
@@ -698,7 +710,8 @@ export function runAcpStream(
           if (
             resolvedModelId === "default[]" &&
             opts.strictModel &&
-            opts.model !== "default"
+            opts.model !== "default" &&
+            opts.model !== "auto"
           ) {
             throw new Error(
               `ACP model catalog has no match for ${JSON.stringify(opts.model)}`,
