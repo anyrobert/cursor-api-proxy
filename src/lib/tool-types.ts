@@ -149,6 +149,13 @@ export function parseOpenAiFunctionTools(
     const tool = asRecord(value);
     if (!tool) throw new Error("Invalid tool definition");
 
+    if (tool.type === "tool_search" || tool.type === "web_search") {
+      // Provider-executed Responses tools cannot be round-tripped through the
+      // client-owned MCP bridge. Ignore them here; Cursor may use equivalent
+      // native capabilities independently.
+      continue;
+    }
+
     if (tool.type === "namespace") {
       if (typeof tool.name !== "string" || !tool.name.trim()) {
         throw new Error("Namespace tool is missing name");
