@@ -3,7 +3,7 @@ import * as http from "node:http";
 import type * as https from "node:https";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BridgeConfig } from "./config.js";
-import { run } from "./process.js";
+import { run, runStreaming } from "./process.js";
 import { appendSessionLine } from "./request-log.js";
 import { startBridgeServer } from "./server.js";
 
@@ -472,7 +472,37 @@ describe("startBridgeServer", () => {
     expect(body).toContain("event: response.output_text.delta");
     expect(body).toContain('"delta":"Hello"');
     expect(body).toContain("event: response.completed");
-    expect(body).toContain("data: [DONE]");
+    expect(body).not.toContain("data: [DONE]");
+    expect(body).not.toContain("event: error");
+  });
+
+  it("emits response.failed instead of closing Responses SSE without a terminal event", async () => {
+    vi.mocked(runStreaming).mockImplementationOnce(async () => ({
+      code: 1,
+      stderr: "Authentication required",
+    }));
+    servers = startBridgeServer({
+      version: "1.0.0",
+      config: createTestConfig(),
+    });
+    await new Promise<void>((resolve) =>
+      servers[0].on("listening", () => resolve()),
+    );
+
+    const { status, body } = await fetchServer(servers[0], "/v1/responses", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-3-opus",
+        input: "Hi",
+        stream: true,
+      }),
+    });
+    expect(status).toBe(200);
+    expect(body).toContain("event: response.failed");
+    expect(body).toContain("cursor_cli_error");
+    expect(body).not.toContain("event: error");
+    expect(body).not.toContain("data: [DONE]");
+    expect(body).not.toContain("event: response.completed");
   });
 
   it("keeps the prompt out of argv and passes it via stdin when promptViaStdin is true (non-streaming)", async () => {

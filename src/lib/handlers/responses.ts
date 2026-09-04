@@ -345,8 +345,7 @@ async function writeStructuredResponseTurn(opts: {
       messageId,
     }),
   });
-  opts.res.write("data: [DONE]\n\n");
-  opts.res.end();
+  endResponseStream(opts.res, "structured-response-completed");
   return result;
 }
 
@@ -438,13 +437,75 @@ function createOutputItem(
   };
 }
 
+function sseDebugEnabled(): boolean {
+  return /^(1|true|yes|on)$/i.test(
+    String(process.env["CURSOR_BRIDGE_SSE_DEBUG"] ?? "").trim(),
+  );
+}
+
+/**
+ * Codex 0.153.2 Responses SSE treats stream end without a successfully parsed
+ * `response.completed` as a retryable disconnect ("stream closed before
+ * response.completed"). Chat Completions markers (`error` + `data: [DONE]`) are
+ * not terminal for that parser.
+ */
 function writeResponseEvent(
   res: http.ServerResponse,
   type: string,
   data: Record<string, unknown>,
 ): void {
-  res.write(`event: ${type}\n`);
-  res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+  const payload = JSON.stringify({ type, ...data });
+  if (sseDebugEnabled()) {
+    console.error(
+      `[sse-debug ${new Date().toISOString()}] write type=${type} writableEnded=${res.writableEnded} destroyed=${res.destroyed} bytes=${payload.length} data=${payload}`,
+    );
+  }
+  if (res.writableEnded || res.destroyed) {
+    if (sseDebugEnabled()) {
+      console.error(
+        `[sse-debug ${new Date().toISOString()}] skipped write type=${type}: response already closed`,
+      );
+    }
+    return;
+  }
+  try {
+    res.write(`event: ${type}\n`);
+    res.write(`data: ${payload}\n\n`);
+  } catch (error) {
+    if (sseDebugEnabled()) {
+      console.error(
+        `[sse-debug ${new Date().toISOString()}] write failed type=${type}:`,
+        error,
+      );
+    }
+    throw error;
+  }
+}
+
+function writeResponseFailed(
+  res: http.ServerResponse,
+  id: string,
+  error: { message: string; code: string },
+): void {
+  writeResponseEvent(res, "response.failed", {
+    response: {
+      id,
+      object: "response",
+      status: "failed",
+      error,
+    },
+  });
+}
+
+function endResponseStream(res: http.ServerResponse, reason: string): void {
+  if (sseDebugEnabled()) {
+    console.error(
+      `[sse-debug ${new Date().toISOString()}] end reason=${reason} writableEnded=${res.writableEnded} destroyed=${res.destroyed}`,
+    );
+  }
+  if (!res.writableEnded) {
+    res.end();
+  }
 }
 
 function responseContentText(message: unknown): string {
@@ -692,18 +753,11 @@ export async function handleResponses(
           },
         });
       } else if (!res.writableEnded) {
-        writeResponseEvent(res, "response.failed", {
-          response: {
-            id,
-            object: "response",
-            status: "failed",
-            error: {
-              message: error instanceof Error ? error.message : String(error),
-              code: "tool_session_error",
-            },
-          },
+        writeResponseFailed(res, id, {
+          message: error instanceof Error ? error.message : String(error),
+          code: "tool_session_error",
         });
-        res.end();
+        endResponseStream(res, "tool-resume-failed");
       }
     } finally {
       reportRequestEnd(configDir);
@@ -875,18 +929,11 @@ export async function handleResponses(
           },
         });
       } else if (!res.writableEnded) {
-        writeResponseEvent(res, "response.failed", {
-          response: {
-            id,
-            object: "response",
-            status: "failed",
-            error: {
-              message: error instanceof Error ? error.message : String(error),
-              code: "tool_session_error",
-            },
-          },
+        writeResponseFailed(res, id, {
+          message: error instanceof Error ? error.message : String(error),
+          code: "tool_session_error",
         });
-        res.end();
+        endResponseStream(res, "tool-start-failed");
       }
     } finally {
       reportRequestEnd(configDir);
@@ -945,7 +992,10 @@ export async function handleResponses(
       return accumulated + chunk;
     };
 
+    let terminalSent = false;
     const finishStream = (accumulated: string) => {
+      if (terminalSent || res.writableEnded || res.destroyed) return;
+      terminalSent = true;
       logTrafficResponse(
         config.verbose,
         model ?? cursorModel,
@@ -987,7 +1037,14 @@ export async function handleResponses(
           completionTokens,
         }),
       });
-      res.write("data: [DONE]\n\n");
+      endResponseStream(res, "text-stream-completed");
+    };
+
+    const failStream = (message: string, code = "cursor_cli_error") => {
+      if (terminalSent || res.writableEnded || res.destroyed) return;
+      terminalSent = true;
+      writeResponseFailed(res, id, { message, code });
+      endResponseStream(res, "text-stream-failed");
     };
 
     if (config.useAcp && typeof promptForAgent === "string") {
@@ -1015,7 +1072,7 @@ export async function handleResponses(
           }
 
           if (abortController.signal.aborted) {
-            /* client disconnected — do not count as success or failure */
+            endResponseStream(res, "acp-stream-aborted");
           } else if (code !== 0) {
             reportRequestError(configDir, latencyMs);
             const publicMsg = logAgentError(
@@ -1026,38 +1083,28 @@ export async function handleResponses(
               code,
               stderrOut,
             );
-            writeResponseEvent(res, "error", {
-              error: { message: publicMsg, code: "cursor_cli_error" },
-            });
-            res.write("data: [DONE]\n\n");
             logAccountStats(config.verbose, getAccountStats());
-            res.end();
-            return;
+            failStream(publicMsg);
           } else {
             reportRequestSuccess(configDir, latencyMs);
+            logAccountStats(config.verbose, getAccountStats());
+            finishStream(accumulated);
           }
-          logAccountStats(config.verbose, getAccountStats());
-          finishStream(accumulated);
-          res.end();
         })
         .catch((err) => {
           reportRequestEnd(configDir);
           if (!abortController.signal.aborted) {
             reportRequestError(configDir, Date.now() - streamStart);
-            writeResponseEvent(res, "error", {
-              error: {
-                message:
-                  "The Cursor agent stream failed. See server logs for details.",
-                code: "cursor_cli_error",
-              },
-            });
-            res.write("data: [DONE]\n\n");
+            failStream(
+              "The Cursor agent stream failed. See server logs for details.",
+            );
+          } else {
+            endResponseStream(res, "acp-stream-catch-aborted");
           }
           console.error(
             `[${new Date().toISOString()}] Agent stream error:`,
             err,
           );
-          res.end();
         });
       return;
     }
@@ -1093,10 +1140,10 @@ export async function handleResponses(
         }
 
         if (abortController.signal.aborted) {
-          /* client disconnected — do not count as success or failure */
+          endResponseStream(res, "cli-stream-aborted");
         } else if (code !== 0) {
           reportRequestError(configDir, latencyMs);
-          logAgentError(
+          const publicMsg = logAgentError(
             config.sessionsLogPath,
             method,
             pathname,
@@ -1104,19 +1151,26 @@ export async function handleResponses(
             code,
             stderrOut,
           );
+          logAccountStats(config.verbose, getAccountStats());
+          failStream(publicMsg);
         } else {
           reportRequestSuccess(configDir, latencyMs);
+          logAccountStats(config.verbose, getAccountStats());
+          // CLI may exit 0 without emitting result/success; still terminate.
+          finishStream(accumulated);
         }
-        logAccountStats(config.verbose, getAccountStats());
-        res.end();
       })
       .catch((err) => {
         reportRequestEnd(configDir);
         if (!abortController.signal.aborted) {
           reportRequestError(configDir, Date.now() - streamStart);
+          failStream(
+            "The Cursor agent stream failed. See server logs for details.",
+          );
+        } else {
+          endResponseStream(res, "cli-stream-catch-aborted");
         }
         console.error(`[${new Date().toISOString()}] Agent stream error:`, err);
-        res.end();
       });
     return;
   }

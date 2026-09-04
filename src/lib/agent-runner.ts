@@ -69,6 +69,14 @@ function extractModeFromCmdArgs(cmdArgs: string[]): CursorExecutionMode {
   return "ask";
 }
 
+function acpArgsWithForce(acpArgs: string[], force: boolean): string[] {
+  if (!force) return acpArgs;
+  const i = acpArgs.indexOf("acp");
+  if (i === -1) return acpArgs;
+  // Non-interactive proxy cannot answer workspace trust prompts.
+  return [...acpArgs.slice(0, i), "--force", "--trust", ...acpArgs.slice(i)];
+}
+
 function acpInvocation(
   config: BridgeConfig,
   workspaceDir: string,
@@ -83,6 +91,7 @@ function acpInvocation(
   const model = extractModelFromCmdArgs(cmdArgs);
   const mode = extractModeFromCmdArgs(cmdArgs);
   let args = acpArgsWithWorkspace(config.acpArgs, workspaceDir);
+  args = acpArgsWithForce(args, config.force || !effectiveChatOnly);
   args = model ? acpArgsWithModel(args, model) : args;
   args = acpArgsWithMode(args, mode);
   const env = { ...config.acpEnv };
