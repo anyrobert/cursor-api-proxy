@@ -2,6 +2,8 @@ export type ClientToolDefinition = {
   name: string;
   description?: string;
   inputSchema: Record<string, unknown>;
+  responseName?: string;
+  responseNamespace?: string;
 };
 
 export type ClientToolOutput = {
@@ -14,6 +16,7 @@ export type PendingClientToolCall = {
   callId: string;
   itemId: string;
   name: string;
+  namespace?: string;
   arguments: string;
 };
 
@@ -57,7 +60,7 @@ function pushUnique(
 
 /**
  * Parse OpenAI Chat Completions (`function` wrapper), Responses (flat
- * function), and legacy Chat `functions` definitions.
+ * function and namespace), and legacy Chat `functions` definitions.
  */
 export function parseOpenAiFunctionTools(
   tools?: readonly unknown[],
@@ -69,6 +72,43 @@ export function parseOpenAiFunctionTools(
   for (const value of tools ?? []) {
     const tool = asRecord(value);
     if (!tool) throw new Error("Invalid tool definition");
+
+    if (tool.type === "namespace") {
+      if (typeof tool.name !== "string" || !tool.name.trim()) {
+        throw new Error("Namespace tool is missing name");
+      }
+      if (!Array.isArray(tool.tools)) {
+        throw new Error(`Namespace ${tool.name} is missing tools`);
+      }
+      for (const nestedValue of tool.tools) {
+        const nested = asRecord(nestedValue);
+        if (!nested) throw new Error(`Invalid tool in namespace ${tool.name}`);
+        if (nested.type !== "function") {
+          throw new Error(
+            `Unsupported tool type in namespace ${tool.name}: ${
+              typeof nested.type === "string" ? nested.type : "unknown"
+            }`,
+          );
+        }
+        const wrapped = asRecord(nested.function);
+        const fn = wrapped ?? nested;
+        if (typeof fn.name !== "string") {
+          throw new Error(
+            `Function tool in namespace ${tool.name} is missing name`,
+          );
+        }
+        pushUnique(out, seen, {
+          name: `${tool.name}__${fn.name}`,
+          responseName: fn.name,
+          responseNamespace: tool.name,
+          description:
+            typeof fn.description === "string" ? fn.description : undefined,
+          inputSchema: schemaOrDefault(fn.parameters),
+        });
+      }
+      continue;
+    }
+
     if (tool.type !== "function") {
       throw new Error(
         `Unsupported tool type: ${
@@ -128,10 +168,21 @@ export function parseAnthropicFunctionTools(
 function namedChoice(choice: unknown): string | undefined {
   const rec = asRecord(choice);
   if (!rec) return undefined;
-  if (typeof rec.name === "string") return rec.name;
   const fn = asRecord(rec.function);
-  if (fn && typeof fn.name === "string") return fn.name;
-  return undefined;
+  const name =
+    typeof rec.name === "string"
+      ? rec.name
+      : fn && typeof fn.name === "string"
+        ? fn.name
+        : undefined;
+  if (!name) return undefined;
+  const namespace =
+    typeof rec.namespace === "string"
+      ? rec.namespace
+      : fn && typeof fn.namespace === "string"
+        ? fn.namespace
+        : undefined;
+  return namespace ? `${namespace}__${name}` : name;
 }
 
 export function resolveToolChoice(
