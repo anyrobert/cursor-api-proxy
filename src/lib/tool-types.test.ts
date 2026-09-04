@@ -119,9 +119,20 @@ describe("tool normalization", () => {
     ]);
   });
 
-  it("rejects unsupported and duplicate tools", () => {
+  it("ignores provider-executed tools and rejects unknown/duplicate tools", () => {
+    expect(
+      parseOpenAiFunctionTools([
+        { type: "web_search" },
+        {
+          type: "tool_search",
+          execution: "server",
+          description: "Search deferred tools",
+          parameters: { type: "object", properties: {} },
+        },
+      ]),
+    ).toEqual([]);
     expect(() =>
-      parseOpenAiFunctionTools([{ type: "web_search" }]),
+      parseOpenAiFunctionTools([{ type: "computer" }]),
     ).toThrow(/Unsupported tool type/);
     expect(() =>
       parseOpenAiFunctionTools([
