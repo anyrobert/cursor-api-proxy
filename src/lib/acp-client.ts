@@ -4,8 +4,8 @@
  * See https://cursor.com/docs/cli/acp and https://agentclientprotocol.com/
  */
 
-import * as readline from "node:readline";
 import { spawn } from "node:child_process";
+import * as readline from "node:readline";
 import { debuglog } from "node:util";
 
 import { trackChildProcess } from "./process.js";
@@ -157,10 +157,14 @@ function handleAcpNotification(
   },
 ): boolean {
   if (msg.method === "session/update") {
-    const update = (msg.params?.update ?? msg.params) as {
-      sessionUpdate?: string;
-      content?: { text?: string } | Array<{ content?: { text?: string }; text?: string }>;
-    } | undefined;
+    const update = (msg.params?.update ?? msg.params) as
+      | {
+          sessionUpdate?: string;
+          content?:
+            | { text?: string }
+            | Array<{ content?: { text?: string }; text?: string }>;
+        }
+      | undefined;
     const content = update?.content;
     const text = extractAcpUpdateText(content);
     const sessionUpdate = update?.sessionUpdate;
@@ -180,7 +184,10 @@ function handleAcpNotification(
         JSON.stringify({
           sessionUpdate,
           hasContent: !!content,
-          contentKeys: content && typeof content === "object" && !Array.isArray(content) ? Object.keys(content) : [],
+          contentKeys:
+            content && typeof content === "object" && !Array.isArray(content)
+              ? Object.keys(content)
+              : [],
         }),
       );
     }
@@ -200,8 +207,15 @@ function handleAcpNotification(
     const method = String(msg.method);
     if (method.startsWith("cursor/")) {
       const params = msg.params as Record<string, unknown> | undefined;
-      if (method === "cursor/ask_question" && params?.options && Array.isArray(params.options)) {
-        const options = params.options as Array<{ id?: string; label?: string }>;
+      if (
+        method === "cursor/ask_question" &&
+        params?.options &&
+        Array.isArray(params.options)
+      ) {
+        const options = params.options as Array<{
+          id?: string;
+          label?: string;
+        }>;
         const first = options[0];
         console.warn(
           "[cursor-api-proxy:acp] cursor/ask_question auto-selecting first option: id=%s (total=%d)",
@@ -270,13 +284,16 @@ function sendRequest(
   params: object,
   pending: Map<
     number,
-    { resolve: (value: unknown) => void; reject: (err: Error) => void; timerId?: ReturnType<typeof setTimeout> }
+    {
+      resolve: (value: unknown) => void;
+      reject: (err: Error) => void;
+      timerId?: ReturnType<typeof setTimeout>;
+    }
   >,
   requestTimeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
 ): Promise<unknown> {
   const id = nextId.current++;
-  const line =
-    JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n";
+  const line = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
   stdin.write(line, "utf8");
   return new Promise((resolve, reject) => {
     let timerId: ReturnType<typeof setTimeout> | undefined;
@@ -284,7 +301,9 @@ function sendRequest(
       timerId = setTimeout(() => {
         if (pending.has(id)) {
           pending.delete(id);
-          reject(new Error(`ACP ${method} timed out after ${requestTimeoutMs}ms`));
+          reject(
+            new Error(`ACP ${method} timed out after ${requestTimeoutMs}ms`),
+          );
         }
       }, requestTimeoutMs);
     }
@@ -302,8 +321,12 @@ function sendRequest(
   });
 }
 
-function respond(stdin: NodeJS.WritableStream, id: number, result: object): void {
-  const line = JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n";
+function respond(
+  stdin: NodeJS.WritableStream,
+  id: number,
+  result: object,
+): void {
+  const line = `${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`;
   stdin.write(line, "utf8");
 }
 
@@ -381,7 +404,11 @@ export function runAcpSync(
     const nextId = { current: 1 };
     const pending = new Map<
       number,
-      { resolve: (value: unknown) => void; reject: (err: Error) => void; timerId?: ReturnType<typeof setTimeout> }
+      {
+        resolve: (value: unknown) => void;
+        reject: (err: Error) => void;
+        timerId?: ReturnType<typeof setTimeout>;
+      }
     >();
 
     const rl = readline.createInterface({ input: child.stdout! });
@@ -393,9 +420,14 @@ export function runAcpSync(
         const msg = parseAcpStdoutLine(line);
         if (!msg) return;
 
-        if (msg.id != null && (msg.result !== undefined || msg.error !== undefined)) {
+        if (
+          msg.id != null &&
+          (msg.result !== undefined || msg.error !== undefined)
+        ) {
           const reqId = typeof msg.id === "number" ? msg.id : Number(msg.id);
-          const waiter = Number.isFinite(reqId) ? pending.get(reqId) : undefined;
+          const waiter = Number.isFinite(reqId)
+            ? pending.get(reqId)
+            : undefined;
           if (waiter) {
             pending.delete(reqId);
             if (msg.error) {
@@ -443,20 +475,34 @@ export function runAcpSync(
       }
       try {
         debugAcp("ACP step: initialize");
-        await sendRequest(child.stdin, nextId, "initialize", {
-          protocolVersion: 1,
-          clientCapabilities: {
-            fs: { readTextFile: false, writeTextFile: false },
-            terminal: false,
+        await sendRequest(
+          child.stdin,
+          nextId,
+          "initialize",
+          {
+            protocolVersion: 1,
+            clientCapabilities: {
+              fs: { readTextFile: false, writeTextFile: false },
+              terminal: false,
+            },
+            clientInfo: { name: "cursor-api-proxy", version: "0.1.0" },
           },
-          clientInfo: { name: "cursor-api-proxy", version: "0.1.0" },
-        }, pending, requestTimeoutMs);
+          pending,
+          requestTimeoutMs,
+        );
 
         if (!opts.skipAuthenticate) {
           debugAcp("ACP step: authenticate");
-          await sendRequest(child.stdin, nextId, "authenticate", {
-            methodId: "cursor_login",
-          }, pending, requestTimeoutMs);
+          await sendRequest(
+            child.stdin,
+            nextId,
+            "authenticate",
+            {
+              methodId: "cursor_login",
+            },
+            pending,
+            requestTimeoutMs,
+          );
         } else {
           debugAcp("ACP step: authenticate (skipped, pre-authenticated)");
         }
@@ -494,7 +540,10 @@ export function runAcpSync(
               `ACP model catalog has no match for ${JSON.stringify(opts.model)}`,
             );
           }
-          if (resolvedModelId !== "default" && resolvedModelId !== "default[]") {
+          if (
+            resolvedModelId !== "default" &&
+            resolvedModelId !== "default[]"
+          ) {
             debugAcp("ACP step: session/set_config_option (model)");
             await sendRequest(
               child.stdin,
@@ -512,12 +561,22 @@ export function runAcpSync(
         }
 
         debugAcp("ACP step: session/prompt");
-        await sendRequest(child.stdin, nextId, "session/prompt", {
-          sessionId,
-          prompt: [{ type: "text", text: prompt }],
-        }, pending, requestTimeoutMs);
+        await sendRequest(
+          child.stdin,
+          nextId,
+          "session/prompt",
+          {
+            sessionId,
+            prompt: [{ type: "text", text: prompt }],
+          },
+          pending,
+          requestTimeoutMs,
+        );
         if (accumulated.length === 0) {
-          debugAcp("ACP sync: no content accumulated; stderr tail: %s", stderr.slice(-500));
+          debugAcp(
+            "ACP sync: no content accumulated; stderr tail: %s",
+            stderr.slice(-500),
+          );
         }
         finish(0);
       } catch {
@@ -596,7 +655,11 @@ export function runAcpStream(
     const nextId = { current: 1 };
     const pending = new Map<
       number,
-      { resolve: (value: unknown) => void; reject: (err: Error) => void; timerId?: ReturnType<typeof setTimeout> }
+      {
+        resolve: (value: unknown) => void;
+        reject: (err: Error) => void;
+        timerId?: ReturnType<typeof setTimeout>;
+      }
     >();
 
     const rl = readline.createInterface({ input: child.stdout! });
@@ -608,9 +671,14 @@ export function runAcpStream(
         const msg = parseAcpStdoutLine(line);
         if (!msg) return;
 
-        if (msg.id != null && (msg.result !== undefined || msg.error !== undefined)) {
+        if (
+          msg.id != null &&
+          (msg.result !== undefined || msg.error !== undefined)
+        ) {
           const reqId = typeof msg.id === "number" ? msg.id : Number(msg.id);
-          const waiter = Number.isFinite(reqId) ? pending.get(reqId) : undefined;
+          const waiter = Number.isFinite(reqId)
+            ? pending.get(reqId)
+            : undefined;
           if (waiter) {
             pending.delete(reqId);
             if (msg.error) {
@@ -653,20 +721,34 @@ export function runAcpStream(
       }
       try {
         debugAcp("ACP step: initialize");
-        await sendRequest(child.stdin, nextId, "initialize", {
-          protocolVersion: 1,
-          clientCapabilities: {
-            fs: { readTextFile: false, writeTextFile: false },
-            terminal: false,
+        await sendRequest(
+          child.stdin,
+          nextId,
+          "initialize",
+          {
+            protocolVersion: 1,
+            clientCapabilities: {
+              fs: { readTextFile: false, writeTextFile: false },
+              terminal: false,
+            },
+            clientInfo: { name: "cursor-api-proxy", version: "0.1.0" },
           },
-          clientInfo: { name: "cursor-api-proxy", version: "0.1.0" },
-        }, pending, requestTimeoutMs);
+          pending,
+          requestTimeoutMs,
+        );
 
         if (!opts.skipAuthenticate) {
           debugAcp("ACP step: authenticate");
-          await sendRequest(child.stdin, nextId, "authenticate", {
-            methodId: "cursor_login",
-          }, pending, requestTimeoutMs);
+          await sendRequest(
+            child.stdin,
+            nextId,
+            "authenticate",
+            {
+              methodId: "cursor_login",
+            },
+            pending,
+            requestTimeoutMs,
+          );
         } else {
           debugAcp("ACP step: authenticate (skipped, pre-authenticated)");
         }
@@ -704,7 +786,10 @@ export function runAcpStream(
               `ACP model catalog has no match for ${JSON.stringify(opts.model)}`,
             );
           }
-          if (resolvedModelId !== "default" && resolvedModelId !== "default[]") {
+          if (
+            resolvedModelId !== "default" &&
+            resolvedModelId !== "default[]"
+          ) {
             debugAcp("ACP step: session/set_config_option (model)");
             await sendRequest(
               child.stdin,
@@ -722,10 +807,17 @@ export function runAcpStream(
         }
 
         debugAcp("ACP step: session/prompt");
-        await sendRequest(child.stdin, nextId, "session/prompt", {
-          sessionId,
-          prompt: [{ type: "text", text: prompt }],
-        }, pending, requestTimeoutMs);
+        await sendRequest(
+          child.stdin,
+          nextId,
+          "session/prompt",
+          {
+            sessionId,
+            prompt: [{ type: "text", text: prompt }],
+          },
+          pending,
+          requestTimeoutMs,
+        );
         finish(0);
       } catch {
         if (timeout) clearTimeout(timeout);

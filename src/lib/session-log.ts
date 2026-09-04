@@ -90,8 +90,7 @@ export function computeSessionStats(
 
     stats.total++;
     if (request.status >= 400) stats.errors++;
-    stats.byPath[request.pathname] =
-      (stats.byPath[request.pathname] ?? 0) + 1;
+    stats.byPath[request.pathname] = (stats.byPath[request.pathname] ?? 0) + 1;
     stats.recent.push({
       ts: request.ts,
       method: request.method,

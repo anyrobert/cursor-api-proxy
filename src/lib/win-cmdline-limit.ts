@@ -1,6 +1,6 @@
-import type { AgentCommand } from "./env.js";
-import { resolveAgentCommand, type EnvOptions } from "./env.js";
 import { BRIDGE_AGENT_PROMPT_SEPARATOR } from "./bridge-context-preamble.js";
+import type { AgentCommand } from "./env.js";
+import { type EnvOptions, resolveAgentCommand } from "./env.js";
 
 /** Shown at the start of the prompt when earlier text was dropped on Windows. */
 export const WIN_PROMPT_OMISSION_PREFIX =
@@ -117,8 +117,7 @@ export function fitPromptToWinCmdline(
           hi = mid - 1;
         }
       }
-      const finalPrompt =
-        best === 0 ? head : head + body.slice(-best);
+      const finalPrompt = best === 0 ? head : head + body.slice(-best);
       return {
         ok: true,
         args: [...fixedArgs, finalPrompt],
@@ -153,8 +152,7 @@ export function fitPromptToWinCmdline(
     }
   }
 
-  const finalPrompt =
-    best === 0 ? prefix : prefix + prompt.slice(-best);
+  const finalPrompt = best === 0 ? prefix : prefix + prompt.slice(-best);
   return {
     ok: true,
     args: [...fixedArgs, finalPrompt],

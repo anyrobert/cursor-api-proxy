@@ -1,9 +1,8 @@
 import * as fs from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-
+import { type EnvOptions, loadEnvConfig, resolveAgentCommand } from "./env.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
-import { loadEnvConfig, resolveAgentCommand, type EnvOptions } from "./env.js";
 
 function readBridgePackageVersion(): string {
   try {

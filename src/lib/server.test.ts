@@ -1,11 +1,11 @@
-import * as http from "node:http";
-import * as https from "node:https";
 import * as fs from "node:fs";
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { startBridgeServer } from "./server.js";
-import { appendSessionLine } from "./request-log.js";
-import { run, runStreaming } from "./process.js";
+import * as http from "node:http";
+import type * as https from "node:https";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BridgeConfig } from "./config.js";
+import { run } from "./process.js";
+import { appendSessionLine } from "./request-log.js";
+import { startBridgeServer } from "./server.js";
 
 vi.mock("./cursor-cli.js", () => ({
   listCursorCliModels: vi.fn().mockResolvedValue([
@@ -248,10 +248,10 @@ describe("startBridgeServer", () => {
     }
     fs.writeFileSync(
       tmpLogPath,
-      [
+      `${[
         `${new Date("2026-01-01T00:00:00.000Z").toISOString()} GET /v1/chat/completions ::1 200`,
         `${new Date("2026-01-01T00:00:01.000Z").toISOString()} GET /health ::1 200`,
-      ].join("\n") + "\n",
+      ].join("\n")}\n`,
       "utf8",
     );
 

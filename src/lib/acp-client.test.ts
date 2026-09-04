@@ -9,13 +9,24 @@ import {
 
 const node = process.execPath;
 const cwd = process.cwd();
-const fakeServerPath = join(cwd, "src", "lib", "__tests__", "fake-acp-server.mjs");
+const fakeServerPath = join(
+  cwd,
+  "src",
+  "lib",
+  "__tests__",
+  "fake-acp-server.mjs",
+);
 
 function parseLastSetConfig(stderr: string): Record<string, unknown> | null {
-  const lines = stderr.split("\n").filter((l) => l.startsWith("__FAKE_ACP_SET_CONFIG__:"));
+  const lines = stderr
+    .split("\n")
+    .filter((l) => l.startsWith("__FAKE_ACP_SET_CONFIG__:"));
   if (lines.length === 0) return null;
   const last = lines[lines.length - 1];
-  return JSON.parse(last.slice("__FAKE_ACP_SET_CONFIG__:".length)) as Record<string, unknown>;
+  return JSON.parse(last.slice("__FAKE_ACP_SET_CONFIG__:".length)) as Record<
+    string,
+    unknown
+  >;
 }
 
 describe("extractAcpUpdateText", () => {
@@ -25,10 +36,7 @@ describe("extractAcpUpdateText", () => {
 
   it("joins array content parts", () => {
     expect(
-      extractAcpUpdateText([
-        { text: "a" },
-        { content: { text: "b" } },
-      ]),
+      extractAcpUpdateText([{ text: "a" }, { content: { text: "b" } }]),
     ).toBe("ab");
   });
 });
@@ -52,7 +60,9 @@ describe("resolveAcpModelConfigValue", () => {
 
   it("falls back to default[] when name not in catalog", () => {
     expect(
-      resolveAcpModelConfigValue("unknown", [{ modelId: "x[]", name: "gpt-4" }]),
+      resolveAcpModelConfigValue("unknown", [
+        { modelId: "x[]", name: "gpt-4" },
+      ]),
     ).toBe("default[]");
   });
 
@@ -238,12 +248,18 @@ describe("runAcpStream", () => {
 
   it("sends session/set_config_option with configId when model is set", async () => {
     const chunks: string[] = [];
-    const result = await runAcpStream(node, [fakeServerPath], "stream", {
-      cwd,
-      timeoutMs: 5000,
-      skipAuthenticate: true,
-      model: "gpt-4",
-    }, (t) => chunks.push(t));
+    const result = await runAcpStream(
+      node,
+      [fakeServerPath],
+      "stream",
+      {
+        cwd,
+        timeoutMs: 5000,
+        skipAuthenticate: true,
+        model: "gpt-4",
+      },
+      (t) => chunks.push(t),
+    );
     expect(result.code).toBe(0);
     expect(chunks.join("")).toContain("Hello from fake ACP");
     const cfg = parseLastSetConfig(result.stderr);
@@ -256,13 +272,19 @@ describe("runAcpStream", () => {
 
   it("fails when session/set_config_option returns error (stream)", async () => {
     const chunks: string[] = [];
-    const result = await runAcpStream(node, [fakeServerPath], "x", {
-      cwd,
-      timeoutMs: 5000,
-      skipAuthenticate: true,
-      model: "gpt-4",
-      env: { FAKE_ACP_SCENARIO: "fail_set_config" },
-    }, (t) => chunks.push(t));
+    const result = await runAcpStream(
+      node,
+      [fakeServerPath],
+      "x",
+      {
+        cwd,
+        timeoutMs: 5000,
+        skipAuthenticate: true,
+        model: "gpt-4",
+        env: { FAKE_ACP_SCENARIO: "fail_set_config" },
+      },
+      (t) => chunks.push(t),
+    );
     expect(result.code).toBe(1);
   });
 });

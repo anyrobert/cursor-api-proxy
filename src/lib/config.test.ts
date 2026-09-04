@@ -19,7 +19,9 @@ describe("loadBridgeConfig", () => {
     expect(config.workspace).toBe("/workspace");
     expect(config.chatOnlyWorkspace).toBe(true);
     expect(config.chatOnlyWorkspaceExplicit).toBe(false);
-    expect(config.sessionsLogPath).toBe(path.join("/workspace", "sessions.log"));
+    expect(config.sessionsLogPath).toBe(
+      path.join("/workspace", "sessions.log"),
+    );
     expect(config.winCmdlineMax).toBe(30_000);
     expect(config.contextPreamble).toBe(true);
     expect(config.bridgePackageVersion).toMatch(/^\d+\.\d+\.\d+/);

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { describe, expect, it, afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { loadEnvConfig, resolveAgentCommand } from "./env.js";
 
@@ -18,7 +18,9 @@ describe("loadEnvConfig", () => {
     expect(loaded.approveMcps).toBe(false);
     expect(loaded.strictModel).toBe(true);
     expect(loaded.workspace).toBe("/workspace");
-    expect(loaded.sessionsLogPath).toBe(path.join("/workspace", "sessions.log"));
+    expect(loaded.sessionsLogPath).toBe(
+      path.join("/workspace", "sessions.log"),
+    );
     expect(loaded.chatOnlyWorkspace).toBe(true);
     expect(loaded.chatOnlyWorkspaceExplicit).toBe(false);
     expect(loaded.mode).toBeUndefined();
@@ -223,7 +225,7 @@ describe("loadEnvConfig", () => {
 
   it("returns empty configDirs when CURSOR_CONFIG_DIRS is unset and no accounts dir", () => {
     const loaded = loadEnvConfig({
-      env: { HOME: "/nonexistent-home-" + Date.now() },
+      env: { HOME: `/nonexistent-home-${Date.now()}` },
       cwd: "/workspace",
     });
     expect(loaded.configDirs).toEqual([]);
@@ -307,8 +309,8 @@ describe("loadEnvConfig", () => {
     const extra = loadEnvConfig({
       env: { CURSOR_BRIDGE_CONTEXT_EXTRA: long },
     }).contextExtra;
-    expect(extra!.length).toBe(400);
-    expect(extra!.endsWith("…")).toBe(true);
+    expect(extra?.length).toBe(400);
+    expect(extra?.endsWith("…")).toBe(true);
   });
 
   it("parses CURSOR_BRIDGE_PROMPT_VIA_STDIN and CURSOR_BRIDGE_USE_ACP", () => {
@@ -586,7 +588,9 @@ describe("resolveAgentCommand", () => {
       const versionsDir = path.join(tmp, "versions");
       fs.mkdirSync(versionsDir, { recursive: true });
       fs.writeFileSync(agentCmd, "");
-      fs.mkdirSync(path.join(versionsDir, "not-a-version"), { recursive: true });
+      fs.mkdirSync(path.join(versionsDir, "not-a-version"), {
+        recursive: true,
+      });
 
       const command = resolveAgentCommand(agentCmd, ["acp"], {
         platform: "win32",

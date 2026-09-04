@@ -1,7 +1,7 @@
 import type { BridgeConfig } from "./config.js";
 import {
-  parseExecutionModeFromRequest,
   type CursorExecutionMode,
+  parseExecutionModeFromRequest,
 } from "./execution-mode.js";
 
 const DEFAULT_DSH_SYSTEM_MARKER =

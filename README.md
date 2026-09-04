@@ -2,13 +2,13 @@
 
 OpenAI-compatible proxy for Cursor CLI. Run it on localhost and point any LLM client (OpenAI SDK, LiteLLM, LangChain, etc.) at it like a normal chat API.
 
-One npm package, two uses: import it as an SDK, or run the CLI to start the server. Same behavior either way.
+One Bun package, two uses: import it as an SDK, or run the CLI to start the server. Same behavior either way.
 
 This is not the Cursor IDE. The HTTP API will not attach your repo, `@codebase`, or host shell the way the desktop app does. See [Local workspace and agent frameworks](#local-workspace-and-agent-frameworks).
 
 ## Prerequisites
 
-- Node.js 18+
+- Bun
 - Cursor agent CLI (`cursor-agent` or `agent`). This package does not install or bundle the CLI. Install and set it up separately. The proxy prefers `cursor-agent` on `PATH`, then falls back to `agent`. Set `CURSOR_AGENT_BIN` when another vendor also installs an `agent` command.
 
   ```bash
@@ -21,10 +21,10 @@ This is not the Cursor IDE. The HTTP API will not attach your repo, `@codebase`,
 
 ## Install
 
-From npm (SDK in another project):
+From Bun (SDK in another project):
 
 ```bash
-npm install cursor-api-proxy
+bun add cursor-api-proxy
 ```
 
 From source:
@@ -32,8 +32,8 @@ From source:
 ```bash
 git clone <this-repo>
 cd cursor-api-proxy
-npm install
-npm run build
+bun install
+bun run build
 ```
 
 ## Run the proxy (CLI)
@@ -41,8 +41,8 @@ npm run build
 Start the server so the API is available for the SDK or any HTTP client:
 
 ```bash
-npx cursor-api-proxy
-# or from repo: npm start / node dist/cli.js
+bunx cursor-api-proxy
+# or from repo: bun start / bun dist/cli.js
 ```
 
 Inspect completed requests without opening the dashboard:
@@ -61,10 +61,10 @@ Set `NO_COLOR=1` for plain output.
 To expose on your network (e.g. Tailscale):
 
 ```bash
-npx cursor-api-proxy --tailscale
+bunx cursor-api-proxy --tailscale
 ```
 
-By default the server listens on http://127.0.0.1:8765. Set `CURSOR_BRIDGE_API_KEY` to require `Authorization: Bearer <key>` on requests.
+By default the server listens on <http://127.0.0.1:8765>. Set `CURSOR_BRIDGE_API_KEY` to require `Authorization: Bearer <key>` on requests.
 
 ### HTTPS with Tailscale (MagicDNS)
 
@@ -86,7 +86,7 @@ Serve over HTTPS so browsers and clients trust the connection (e.g. `https://mac
    export CURSOR_BRIDGE_TLS_KEY=/path/to/macbook.tail4048eb.ts.net.key
    # Bind to Tailscale IP so the service is only on the tailnet (optional):
    export CURSOR_BRIDGE_HOST=100.123.47.103
-   npm start
+   bun start
    ```
 
    Or bind to all interfaces and use HTTPS:
@@ -95,7 +95,7 @@ Serve over HTTPS so browsers and clients trust the connection (e.g. `https://mac
    CURSOR_BRIDGE_TLS_CERT=./macbook.tail4048eb.ts.net.crt \
    CURSOR_BRIDGE_TLS_KEY=./macbook.tail4048eb.ts.net.key \
    CURSOR_BRIDGE_API_KEY=your-secret \
-   npm start -- --tailscale
+   bun start -- --tailscale
    ```
 
 3. Access the API from any device on your tailnet:
@@ -166,7 +166,7 @@ const final = await client.chat.completions.create({ model: "auto", messages });
 
 ## Use as SDK in another project
 
-Install the package and set up the Cursor agent CLI (see Prerequisites). With the default URL, the proxy starts in the background automatically if it is not already running. You can still start it yourself with `npx cursor-api-proxy` or set `CURSOR_PROXY_URL` to point at an existing proxy (then the SDK will not start another).
+Install the package and set up the Cursor agent CLI (see Prerequisites). With the default URL, the proxy starts in the background automatically if it is not already running. You can still start it yourself with `bunx cursor-api-proxy` or set `CURSOR_PROXY_URL` to point at an existing proxy (then the SDK will not start another).
 
 - Base URL: `http://127.0.0.1:8765/v1` (override with `CURSOR_PROXY_URL` or options).
 - API key: use any value (e.g. `unused`), or set `CURSOR_BRIDGE_API_KEY` and pass it in options or env.
@@ -221,7 +221,7 @@ const client = new OpenAI({
   baseURL: "http://127.0.0.1:8765/v1",
   apiKey: process.env.CURSOR_BRIDGE_API_KEY || "unused",
 });
-// Start the proxy yourself (npx cursor-api-proxy) or use the helpers above for auto-start.
+// Start the proxy yourself (bunx cursor-api-proxy) or use the helpers above for auto-start.
 ```
 
 ### Endpoints
@@ -258,7 +258,7 @@ Usage and token fields: responses may include `usage` token fields (`prompt_toke
 One module resolves aliases, defaults, path resolution, platform fallbacks, and `--tailscale` host behavior before the server starts.
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+| ---------- | --------- | ------------- |
 | `CURSOR_BRIDGE_HOST` | `127.0.0.1` | Bind address |
 | `CURSOR_BRIDGE_PORT` | `8765` | Port |
 | `CURSOR_BRIDGE_API_KEY` | — | If set, require `Authorization: Bearer <key>` on requests |
@@ -294,7 +294,7 @@ One module resolves aliases, defaults, path resolution, platform fallbacks, and 
 
 Notes:
 
-- The `login` subcommand depends on `chrome-launcher`; its dependency tree may pull typings into production installs. Run `npm audit` before release; upstream may move types to `devDependencies` over time.
+- The `login` subcommand depends on `chrome-launcher`; its dependency tree may pull typings into production installs. Review dependencies before release; upstream may move types to `devDependencies` over time.
 - `--tailscale` changes the default host to `0.0.0.0` only when `CURSOR_BRIDGE_HOST` is not already set.
 - ACP `session/request_permission` uses `allow-once` only for the per-turn proxy-owned client-tool MCP invocation. Built-in and other tools use `reject-once`.
 - Relative paths such as `CURSOR_BRIDGE_WORKSPACE`, `CURSOR_BRIDGE_SESSIONS_LOG`, `CURSOR_BRIDGE_TLS_CERT`, and `CURSOR_BRIDGE_TLS_KEY` are resolved from the current working directory.
@@ -345,7 +345,7 @@ Use multiple Cursor accounts to spread load and stay under usage limits. The pro
 ### Adding accounts
 
 ```bash
-npx cursor-api-proxy login account1
+bunx cursor-api-proxy login account1
 ```
 
 Opens an isolated browser login. Session saves under `~/.cursor-api-proxy/accounts/` on macOS/Linux, or `%USERPROFILE%\.cursor-api-proxy\accounts\` on Windows.
@@ -353,18 +353,18 @@ Opens an isolated browser login. Session saves under `~/.cursor-api-proxy/accoun
 Repeat for more accounts:
 
 ```bash
-npx cursor-api-proxy login account2
-npx cursor-api-proxy login account3
+bunx cursor-api-proxy login account2
+bunx cursor-api-proxy login account3
 ```
 
-When you start the proxy (`npx cursor-api-proxy`), it finds all accounts under that directory and adds them to the rotation pool.
+When you start the proxy (`bunx cursor-api-proxy`), it finds all accounts under that directory and adds them to the rotation pool.
 
 ### Manual config directories
 
 If you already have separate configuration folders (or want to specify them explicitly), override auto-discovery with `CURSOR_CONFIG_DIRS`:
 
 ```bash
-CURSOR_CONFIG_DIRS=/path/to/cursor-agent-1,/path/to/cursor-agent-2 npm start
+CURSOR_CONFIG_DIRS=/path/to/cursor-agent-1,/path/to/cursor-agent-2 bun start
 ```
 
 ### Modes of operation
@@ -378,7 +378,7 @@ Multi-port (one server per account)
 For explicit client-to-account mapping, use multi-port mode. The proxy spawns multiple instances on incrementing ports starting from `CURSOR_BRIDGE_PORT`.
 
 ```bash
-CURSOR_BRIDGE_MULTI_PORT=true CURSOR_BRIDGE_PORT=8765 npm start
+CURSOR_BRIDGE_MULTI_PORT=true CURSOR_BRIDGE_PORT=8765 bun start
 ```
 
 account1 on 8765, account2 on 8766, and so on.
@@ -390,14 +390,14 @@ The proxy supports `stream: true` on `POST /v1/chat/completions`, `POST /v1/resp
 Test streaming from repo root, with the proxy running:
 
 ```bash
-node examples/test-stream.mjs
+bun examples/test-stream.mjs
 ```
 
 See [examples/README.md](examples/README.md) for details.
 
 ## Docker
 
-Requires a Cursor Dashboard API key (`CURSOR_API_KEY` from https://cursor.com/dashboard/integrations).
+Requires a Cursor Dashboard API key (`CURSOR_API_KEY` from <https://cursor.com/dashboard/integrations>).
 
 ```bash
 cp .env.example .env

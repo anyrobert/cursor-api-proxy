@@ -3,13 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
-
+import type { SessionRequest } from "../lib/session-log.js";
 import {
   formatRequests,
   handleRequests,
   readRecentRequests,
 } from "./requests.js";
-import type { SessionRequest } from "../lib/session-log.js";
 
 const tempDirs: string[] = [];
 

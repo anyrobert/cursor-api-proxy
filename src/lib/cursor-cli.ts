@@ -59,7 +59,9 @@ export async function listCursorCliModels(args: {
 
   const models = parseCursorCliModels(list.stdout);
   if (models.length === 0) {
-    const sample = stripAnsi(`${list.stdout}\n${list.stderr}`).trim().slice(0, 240);
+    const sample = stripAnsi(`${list.stdout}\n${list.stderr}`)
+      .trim()
+      .slice(0, 240);
     throw new Error(
       `${JSON.stringify(
         args.agentBin,

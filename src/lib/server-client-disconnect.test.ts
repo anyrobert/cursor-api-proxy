@@ -28,9 +28,7 @@ vi.mock("./request-log.js", () => ({
   logAccountStats: vi.fn(),
 }));
 
-function createTestConfig(
-  overrides: Partial<BridgeConfig> = {},
-): BridgeConfig {
+function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
   return {
     agentBin: "agent",
     acpCommand: "agent",
@@ -123,11 +121,11 @@ describe("client disconnect", () => {
 
     await agentReached;
     expect(seenSignal).toBeDefined();
-    expect(seenSignal!.aborted).toBe(false);
+    expect(seenSignal?.aborted).toBe(false);
 
     await disconnected;
     await vi.waitFor(() => {
-      expect(seenSignal!.aborted).toBe(true);
+      expect(seenSignal?.aborted).toBe(true);
     });
   });
 });

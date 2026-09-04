@@ -9,10 +9,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let config = Config.load()
         let shellEnv = ShellEnvironment.discover()
         Log.info("shell PATH resolved (\(shellEnv.path.split(separator: ":").count) dirs)")
-        if let node = shellEnv.nodePath {
-            Log.info("node resolved: \(node)")
+        if let bun = shellEnv.bunPath {
+            Log.info("bun resolved: \(bun)")
         } else {
-            Log.error("node not found in PATH — start/restart will fail until CURSOR_API_PROXY_NODE is set")
+            Log.error("bun not found in PATH — start/restart will fail until CURSOR_API_PROXY_BUN is set")
         }
         let client = ProxyClient(config: config)
         let controller = ProxyController(config: config, shellEnv: shellEnv)

@@ -1,18 +1,17 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as http from "node:http";
-
-import type { BridgeConfig } from "./config.js";
-import type { ModelCacheRef } from "./handlers/models.js";
-import { handleHealth } from "./handlers/health.js";
-import { handleModels } from "./handlers/models.js";
-import { handleChatCompletions } from "./handlers/chat-completions.js";
-import { handleResponses } from "./handlers/responses.js";
-import { handleAnthropicMessages } from "./handlers/anthropic-messages.js";
+import type * as http from "node:http";
 import {
   adminDashboardMatches,
   handleAdminDashboard,
 } from "./admin-dashboard.js";
+import type { BridgeConfig } from "./config.js";
+import { handleAnthropicMessages } from "./handlers/anthropic-messages.js";
+import { handleChatCompletions } from "./handlers/chat-completions.js";
+import { handleHealth } from "./handlers/health.js";
+import type { ModelCacheRef } from "./handlers/models.js";
+import { handleModels } from "./handlers/models.js";
+import { handleResponses } from "./handlers/responses.js";
 import { extractBearerToken, json, readBody } from "./http.js";
 import { appendSessionLine, logIncoming } from "./request-log.js";
 import type { ToolSessionRegistry } from "./tool-session-registry.js";
@@ -80,8 +79,7 @@ export function createRequestListener(
         const expected = config.requiredKey;
         const a = Buffer.from(token, "utf8");
         const b = Buffer.from(expected, "utf8");
-        const match =
-          a.length === b.length && crypto.timingSafeEqual(a, b);
+        const match = a.length === b.length && crypto.timingSafeEqual(a, b);
         if (!match) {
           json(res, 401, {
             error: { message: "Invalid API key", code: "unauthorized" },

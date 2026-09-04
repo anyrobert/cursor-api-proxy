@@ -30,7 +30,9 @@ export class UnsupportedReasoningEffortError extends Error {
     readonly model: string,
     readonly effort: string,
   ) {
-    super(`Cursor model "${model}" does not offer reasoning effort "${effort}"`);
+    super(
+      `Cursor model "${model}" does not offer reasoning effort "${effort}"`,
+    );
     this.name = "UnsupportedReasoningEffortError";
   }
 }
@@ -63,15 +65,51 @@ const ANTHROPIC_TO_CURSOR: Record<string, string> = {
 };
 
 /** Cursor IDs we want to expose under Anthropic-style names in GET /v1/models */
-const CURSOR_TO_ANTHROPIC_ALIAS: Array<{ cursorId: string; anthropicId: string; name: string }> = [
-  { cursorId: "opus-4.6", anthropicId: "claude-opus-4-6", name: "Claude 4.6 Opus" },
-  { cursorId: "opus-4.6-thinking", anthropicId: "claude-opus-4-6-thinking", name: "Claude 4.6 Opus (Thinking)" },
-  { cursorId: "sonnet-4.6", anthropicId: "claude-sonnet-4-6", name: "Claude 4.6 Sonnet" },
-  { cursorId: "sonnet-4.6-thinking", anthropicId: "claude-sonnet-4-6-thinking", name: "Claude 4.6 Sonnet (Thinking)" },
-  { cursorId: "opus-4.5", anthropicId: "claude-opus-4-5", name: "Claude 4.5 Opus" },
-  { cursorId: "opus-4.5-thinking", anthropicId: "claude-opus-4-5-thinking", name: "Claude 4.5 Opus (Thinking)" },
-  { cursorId: "sonnet-4.5", anthropicId: "claude-sonnet-4-5", name: "Claude 4.5 Sonnet" },
-  { cursorId: "sonnet-4.5-thinking", anthropicId: "claude-sonnet-4-5-thinking", name: "Claude 4.5 Sonnet (Thinking)" },
+const CURSOR_TO_ANTHROPIC_ALIAS: Array<{
+  cursorId: string;
+  anthropicId: string;
+  name: string;
+}> = [
+  {
+    cursorId: "opus-4.6",
+    anthropicId: "claude-opus-4-6",
+    name: "Claude 4.6 Opus",
+  },
+  {
+    cursorId: "opus-4.6-thinking",
+    anthropicId: "claude-opus-4-6-thinking",
+    name: "Claude 4.6 Opus (Thinking)",
+  },
+  {
+    cursorId: "sonnet-4.6",
+    anthropicId: "claude-sonnet-4-6",
+    name: "Claude 4.6 Sonnet",
+  },
+  {
+    cursorId: "sonnet-4.6-thinking",
+    anthropicId: "claude-sonnet-4-6-thinking",
+    name: "Claude 4.6 Sonnet (Thinking)",
+  },
+  {
+    cursorId: "opus-4.5",
+    anthropicId: "claude-opus-4-5",
+    name: "Claude 4.5 Opus",
+  },
+  {
+    cursorId: "opus-4.5-thinking",
+    anthropicId: "claude-opus-4-5-thinking",
+    name: "Claude 4.5 Opus (Thinking)",
+  },
+  {
+    cursorId: "sonnet-4.5",
+    anthropicId: "claude-sonnet-4-5",
+    name: "Claude 4.5 Sonnet",
+  },
+  {
+    cursorId: "sonnet-4.5-thinking",
+    anthropicId: "claude-sonnet-4-5-thinking",
+    name: "Claude 4.5 Sonnet (Thinking)",
+  },
 ];
 
 function normalizeForLookup(value: string): string {
@@ -100,10 +138,14 @@ function mapClaudeDatedVariant(key: string): string | undefined {
  * Resolve a requested model (e.g. from the client) to the Cursor CLI model ID.
  * If the request uses an Anthropic-style name, returns the mapped Cursor ID; otherwise returns the value as-is.
  */
-export function resolveToCursorModel(requested: string | undefined): string | undefined {
-  if (!requested || !requested.trim()) return undefined;
+export function resolveToCursorModel(
+  requested: string | undefined,
+): string | undefined {
+  if (!requested?.trim()) return undefined;
   const key = normalizeForLookup(requested);
-  return ANTHROPIC_TO_CURSOR[key] ?? mapClaudeDatedVariant(key) ?? requested.trim();
+  return (
+    ANTHROPIC_TO_CURSOR[key] ?? mapClaudeDatedVariant(key) ?? requested.trim()
+  );
 }
 
 function matchAvailableModel(
@@ -111,7 +153,9 @@ function matchAvailableModel(
   availableCursorIds: string[],
 ): string | undefined {
   if (!candidate) return undefined;
-  const byLower = new Map(availableCursorIds.map((id) => [id.toLowerCase(), id]));
+  const byLower = new Map(
+    availableCursorIds.map((id) => [id.toLowerCase(), id]),
+  );
   return byLower.get(candidate.toLowerCase());
 }
 
@@ -154,9 +198,7 @@ function splitFastSuffix(model: string): { base: string; fast: boolean } {
 
 function stripEffortSuffix(model: string): string {
   const lower = model.toLowerCase();
-  const suffix = EFFORT_SUFFIXES.find((value) =>
-    lower.endsWith(`-${value}`),
-  );
+  const suffix = EFFORT_SUFFIXES.find((value) => lower.endsWith(`-${value}`));
   return suffix ? model.slice(0, -(suffix.length + 1)) : model;
 }
 
@@ -192,14 +234,11 @@ export function resolveModelForExecution(args: {
   const requestedWasDefault = requested === "default";
   const mapped = requestedWasDefault
     ? "default"
-    : resolveToCursorModel(requested) ?? args.defaultModel;
+    : (resolveToCursorModel(requested) ?? args.defaultModel);
   const reasoningEffort = normalizeReasoningEffort(args.reasoningEffort);
 
   if (args.reasoningEffort && !reasoningEffort) {
-    throw new UnsupportedReasoningEffortError(
-      mapped,
-      args.reasoningEffort,
-    );
+    throw new UnsupportedReasoningEffortError(mapped, args.reasoningEffort);
   }
 
   if (reasoningEffort) {
@@ -245,7 +284,10 @@ export function resolveModelForExecution(args: {
     };
   }
 
-  const matchedDefault = matchAvailableModel(args.defaultModel, args.availableCursorIds);
+  const matchedDefault = matchAvailableModel(
+    args.defaultModel,
+    args.availableCursorIds,
+  );
   if (matchedDefault) {
     return {
       requested,
@@ -299,9 +341,11 @@ export function resolveModelForExecution(args: {
  * Return extra model list entries for GET /v1/models so clients like Claude Code
  * see Anthropic-style ids (e.g. claude-opus-4-6) when those Cursor models are available.
  */
-export function getAnthropicModelAliases(availableCursorIds: string[]): Array<{ id: string; name: string }> {
+export function getAnthropicModelAliases(
+  availableCursorIds: string[],
+): Array<{ id: string; name: string }> {
   const set = new Set(availableCursorIds);
-  return CURSOR_TO_ANTHROPIC_ALIAS
-    .filter((a) => set.has(a.cursorId))
-    .map((a) => ({ id: a.anthropicId, name: a.name }));
+  return CURSOR_TO_ANTHROPIC_ALIAS.filter((a) => set.has(a.cursorId)).map(
+    (a) => ({ id: a.anthropicId, name: a.name }),
+  );
 }

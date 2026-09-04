@@ -1,18 +1,29 @@
 import { randomUUID } from "node:crypto";
-import * as http from "node:http";
-
-import type { BridgeConfig } from "../config.js";
-import type { CursorExecutionMode } from "../execution-mode.js";
-import type { ModelCacheRef } from "./models.js";
-import { getCachedCursorModels } from "./models.js";
+import type * as http from "node:http";
+import {
+  getAccountStats,
+  getNextAccountConfigDir,
+  reportRateLimit,
+  reportRequestEnd,
+  reportRequestError,
+  reportRequestStart,
+  reportRequestSuccess,
+} from "../account-pool.js";
+import type { ToolTurnEvent, ToolTurnResult } from "../acp-tool-session.js";
 import { buildAgentFixedArgs } from "../agent-cmd-args.js";
 import {
   runAgentStream,
   runAgentSync,
   startAgentToolSession,
 } from "../agent-runner.js";
-import type { ToolTurnEvent, ToolTurnResult } from "../acp-tool-session.js";
+import {
+  BRIDGE_AGENT_PROMPT_SEPARATOR,
+  buildBridgeContextPreamble,
+} from "../bridge-context-preamble.js";
 import { createStreamParser } from "../cli-stream-parser.js";
+import { abortOnClientDisconnect } from "../client-disconnect.js";
+import type { BridgeConfig } from "../config.js";
+import type { CursorExecutionMode } from "../execution-mode.js";
 import { json, writeSseHeaders } from "../http.js";
 import {
   resolveModelForExecution,
@@ -21,49 +32,40 @@ import {
 import {
   buildPromptFromMessages,
   normalizeModelId,
-  toolsToSystemText,
   type OpenAiChatCompletionRequest,
+  toolsToSystemText,
 } from "../openai.js";
 import {
-  logAgentError,
   logAccountAssigned,
   logAccountStats,
+  logAgentError,
   logModelResolution,
   logTrafficRequest,
   logTrafficResponse,
   type TrafficMessage,
 } from "../request-log.js";
-import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
-import { resolveWorkspace } from "../workspace.js";
-import { buildBridgeContextPreamble, BRIDGE_AGENT_PROMPT_SEPARATOR } from "../bridge-context-preamble.js";
+import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { sanitizeMessages } from "../sanitize.js";
 import {
-  getNextAccountConfigDir,
-  reportRequestStart,
-  reportRequestEnd,
-  reportRateLimit,
-  reportRequestSuccess,
-  reportRequestError,
-  getAccountStats,
-} from "../account-pool.js";
-import { abortOnClientDisconnect } from "../client-disconnect.js";
+  ToolSessionError,
+  type ToolSessionRecord,
+  type ToolSessionRegistry,
+  toolSessionOwnerKey,
+} from "../tool-session-registry.js";
+import {
+  chatToolOutputs,
+  type PendingClientToolCall,
+  parseOpenAiFunctionTools,
+  resolveToolChoice,
+} from "../tool-types.js";
 import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
 } from "../win-cmdline-limit.js";
-import {
-  chatToolOutputs,
-  parseOpenAiFunctionTools,
-  resolveToolChoice,
-  type PendingClientToolCall,
-} from "../tool-types.js";
-import {
-  ToolSessionError,
-  toolSessionOwnerKey,
-  type ToolSessionRecord,
-  type ToolSessionRegistry,
-} from "../tool-session-registry.js";
+import { resolveWorkspace } from "../workspace.js";
+import type { ModelCacheRef } from "./models.js";
+import { getCachedCursorModels } from "./models.js";
 
 function isRateLimited(stderr: string): boolean {
   return /\b429\b|rate.?limit|too many requests/i.test(stderr);
@@ -93,10 +95,7 @@ function chatToolResponse(opts: {
 }) {
   const completionText = opts.result.text;
   const promptTokens = Math.max(1, Math.round(opts.promptLength / 4));
-  const completionTokens = Math.max(
-    1,
-    Math.round(completionText.length / 4),
-  );
+  const completionTokens = Math.max(1, Math.round(completionText.length / 4));
   const calls =
     opts.result.status === "tool_calls"
       ? chatToolCallWire(opts.result.toolCalls)
@@ -135,9 +134,7 @@ async function writeStructuredChatTurn(opts: {
   created: number;
   model: string | undefined;
   promptLength: number;
-  run: (
-    listener?: (event: ToolTurnEvent) => void,
-  ) => Promise<ToolTurnResult>;
+  run: (listener?: (event: ToolTurnEvent) => void) => Promise<ToolTurnResult>;
 }): Promise<ToolTurnResult> {
   if (!opts.stream) {
     const result = await opts.run();
@@ -208,15 +205,11 @@ async function writeStructuredChatTurn(opts: {
   }
   const promptTokens = Math.max(1, Math.round(opts.promptLength / 4));
   const completionTokens = Math.max(1, Math.round(result.text.length / 4));
-  writeChunk(
-    {},
-    result.status === "tool_calls" ? "tool_calls" : "stop",
-    {
-      prompt_tokens: promptTokens,
-      completion_tokens: completionTokens,
-      total_tokens: promptTokens + completionTokens,
-    },
-  );
+  writeChunk({}, result.status === "tool_calls" ? "tool_calls" : "stop", {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: promptTokens + completionTokens,
+  });
   opts.res.write("data: [DONE]\n\n");
   opts.res.end();
   return result;
@@ -244,7 +237,7 @@ export async function handleChatCompletions(
       parsedTools,
       body.tool_choice ?? body.function_call,
       {
-      parallelToolCalls: (body as any).parallel_tool_calls,
+        parallelToolCalls: (body as any).parallel_tool_calls,
       },
     );
     selectedTools = choice.tools;
@@ -293,9 +286,7 @@ export async function handleChatCompletions(
     decision.requestedWasDefault && config.defaultModel !== "default"
       ? config.defaultModel
       : model;
-  const modelCatalogName = models.find(
-    (item) => item.id === cursorModel,
-  )?.name;
+  const modelCatalogName = models.find((item) => item.id === cursorModel)?.name;
   const id = `chatcmpl_${randomUUID().replace(/-/g, "")}`;
   const created = Math.floor(Date.now() / 1000);
 
@@ -487,8 +478,7 @@ export async function handleChatCompletions(
   // When the prompt is delivered via stdin (or ACP), keep it OUT of argv,
   // otherwise a long prompt still blows past the kernel ARG_MAX (spawn E2BIG
   // on Linux). fit.args appends the full prompt for the argv path only.
-  const cmdArgs =
-    config.promptViaStdin || config.useAcp ? fixedArgs : fit.args;
+  const cmdArgs = config.promptViaStdin || config.useAcp ? fixedArgs : fit.args;
 
   const promptForAgent =
     config.promptViaStdin || config.useAcp ? agentPrompt : undefined;
@@ -803,10 +793,7 @@ export async function handleChatCompletions(
         if (!abortController.signal.aborted) {
           reportRequestError(configDir, Date.now() - streamStart);
         }
-        console.error(
-          `[${new Date().toISOString()}] Agent stream error:`,
-          err,
-        );
+        console.error(`[${new Date().toISOString()}] Agent stream error:`, err);
         res.end();
       });
     return;

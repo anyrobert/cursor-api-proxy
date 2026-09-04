@@ -3,13 +3,13 @@ import path from "node:path";
 
 import { ACCOUNTS_DIR } from "./constants.js";
 import {
-  readCachedToken,
-  readKeychainToken,
-  tokenSub,
+  describePlan,
   fetchAccountUsage,
   fetchStripeProfile,
   formatUsageSummary,
-  describePlan,
+  readCachedToken,
+  readKeychainToken,
+  tokenSub,
 } from "./usage.js";
 
 // ---------------------------------------------------------------------------

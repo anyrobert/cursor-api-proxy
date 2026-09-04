@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Example: stream chat completion using the SDK minimal client.
  * The proxy starts in the background automatically if not already running,
@@ -6,7 +6,7 @@
  *
  * Prereq: Cursor CLI installed and logged in (agent login)
  *
- * Run: node examples/sdk-stream.mjs
+ * Run: bun examples/sdk-stream.mjs
  */
 
 import { createCursorProxyClient } from "cursor-api-proxy";
@@ -21,7 +21,9 @@ async function main() {
     method: "POST",
     body: JSON.stringify({
       model: "auto",
-      messages: [{ role: "user", content: "Count from 1 to 5, one number per line." }],
+      messages: [
+        { role: "user", content: "Count from 1 to 5, one number per line." },
+      ],
       stream: true,
     }),
   });

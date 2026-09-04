@@ -49,7 +49,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
 
     if (arg === "--limit" || arg.startsWith("--limit=")) {
-      const value = arg === "--limit" ? argv[++i] : arg.slice("--limit=".length);
+      const value =
+        arg === "--limit" ? argv[++i] : arg.slice("--limit=".length);
       if (!value || value.startsWith("-")) {
         throw new Error("--limit requires a positive integer");
       }
@@ -137,7 +138,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
 
     if (arg === "--mode") {
-      if (i + 1 >= argv.length || argv[i + 1]!.startsWith("-")) {
+      if (i + 1 >= argv.length || argv[i + 1]?.startsWith("-")) {
         throw new Error("--mode requires a value (agent, ask, or plan)");
       }
       mode = parseExecutionModeFromRequest(argv[++i]!, "--mode");
@@ -170,7 +171,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
   }
 
   if (requestOptionUsed && !requests) {
-    throw new Error("--limit, --watch, and --interval require requests command");
+    throw new Error(
+      "--limit, --watch, and --interval require requests command",
+    );
   }
 
   return {
@@ -214,9 +217,7 @@ export function printHelp(version: string): void {
   console.log(
     "  reset-hwid --deep-clean   Also wipe session storage and cookies",
   );
-  console.log(
-    "  requests                  Show latest completed API requests",
-  );
+  console.log("  requests                  Show latest completed API requests");
   console.log(
     "  requests --watch          Refresh latest requests continuously",
   );

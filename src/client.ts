@@ -171,7 +171,11 @@ function installShutdownHandlers(): void {
 
 function isDefaultBaseUrl(baseUrl: string): boolean {
   const u = baseUrl.replace(/\/$/, "");
-  return u === DEFAULT_BASE_URL || u === "http://127.0.0.1:8765" || u === "http://localhost:8765";
+  return (
+    u === DEFAULT_BASE_URL ||
+    u === "http://127.0.0.1:8765" ||
+    u === "http://localhost:8765"
+  );
 }
 
 async function pingHealth(baseUrl: string): Promise<boolean> {
@@ -186,7 +190,7 @@ async function pingHealth(baseUrl: string): Promise<boolean> {
 
 /**
  * Ensures the proxy is running at the given base URL. If the URL is the default
- * and the proxy is not reachable, starts it in the background (Node.js only).
+ * and the proxy is not reachable, starts it in the background (Bun only).
  * Resolves when /health returns 200 or rejects on timeout.
  */
 export async function ensureProxyRunning(
@@ -194,7 +198,7 @@ export async function ensureProxyRunning(
 ): Promise<string> {
   const baseUrl =
     options.baseUrl ??
-    ((typeof process !== "undefined" && process.env?.CURSOR_PROXY_URL) ||
+    ((typeof process !== "undefined" && process.env?.["CURSOR_PROXY_URL"]) ||
       DEFAULT_BASE_URL);
   const root = baseUrl.replace(/\/$/, "");
   const timeoutMs = options.timeoutMs ?? PROXY_START_TIMEOUT_MS;
@@ -205,18 +209,18 @@ export async function ensureProxyRunning(
 
   if (!isDefaultBaseUrl(root)) {
     throw new Error(
-      `cursor-api-proxy is not reachable at ${root}. Start it manually (e.g. npx cursor-api-proxy) or use the default URL for auto-start.`,
+      `cursor-api-proxy is not reachable at ${root}. Start it manually (e.g. bunx cursor-api-proxy) or use the default URL for auto-start.`,
     );
   }
 
   const isNode =
     typeof process !== "undefined" &&
-    process.versions?.node &&
+    (process.versions as Record<string, string | undefined>)?.["bun"] &&
     typeof globalThis.fetch !== "undefined";
 
   if (!isNode) {
     throw new Error(
-      "cursor-api-proxy is not reachable. Start it manually (e.g. npx cursor-api-proxy). Auto-start is only available in Node.js.",
+      "cursor-api-proxy is not reachable. Start it manually (e.g. bunx cursor-api-proxy). Auto-start is only available in Bun.",
     );
   }
 
@@ -336,17 +340,21 @@ export async function stopManagedProxy(
  * Use: new OpenAI(getOpenAIOptions())
  * For auto-starting the proxy first, use getOpenAIOptionsAsync() and await it.
  */
-export function getOpenAIOptions(
-  options: CursorProxyClientOptions = {},
-): { baseURL: string; apiKey: string } {
+export function getOpenAIOptions(options: CursorProxyClientOptions = {}): {
+  baseURL: string;
+  apiKey: string;
+} {
   const baseUrl =
     options.baseUrl ??
-    ((typeof process !== "undefined" && process.env?.CURSOR_PROXY_URL) ||
+    ((typeof process !== "undefined" && process.env?.["CURSOR_PROXY_URL"]) ||
       DEFAULT_BASE_URL);
-  const baseURL = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl.replace(/\/$/, "")}/v1`;
+  const baseURL = baseUrl.endsWith("/v1")
+    ? baseUrl
+    : `${baseUrl.replace(/\/$/, "")}/v1`;
   const apiKey =
     options.apiKey ??
-    ((typeof process !== "undefined" && process.env?.CURSOR_BRIDGE_API_KEY) ||
+    ((typeof process !== "undefined" &&
+      process.env?.["CURSOR_BRIDGE_API_KEY"]) ||
       "unused");
   return { baseURL, apiKey };
 }
@@ -361,7 +369,7 @@ export async function getOpenAIOptionsAsync(
   const startProxy = options.startProxy !== false;
   const baseUrl =
     options.baseUrl ??
-    ((typeof process !== "undefined" && process.env?.CURSOR_PROXY_URL) ||
+    ((typeof process !== "undefined" && process.env?.["CURSOR_PROXY_URL"]) ||
       DEFAULT_BASE_URL);
   const root = baseUrl.replace(/\/$/, "");
 
@@ -375,7 +383,9 @@ export async function getOpenAIOptionsAsync(
  * Minimal client to call the proxy HTTP API.
  * When startProxy is true (default), the proxy is started in the background on first request if not reachable.
  */
-export function createCursorProxyClient(options: CursorProxyClientOptions = {}) {
+export function createCursorProxyClient(
+  options: CursorProxyClientOptions = {},
+) {
   const startProxy = options.startProxy !== false;
   const baseUrl =
     options.baseUrl ??
@@ -384,7 +394,9 @@ export function createCursorProxyClient(options: CursorProxyClientOptions = {}) 
   const root = baseUrl.replace(/\/$/, "");
   const apiKeyRaw =
     options.apiKey ??
-    (typeof process !== "undefined" ? process.env?.CURSOR_BRIDGE_API_KEY : undefined);
+    (typeof process !== "undefined"
+      ? process.env?.CURSOR_BRIDGE_API_KEY
+      : undefined);
   const apiKey = typeof apiKeyRaw === "string" ? apiKeyRaw : undefined;
 
   const headers: Record<string, string> = {
@@ -392,7 +404,7 @@ export function createCursorProxyClient(options: CursorProxyClientOptions = {}) 
     ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
   };
 
-  async function ensureThenRequest<T>(
+  async function ensureThenRequest(
     path: string,
     init: RequestInit,
   ): Promise<Response> {

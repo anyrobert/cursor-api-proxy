@@ -1,11 +1,11 @@
+import { resolveAcpModelConfigValue } from "./acp-client.js";
 import {
   AcpConnection,
-  permissionOption,
   type AcpConnectionOptions,
   type AcpPermissionParams,
   type AcpSessionResult,
+  permissionOption,
 } from "./acp-connection.js";
-import { resolveAcpModelConfigValue } from "./acp-client.js";
 import { ClientToolBridge } from "./client-tool-bridge.js";
 import type {
   ClientToolDefinition,
@@ -127,7 +127,8 @@ export class AcpToolSession {
         this.bridge.mcpServer,
       ]);
       this.#sessionId = session.sessionId;
-      if (!this.#sessionId) throw new Error("ACP session/new returned no sessionId");
+      if (!this.#sessionId)
+        throw new Error("ACP session/new returned no sessionId");
       await this.#setModel(session);
       this.#armTtl();
       this.#promptDone = this.#connection
@@ -235,7 +236,9 @@ export class AcpToolSession {
     this.#listener = undefined;
     this.bridge.rejectAll(new Error("ACP tool session closed"));
     if (this.#connection && this.#sessionId) {
-      await this.#connection.cancelSession(this.#sessionId).catch(() => undefined);
+      await this.#connection
+        .cancelSession(this.#sessionId)
+        .catch(() => undefined);
     }
     await this.#connection?.close("SIGKILL").catch(() => undefined);
     await this.bridge.close().catch(() => undefined);
@@ -269,7 +272,9 @@ export class AcpToolSession {
   #permissionFor(params: AcpPermissionParams): string {
     const call = record(params.toolCall) ?? {};
     const id = toolCallId(call);
-    const merged = id ? { ...(this.#toolUpdates.get(id) ?? {}), ...call } : call;
+    const merged = id
+      ? { ...(this.#toolUpdates.get(id) ?? {}), ...call }
+      : call;
     const payload = JSON.stringify(merged).toLowerCase();
     const title =
       typeof merged.title === "string" ? merged.title.trim().toLowerCase() : "";
@@ -280,10 +285,7 @@ export class AcpToolSession {
       kind === "other" &&
       (title === "mcp: tool" ||
         payload.includes(this.bridge.serverName.toLowerCase()));
-    return permissionOption(
-      params,
-      proxyOwned ? "allow_once" : "reject_once",
-    );
+    return permissionOption(params, proxyOwned ? "allow_once" : "reject_once");
   }
 
   #drainOutput(): { text: string; reasoning: string } {

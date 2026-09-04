@@ -76,7 +76,7 @@ export function logAccountAssigned(configDir: string | undefined): void {
 
 export function logAccountStats(verbose: boolean, stats: AccountStat[]): void {
   if (!verbose || stats.length === 0) return;
-  const now = Date.now();
+  const _now = Date.now();
   const lines: string[] = [];
   for (const s of stats) {
     const name = path.basename(s.configDir).padEnd(20);

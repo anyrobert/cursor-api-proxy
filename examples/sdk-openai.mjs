@@ -1,22 +1,25 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
+
 /**
  * Example: use the SDK with the OpenAI client (getOpenAIOptionsAsync).
  * The proxy starts in the background automatically if not already running,
  * and the SDK stops it when this script exits.
  *
- * Prereqs: Cursor CLI installed and logged in (agent login). Install OpenAI SDK: npm install openai
+ * Prereqs: Cursor CLI installed and logged in (agent login). Install OpenAI SDK: bun add openai
  *
- * Run: node examples/sdk-openai.mjs
+ * Run: bun examples/sdk-openai.mjs
  */
 
-import OpenAI from "openai";
 import { getOpenAIOptionsAsync } from "cursor-api-proxy";
+import OpenAI from "openai";
 
 async function main() {
   const opts = await getOpenAIOptionsAsync();
   const client = new OpenAI(opts);
 
-  console.log("Chat completion via OpenAI SDK + cursor-api-proxy (proxy starts automatically if needed)");
+  console.log(
+    "Chat completion via OpenAI SDK + cursor-api-proxy (proxy starts automatically if needed)",
+  );
   console.log("---");
 
   const completion = await client.chat.completions.create({

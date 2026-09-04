@@ -1,10 +1,10 @@
 import * as https from "node:https";
 
 export {
-  TOKEN_FILE,
   readCachedToken,
-  writeCachedToken,
   readKeychainToken,
+  TOKEN_FILE,
+  writeCachedToken,
 } from "../lib/token-cache.js";
 
 // ---------------------------------------------------------------------------
@@ -32,7 +32,7 @@ export function tokenSub(token: string): string | undefined {
 // Cursor API
 // ---------------------------------------------------------------------------
 
-const API_BASE = "https://api2.cursor.sh";
+const _API_BASE = "https://api2.cursor.sh";
 
 function apiGet(path: string, token: string): Promise<unknown> {
   return new Promise((resolve, reject) => {

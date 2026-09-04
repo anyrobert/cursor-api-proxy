@@ -1,6 +1,6 @@
 # cursor-api-proxy — Wiki
 
-**cursor-api-proxy** is a small **Node.js / TypeScript** service: an **OpenAI-compatible HTTP API** (plus Anthropic-style `POST /v1/messages`) that forwards chat to **Cursor’s CLI agent** (`cursor-agent` / ACP). It is the evolution of the older single-file **claude-cursor-bridge** pattern, packaged for `npm` and richer options (TLS, account pool, strict models, etc.).
+**cursor-api-proxy** is a small **Bun / TypeScript** service: an **OpenAI-compatible HTTP API** (plus Anthropic-style `POST /v1/messages`) that forwards chat to **Cursor’s CLI agent** (`cursor-agent` / ACP). It is the evolution of the older single-file **claude-cursor-bridge** pattern, packaged for Bun and richer options (TLS, account pool, strict models, etc.).
 
 This page documents the **local dashboard**, **markdown wiki in the browser**, and the **`cursor-api-proxy` shell launcher** — the same trio as **claude-cursor-bridge**.
 
@@ -24,7 +24,7 @@ This page documents the **local dashboard**, **markdown wiki in the browser**, a
 With the proxy **running**, open:
 
 | URL | Purpose |
-|-----|---------|
+| ----- | --------- |
 | `http://127.0.0.1:8765/` | **Dashboard** — status, effective config, request stats from `sessions.log`, log tail, action buttons |
 | `http://127.0.0.1:8765/wiki` | **Wiki** — this document rendered from `docs/WIKI.md` |
 | `http://127.0.0.1:8765/healthz` | Plain **`ok`** (for scripts and load checks) |
@@ -40,11 +40,11 @@ The dashboard and wiki are served **without** requiring `CURSOR_BRIDGE_API_KEY` 
 
 ```bash
 cd /path/to/cursor-api-proxy
-npm install
-npm run build
+bun install
+bun run build
 
 # Foreground (see stdout):
-npm start
+bun start
 
 # Or use the launcher (after [install](#install-the-launcher-script)):
 cursor-api-proxy start
@@ -57,10 +57,10 @@ Then open the dashboard at `http://127.0.0.1:8765/` (or your configured host/por
 
 ## The `cursor-api-proxy` CLI launcher
 
-Same idea as **claude-cursor-bridge**’s `claude-bridge`: a **bash** script in `~/.local/bin/cursor-api-proxy` that can start/stop the Node process, probe **`/healthz`**, and optionally install a **launchd** plist.
+Same idea as **claude-cursor-bridge**’s `claude-bridge`: a **bash** script in `~/.local/bin/cursor-api-proxy` that can start/stop the Bun process, probe **`/healthz`**, and optionally install a **launchd** plist.
 
 | Command | Behavior |
-|---------|----------|
+| --------- | ---------- |
 | `cursor-api-proxy` | No args: print **health**, then a tiny interactive menu |
 | `cursor-api-proxy start` | Background start, append stdout/stderr to `~/.cursor-api-proxy/proxy.log`, wait for `/healthz` |
 | `cursor-api-proxy stop` | `SIGTERM`, then `SIGKILL` if needed |
@@ -69,7 +69,7 @@ Same idea as **claude-cursor-bridge**’s `claude-bridge`: a **bash** script in 
 | `cursor-api-proxy requests` | Formatted latest completed requests from `sessions.log` |
 | `cursor-api-proxy enable` | Write `~/Library/LaunchAgents/com.cursor-api-proxy.plist` and `launchctl load` |
 | `cursor-api-proxy disable` | `launchctl unload` and remove the plist |
-| `cursor-api-proxy run` | Foreground `node …/dist/cli.js` (what launchd invokes) |
+| `cursor-api-proxy run` | Foreground `bun …/dist/cli.js` (what launchd invokes) |
 
 Request viewer options:
 
@@ -85,8 +85,8 @@ The viewer reads `CURSOR_BRIDGE_SESSIONS_LOG` directly (default
 Environment the script honors:
 
 | Variable | Meaning |
-|----------|---------|
-| `CURSOR_API_PROXY_ROOT` | Path to the **git checkout** (must contain `dist/cli.js` after `npm run build`) |
+| ---------- | --------- |
+| `CURSOR_API_PROXY_ROOT` | Path to the **git checkout** (must contain `dist/cli.js` after `bun run build`) |
 | `CURSOR_BRIDGE_PORT` | HTTP port (default **8765**) |
 | `CURSOR_BRIDGE_HOST` | Bind address (default **127.0.0.1**) |
 
@@ -104,7 +104,7 @@ export CURSOR_API_PROXY_ROOT="$(pwd)"   # add to ~/.zshrc if you want it permane
 cursor-api-proxy health
 ```
 
-If you installed the package globally with npm instead of a clone, point `CURSOR_API_PROXY_ROOT` at the package directory that contains `dist/cli.js` (for example under `$(npm root -g)/cursor-api-proxy`).
+If you installed the package with Bun instead of a clone, point `CURSOR_API_PROXY_ROOT` at the package directory that contains `dist/cli.js` (for example in Bun's install/cache location).
 
 ---
 
@@ -137,14 +137,14 @@ The plist label is **`com.cursor-api-proxy`**. Use **`cursor-api-proxy disable`*
 ## Files & directories
 
 | Path | Role |
-|------|------|
+| ------ | ------ |
 | `dist/cli.js` | Compiled server entry |
 | `public/` | Dashboard + wiki static assets |
 | `docs/WIKI.md` | Wiki source |
 | `scripts/cursor-api-proxy` | Launcher script (symlink target) |
 | `~/.cursor-api-proxy/sessions.log` | Default request log (one line per finished response) |
 | `~/.cursor-api-proxy/proxy.log` | Launcher / background stdout+stderr |
-| `~/.cursor-api-proxy/proxy.pid` | Written by the running Node process for the dashboard |
+| `~/.cursor-api-proxy/proxy.pid` | Written by the running Bun process for the dashboard |
 
 ---
 
@@ -156,7 +156,7 @@ Install the launcher to `~/.local/bin/cursor-api-proxy` (see [install](#install-
 
 **`Started, but no health response`**
 
-- Confirm `npm run build` was run so `dist/cli.js` exists.
+- Confirm `bun run build` was run so `dist/cli.js` exists.
 - Check `CURSOR_API_PROXY_ROOT`.
 - If port is in use, set `CURSOR_BRIDGE_PORT` to a free port in both the environment **and** the plist (re-run `enable` after editing the script or env).
 
@@ -169,8 +169,8 @@ Stats are parsed from **`sessions.log`** lines in the form logged by the proxy (
 ## Relation to claude-cursor-bridge
 
 | Feature | claude-cursor-bridge | cursor-api-proxy |
-|---------|---------------------|------------------|
+| --------- | --------------------- | ------------------ |
 | Anthropic → Cursor | yes | yes (+ OpenAI chat schema) |
 | Local dashboard + wiki | yes | yes |
 | Bash launcher + launchd | `claude-bridge` | `cursor-api-proxy` |
-| npm package / TypeScript | no | yes |
+| Bun package / TypeScript | no | yes |

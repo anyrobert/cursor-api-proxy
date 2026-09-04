@@ -57,7 +57,9 @@ export function buildBridgeContextPreamble(
   const loc = samePath
     ? `cwd=${input.agentWorkspaceDir}`
     : `workspace=${input.bridgeWorkspaceBase}; agent cwd=${input.agentWorkspaceDir}`;
-  const sandbox = input.isolatedChatOnly ? " (agent cwd is a temp sandbox)" : "";
+  const sandbox = input.isolatedChatOnly
+    ? " (agent cwd is a temp sandbox)"
+    : "";
 
   const lines: string[] = [
     `Via cursor-api-proxy → Cursor CLI. ${loc}; mode=${input.cursorMode}${sandbox}.`,

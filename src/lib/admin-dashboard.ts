@@ -1,6 +1,6 @@
 import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
-import * as http from "node:http";
+import type * as http from "node:http";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -119,8 +119,13 @@ function getStatus(
   }
 
   const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
-  const plistPath = path.join(home, "Library/LaunchAgents", `${PLIST_LABEL}.plist`);
-  const launchdLoaded = process.platform === "darwin" ? launchdLoadedSync() : false;
+  const plistPath = path.join(
+    home,
+    "Library/LaunchAgents",
+    `${PLIST_LABEL}.plist`,
+  );
+  const launchdLoaded =
+    process.platform === "darwin" ? launchdLoadedSync() : false;
 
   const env = process.env;
   cb({
@@ -177,7 +182,10 @@ function sanitizedBridgeConfig(config: BridgeConfig): Record<string, unknown> {
 function runControl(
   action: string,
   config: BridgeConfig,
-  cb: (err: Error | null, result?: { ok: boolean; action: string; scheduled: boolean }) => void,
+  cb: (
+    err: Error | null,
+    result?: { ok: boolean; action: string; scheduled: boolean },
+  ) => void,
 ): void {
   const allowed = ["start", "stop", "restart", "enable", "disable"];
   if (!allowed.includes(action)) {
@@ -224,7 +232,8 @@ export type AdminDashboardOpts = {
 export function adminDashboardMatches(req: http.IncomingMessage): boolean {
   const url = req.url ?? "";
   const pathname = url.split("?")[0] ?? "";
-  if (req.method === "GET" && (pathname === "/" || pathname === "/wiki")) return true;
+  if (req.method === "GET" && (pathname === "/" || pathname === "/wiki"))
+    return true;
   if (req.method === "GET" && pathname.startsWith("/static/")) return true;
   if (req.method === "GET" && pathname.startsWith("/api/")) return true;
   if (req.method === "POST" && pathname === "/api/control") return true;

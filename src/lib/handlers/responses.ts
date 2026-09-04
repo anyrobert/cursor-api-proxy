@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
-import * as http from "node:http";
-
-import { buildAgentFixedArgs } from "../agent-cmd-args.js";
+import type * as http from "node:http";
 import {
   getAccountStats,
   getNextAccountConfigDir,
@@ -11,20 +9,22 @@ import {
   reportRequestStart,
   reportRequestSuccess,
 } from "../account-pool.js";
-import {
-  BRIDGE_AGENT_PROMPT_SEPARATOR,
-  buildBridgeContextPreamble,
-} from "../bridge-context-preamble.js";
-import type { BridgeConfig } from "../config.js";
-import type { CursorExecutionMode } from "../execution-mode.js";
-import { json, writeSseHeaders } from "../http.js";
+import type { ToolTurnEvent, ToolTurnResult } from "../acp-tool-session.js";
+import { buildAgentFixedArgs } from "../agent-cmd-args.js";
 import {
   runAgentStream,
   runAgentSync,
   startAgentToolSession,
 } from "../agent-runner.js";
-import type { ToolTurnEvent, ToolTurnResult } from "../acp-tool-session.js";
+import {
+  BRIDGE_AGENT_PROMPT_SEPARATOR,
+  buildBridgeContextPreamble,
+} from "../bridge-context-preamble.js";
 import { createStreamParser } from "../cli-stream-parser.js";
+import { abortOnClientDisconnect } from "../client-disconnect.js";
+import type { BridgeConfig } from "../config.js";
+import type { CursorExecutionMode } from "../execution-mode.js";
+import { json, writeSseHeaders } from "../http.js";
 import {
   resolveModelForExecution,
   UnsupportedReasoningEffortError,
@@ -32,9 +32,9 @@ import {
 import {
   buildPromptFromMessages,
   normalizeModelId,
+  type OpenAiResponsesRequest,
   responsesInputToMessages,
   toolsToSystemText,
-  type OpenAiResponsesRequest,
 } from "../openai.js";
 import {
   logAccountAssigned,
@@ -45,27 +45,26 @@ import {
   logTrafficResponse,
   type TrafficMessage,
 } from "../request-log.js";
-import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
+import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { sanitizeMessages } from "../sanitize.js";
-import { resolveWorkspace } from "../workspace.js";
+import {
+  ToolSessionError,
+  type ToolSessionRecord,
+  type ToolSessionRegistry,
+  toolSessionOwnerKey,
+} from "../tool-session-registry.js";
+import {
+  type PendingClientToolCall,
+  parseOpenAiFunctionTools,
+  resolveToolChoice,
+  responsesToolOutputs,
+} from "../tool-types.js";
 import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
 } from "../win-cmdline-limit.js";
-import { abortOnClientDisconnect } from "../client-disconnect.js";
-import {
-  parseOpenAiFunctionTools,
-  resolveToolChoice,
-  responsesToolOutputs,
-  type PendingClientToolCall,
-} from "../tool-types.js";
-import {
-  ToolSessionError,
-  toolSessionOwnerKey,
-  type ToolSessionRecord,
-  type ToolSessionRegistry,
-} from "../tool-session-registry.js";
+import { resolveWorkspace } from "../workspace.js";
 import { getCachedCursorModels, type ModelCacheRef } from "./models.js";
 
 function isRateLimited(stderr: string): boolean {
@@ -169,9 +168,7 @@ async function writeStructuredResponseTurn(opts: {
   model: string | undefined;
   previousResponseId?: string | null;
   promptLength: number;
-  run: (
-    listener?: (event: ToolTurnEvent) => void,
-  ) => Promise<ToolTurnResult>;
+  run: (listener?: (event: ToolTurnEvent) => void) => Promise<ToolTurnResult>;
 }): Promise<ToolTurnResult> {
   const messageId = `msg_${randomUUID().replace(/-/g, "")}`;
   if (!opts.stream) {
@@ -266,9 +263,7 @@ async function writeStructuredResponseTurn(opts: {
         type: "message",
         status: "completed",
         role: "assistant",
-        content: [
-          { type: "output_text", text: result.text, annotations: [] },
-        ],
+        content: [{ type: "output_text", text: result.text, annotations: [] }],
       },
     });
   }
@@ -286,26 +281,18 @@ async function writeStructuredResponseTurn(opts: {
           arguments: "",
         },
       });
-      writeResponseEvent(
-        opts.res,
-        "response.function_call_arguments.delta",
-        {
-          response_id: opts.id,
-          item_id: call.itemId,
-          output_index: outputIndex,
-          delta: call.arguments,
-        },
-      );
-      writeResponseEvent(
-        opts.res,
-        "response.function_call_arguments.done",
-        {
-          response_id: opts.id,
-          item_id: call.itemId,
-          output_index: outputIndex,
-          arguments: call.arguments,
-        },
-      );
+      writeResponseEvent(opts.res, "response.function_call_arguments.delta", {
+        response_id: opts.id,
+        item_id: call.itemId,
+        output_index: outputIndex,
+        delta: call.arguments,
+      });
+      writeResponseEvent(opts.res, "response.function_call_arguments.done", {
+        response_id: opts.id,
+        item_id: call.itemId,
+        output_index: outputIndex,
+        arguments: call.arguments,
+      });
       writeResponseEvent(opts.res, "response.output_item.done", {
         response_id: opts.id,
         output_index: outputIndex,
@@ -399,7 +386,11 @@ function createResponseObject(opts: {
   };
 }
 
-function createOutputItem(itemId: string, status: ResponseStatus, text: string) {
+function createOutputItem(
+  itemId: string,
+  status: ResponseStatus,
+  text: string,
+) {
   return {
     id: itemId,
     type: "message",
@@ -542,9 +533,7 @@ export async function handleResponses(
     decision.requestedWasDefault && config.defaultModel !== "default"
       ? config.defaultModel
       : model;
-  const modelCatalogName = models.find(
-    (item) => item.id === cursorModel,
-  )?.name;
+  const modelCatalogName = models.find((item) => item.id === cursorModel)?.name;
   const id = `resp_${randomUUID().replace(/-/g, "")}`;
   const createdAt = Math.floor(Date.now() / 1000);
 
@@ -596,8 +585,7 @@ export async function handleResponses(
         ? ctx.toolSessions.findByResponseId(ownerKey, previousResponseId)
         : undefined;
     if (
-      !record ||
-      record.api !== "responses" ||
+      record?.api !== "responses" ||
       !submittedToolOutputs.every((output) =>
         record.session.hasCall(output.callId),
       )
@@ -757,8 +745,7 @@ export async function handleResponses(
   // When the prompt is delivered via stdin (or ACP), keep it OUT of argv,
   // otherwise a long prompt still blows past the kernel ARG_MAX (spawn E2BIG
   // on Linux). fit.args appends the full prompt for the argv path only.
-  const cmdArgs =
-    config.promptViaStdin || config.useAcp ? fixedArgs : fit.args;
+  const cmdArgs = config.promptViaStdin || config.useAcp ? fixedArgs : fit.args;
 
   const itemId = `msg_${randomUUID().replace(/-/g, "")}`;
   const promptForAgent =
@@ -919,7 +906,12 @@ export async function handleResponses(
     };
 
     const finishStream = (accumulated: string) => {
-      logTrafficResponse(config.verbose, model ?? cursorModel, accumulated, true);
+      logTrafficResponse(
+        config.verbose,
+        model ?? cursorModel,
+        accumulated,
+        true,
+      );
       const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
       const completionTokens = Math.max(1, Math.round(accumulated.length / 4));
       const completedItem = createOutputItem(itemId, "completed", accumulated);
@@ -1083,10 +1075,7 @@ export async function handleResponses(
         if (!abortController.signal.aborted) {
           reportRequestError(configDir, Date.now() - streamStart);
         }
-        console.error(
-          `[${new Date().toISOString()}] Agent stream error:`,
-          err,
-        );
+        console.error(`[${new Date().toISOString()}] Agent stream error:`, err);
         res.end();
       });
     return;

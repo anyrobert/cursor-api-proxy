@@ -18,8 +18,8 @@
  * cannot fingerprint the session.
  */
 
-import * as crypto from "node:crypto";
 import { execSync, spawnSync } from "node:child_process";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -33,11 +33,17 @@ function uuid(): string {
 }
 
 function sha256(): string {
-  return crypto.createHash("sha256").update(crypto.randomBytes(32)).digest("hex");
+  return crypto
+    .createHash("sha256")
+    .update(crypto.randomBytes(32))
+    .digest("hex");
 }
 
 function sha512(): string {
-  return crypto.createHash("sha512").update(crypto.randomBytes(64)).digest("hex");
+  return crypto
+    .createHash("sha512")
+    .update(crypto.randomBytes(64))
+    .digest("hex");
 }
 
 function log(icon: string, msg: string) {
@@ -124,7 +130,9 @@ function updateStorageJson(
       try {
         execSync(`chflags nouchg "${storagePath}"`, { stdio: "pipe" });
         execSync(`chmod 644 "${storagePath}"`, { stdio: "pipe" });
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
 
     const raw = fs.readFileSync(storagePath, "utf-8");
@@ -141,10 +149,7 @@ function updateStorageJson(
 // state.vscdb (SQLite)
 // ---------------------------------------------------------------------------
 
-function updateStateVscdb(
-  dbPath: string,
-  ids: Record<string, string>,
-): void {
+function updateStateVscdb(dbPath: string, ids: Record<string, string>): void {
   if (!fs.existsSync(dbPath)) {
     log("⚠️ ", `state.vscdb not found: ${dbPath}`);
     return;
@@ -152,7 +157,10 @@ function updateStateVscdb(
 
   const sqlite3 = findSqlite3();
   if (!sqlite3) {
-    log("⚠️ ", "sqlite3 not found — skipping state.vscdb (install sqlite3 to fix)");
+    log(
+      "⚠️ ",
+      "sqlite3 not found — skipping state.vscdb (install sqlite3 to fix)",
+    );
     return;
   }
 
@@ -161,7 +169,9 @@ function updateStateVscdb(
       try {
         execSync(`chflags nouchg "${dbPath}"`, { stdio: "pipe" });
         execSync(`chmod 644 "${dbPath}"`, { stdio: "pipe" });
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
 
     const keyRe = /^[A-Za-z0-9._-]+$/;
@@ -176,20 +186,17 @@ function updateStateVscdb(
 
     // Build SQL (values validated as hex/UUID-shaped only)
     const stmts = Object.entries(ids)
-      .map(([k, v]) =>
-        `INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('${k}', '${v}');`,
+      .map(
+        ([k, v]) =>
+          `INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('${k}', '${v}');`,
       )
       .join("\n");
 
-    const result = spawnSync(
-      sqlite3,
-      [dbPath],
-      {
-        input: `CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value TEXT NOT NULL);\n${stmts}`,
-        stdio: ["pipe", "pipe", "pipe"],
-        encoding: "utf-8",
-      },
-    );
+    const result = spawnSync(sqlite3, [dbPath], {
+      input: `CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value TEXT NOT NULL);\n${stmts}`,
+      stdio: ["pipe", "pipe", "pipe"],
+      encoding: "utf-8",
+    });
 
     if (result.status !== 0) {
       log("⚠️ ", `state.vscdb error: ${result.stderr?.trim()}`);
@@ -202,11 +209,17 @@ function updateStateVscdb(
 }
 
 function findSqlite3(): string | null {
-  for (const candidate of ["/usr/bin/sqlite3", "/usr/local/bin/sqlite3", "sqlite3"]) {
+  for (const candidate of [
+    "/usr/bin/sqlite3",
+    "/usr/local/bin/sqlite3",
+    "sqlite3",
+  ]) {
     try {
       const r = spawnSync(candidate, ["--version"], { stdio: "pipe" });
       if (r.status === 0) return candidate;
-    } catch { /* try next */ }
+    } catch {
+      /* try next */
+    }
   }
   return null;
 }
@@ -215,16 +228,10 @@ function findSqlite3(): string | null {
 // machineId file
 // ---------------------------------------------------------------------------
 
-function updateMachineIdFile(
-  machineId: string,
-  cursorRoot: string,
-): void {
+function updateMachineIdFile(machineId: string, cursorRoot: string): void {
   const candidates =
     process.platform === "linux"
-      ? [
-          path.join(cursorRoot, "machineid"),
-          path.join(cursorRoot, "machineId"),
-        ]
+      ? [path.join(cursorRoot, "machineid"), path.join(cursorRoot, "machineId")]
       : [path.join(cursorRoot, "machineId")];
 
   const filePath = candidates.find(fs.existsSync) ?? candidates[0];
@@ -235,9 +242,11 @@ function updateMachineIdFile(
       try {
         execSync(`chflags nouchg "${filePath}"`, { stdio: "pipe" });
         execSync(`chmod 644 "${filePath}"`, { stdio: "pipe" });
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
-    fs.writeFileSync(filePath, machineId + "\n", "utf-8");
+    fs.writeFileSync(filePath, `${machineId}\n`, "utf-8");
     log("✅", `machineId file updated (${path.basename(filePath)})`);
   } catch (e) {
     log("⚠️ ", `machineId file error: ${e}`);
@@ -276,7 +285,9 @@ function deepClean(cursorRoot: string): void {
         fs.unlinkSync(target);
       }
       wiped++;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   log("✅", `Wiped ${wiped} cache/session items`);
@@ -286,12 +297,13 @@ function deepClean(cursorRoot: string): void {
 // Main export
 // ---------------------------------------------------------------------------
 
-export async function handleResetHwid(opts: {
-  deepClean?: boolean;
-  dryRun?: boolean;
-} = {}): Promise<void> {
+export async function handleResetHwid(
+  opts: { deepClean?: boolean; dryRun?: boolean } = {},
+): Promise<void> {
   console.log("\n🔄 Cursor HWID Reset\n");
-  console.log("  Resets all machine / telemetry IDs so Cursor sees a fresh install.");
+  console.log(
+    "  Resets all machine / telemetry IDs so Cursor sees a fresh install.",
+  );
   console.log("  Cursor must be closed — it will be killed automatically.\n");
 
   const globalStorage = getCursorGlobalStorage();
@@ -299,7 +311,9 @@ export async function handleResetHwid(opts: {
 
   if (!fs.existsSync(globalStorage)) {
     console.log(`❌ Cursor config not found at:\n   ${globalStorage}`);
-    console.log("   Make sure Cursor is installed and has been run at least once.");
+    console.log(
+      "   Make sure Cursor is installed and has been run at least once.",
+    );
     process.exit(1);
   }
 

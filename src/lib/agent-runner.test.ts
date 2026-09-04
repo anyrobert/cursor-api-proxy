@@ -1,8 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-
-import type { BridgeConfig } from "./config.js";
-import { runAgentSync, runAgentStream } from "./agent-runner.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runAcpStream, runAcpSync } from "./acp-client.js";
+import { runAgentStream, runAgentSync } from "./agent-runner.js";
+import type { BridgeConfig } from "./config.js";
 
 vi.mock("./acp-client.js", () => ({
   runAcpSync: vi.fn().mockResolvedValue({ code: 0, stdout: "ok", stderr: "" }),

@@ -34,11 +34,7 @@ export type AcpHttpMcpServer = {
   headers: Array<{ name: string; value: string }>;
 };
 
-const LOOPBACK_ADDRESSES = new Set([
-  "127.0.0.1",
-  "::1",
-  "::ffff:127.0.0.1",
-]);
+const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 function safeTokenEqual(actual: string, expected: string): boolean {
   const a = Buffer.from(actual);
@@ -214,9 +210,7 @@ export class ClientToolBridge {
       type: "http",
       name: this.serverName,
       url: this.#url,
-      headers: [
-        { name: "Authorization", value: `Bearer ${this.#token}` },
-      ],
+      headers: [{ name: "Authorization", value: `Bearer ${this.#token}` }],
     };
   }
 

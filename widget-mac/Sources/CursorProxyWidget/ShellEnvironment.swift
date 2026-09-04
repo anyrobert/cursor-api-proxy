@@ -4,22 +4,22 @@ import Foundation
 ///
 /// Why this exists: when the widget runs under launchd, its PATH is the
 /// minimal `/usr/bin:/bin:/usr/sbin:/sbin` and never contains user-installed
-/// node (Homebrew, nvm, custom dirs). The bash CLI we spawn then fails with
-/// "node not found" → exit 1. We probe the user's actual login shell once at
+/// bun (Homebrew, ~/.bun, custom dirs). The bash CLI we spawn then fails with
+/// "bun not found" → exit 1. We probe the user's actual login shell once at
 /// app start and cache the result, then hand it to every `Process` we spawn.
 ///
 /// Failure-isolated: if discovery fails, we fall back to a hard-coded list of
 /// common locations. The widget keeps running regardless.
 struct ShellEnvironment {
     let path: String
-    let nodePath: String?
+    let bunPath: String?
 
-    /// Augment the given env with this PATH and (if found) CURSOR_API_PROXY_NODE.
+    /// Augment the given env with this PATH and (if found) CURSOR_API_PROXY_BUN.
     func apply(to env: [String: String]) -> [String: String] {
         var out = env
         out["PATH"] = path
-        if let node = nodePath, env["CURSOR_API_PROXY_NODE"] == nil {
-            out["CURSOR_API_PROXY_NODE"] = node
+        if let bun = bunPath, env["CURSOR_API_PROXY_BUN"] == nil {
+            out["CURSOR_API_PROXY_BUN"] = bun
         }
         return out
     }
@@ -28,8 +28,8 @@ struct ShellEnvironment {
         let fallbackDirs = candidateDirs()
         let loginPath = readLoginShellPath()
         let mergedPath = mergePaths(loginPath, fallbackDirs)
-        let node = findExecutable("node", in: mergedPath)
-        return ShellEnvironment(path: mergedPath, nodePath: node)
+        let bun = findExecutable("bun", in: mergedPath)
+        return ShellEnvironment(path: mergedPath, bunPath: bun)
     }
 
     // MARK: - helpers
@@ -37,6 +37,7 @@ struct ShellEnvironment {
     private static func candidateDirs() -> [String] {
         let home = NSHomeDirectory()
         var dirs = [
+            "\(home)/.bun/bin",
             "\(home)/.local/bin",
             "/opt/homebrew/bin",
             "/usr/local/bin",
@@ -47,12 +48,6 @@ struct ShellEnvironment {
             "/usr/sbin",
             "/sbin",
         ]
-        let nvm = "\(home)/.nvm/versions/node"
-        if let entries = try? FileManager.default.contentsOfDirectory(atPath: nvm) {
-            for v in entries.sorted().reversed() {
-                dirs.insert("\(nvm)/\(v)/bin", at: 0)
-            }
-        }
         return dirs
     }
 

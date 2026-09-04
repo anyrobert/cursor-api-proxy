@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AccountPool,
-  initAccountPool,
   getNextAccountConfigDir,
-  reportRequestStart,
-  reportRequestEnd,
+  initAccountPool,
   reportRateLimit,
+  reportRequestEnd,
+  reportRequestStart,
 } from "./account-pool.js";
 
 describe("AccountPool", () => {

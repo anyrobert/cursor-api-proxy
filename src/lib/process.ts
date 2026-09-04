@@ -1,7 +1,7 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { resolveAgentCommand } from "./env.js";
-import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
 import { runMaxModePreflight } from "./max-mode-preflight.js";
+import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
 
 export type RunResult = {
   code: number;
@@ -90,7 +90,7 @@ function spawnChild(
     detached: DETACH_CHILDREN,
   });
 
-  if (useStdin && opts!.stdinContent !== undefined && child.stdin) {
+  if (useStdin && opts?.stdinContent !== undefined && child.stdin) {
     child.stdin.write(opts.stdinContent, "utf8");
     child.stdin.end();
   }
@@ -139,11 +139,11 @@ export function runStreaming(
     let stderr = "";
     let lineBuffer = "";
 
-    child.stderr!.setEncoding("utf8");
-    child.stderr!.on("data", (c) => (stderr += c));
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (c) => (stderr += c));
 
-    child.stdout!.setEncoding("utf8");
-    child.stdout!.on("data", (chunk: string) => {
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
       lineBuffer += chunk;
       const lines = lineBuffer.split("\n");
       lineBuffer = lines.pop() ?? "";
@@ -218,10 +218,10 @@ export function run(
     let stdout = "";
     let stderr = "";
 
-    child.stdout!.setEncoding("utf8");
-    child.stderr!.setEncoding("utf8");
-    child.stdout!.on("data", (c) => (stdout += c));
-    child.stderr!.on("data", (c) => (stderr += c));
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (c) => (stdout += c));
+    child.stderr?.on("data", (c) => (stderr += c));
 
     child.on("error", (err: NodeJS.ErrnoException) => {
       if (timeout) clearTimeout(timeout);

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-
-import type { AgentCommand } from "./env.js";
 import { BRIDGE_AGENT_PROMPT_SEPARATOR } from "./bridge-context-preamble.js";
+import type { AgentCommand } from "./env.js";
 import {
   estimateCmdlineLength,
   fitPromptToWinCmdline,

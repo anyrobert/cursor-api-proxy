@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 
 // We need to test parseArgs - it's not exported. We can either:
 // 1. Export it from cli.ts

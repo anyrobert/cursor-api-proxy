@@ -13,8 +13,8 @@ Optional: set `CURSOR_PROXY_URL` to use a different proxy URL (default `http://1
 Minimal client (`createCursorProxyClient`). Proxy starts on first request. No extra dependencies.
 
 ```bash
-npm run build   # if running from repo
-node examples/sdk-client.mjs
+bun run build   # if running from repo
+bun examples/sdk-client.mjs
 ```
 
 ### sdk-openai.mjs
@@ -22,8 +22,8 @@ node examples/sdk-client.mjs
 `getOpenAIOptionsAsync` with the OpenAI SDK. Proxy starts automatically. `openai` is not part of this package; install it in the project where you run the example.
 
 ```bash
-npm install openai
-node examples/sdk-openai.mjs
+bun add openai
+bun examples/sdk-openai.mjs
 ```
 
 ### sdk-stream.mjs
@@ -31,7 +31,7 @@ node examples/sdk-openai.mjs
 Minimal client's `fetch` for streaming. Proxy starts on first request.
 
 ```bash
-node examples/sdk-stream.mjs
+bun examples/sdk-stream.mjs
 ```
 
 ---
@@ -43,7 +43,7 @@ node examples/sdk-stream.mjs
 Non-streaming chat completion via raw `fetch` (no cursor-api-proxy SDK import).
 
 ```bash
-node examples/test.mjs
+bun examples/test.mjs
 ```
 
 ### test-stream.mjs
@@ -51,7 +51,7 @@ node examples/test.mjs
 Streaming chat completion via raw `fetch`.
 
 ```bash
-node examples/test-stream.mjs
+bun examples/test-stream.mjs
 ```
 
 Prints each streamed chunk and the total character count.
@@ -61,8 +61,8 @@ Prints each streamed chunk and the total character count.
 Full latency breakdown for debugging slow requests: CLI spawn, direct CLI/ACP, proxy sync/stream, ephemeral ACP proxy, and client-tool round-trip.
 
 ```bash
-npm run build
-node examples/benchmark-latency.mjs
+bun run build
+bun examples/benchmark-latency.mjs
 ```
 
 Phases 5–7 spawn short-lived proxies on free ports (`CURSOR_BRIDGE_USE_ACP=true`).

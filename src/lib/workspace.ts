@@ -72,7 +72,9 @@ export function resolveWorkspace(
       "utf8",
     );
     if (process.platform === "win32") {
-      fs.mkdirSync(path.join(tempDir, "AppData", "Roaming"), { recursive: true });
+      fs.mkdirSync(path.join(tempDir, "AppData", "Roaming"), {
+        recursive: true,
+      });
       fs.mkdirSync(path.join(tempDir, "AppData", "Local"), { recursive: true });
     } else {
       fs.mkdirSync(path.join(tempDir, ".config"), { recursive: true });

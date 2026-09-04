@@ -1,4 +1,4 @@
-import * as http from "node:http";
+import type * as http from "node:http";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -6,9 +6,9 @@ import type { BridgeConfig } from "./config.js";
 import { startBridgeServer } from "./server.js";
 
 vi.mock("./cursor-cli.js", () => ({
-  listCursorCliModels: vi.fn().mockResolvedValue([
-    { id: "gpt-4", name: "gpt-4" },
-  ]),
+  listCursorCliModels: vi
+    .fn()
+    .mockResolvedValue([{ id: "gpt-4", name: "gpt-4" }]),
 }));
 
 const fakeServerPath = join(
@@ -90,10 +90,12 @@ function sseData(text: string): any[] {
 
 afterEach(async () => {
   await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve) => server.close(() => resolve())),
-    ),
+    servers
+      .splice(0)
+      .map(
+        (server) =>
+          new Promise<void>((resolve) => server.close(() => resolve())),
+      ),
   );
 });
 

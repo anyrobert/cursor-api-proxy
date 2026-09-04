@@ -1,6 +1,6 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { launch as launchChrome } from "chrome-launcher";
 
 import { loadEnvConfig, resolveAgentCommand } from "../lib/env.js";

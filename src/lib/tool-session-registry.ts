@@ -134,9 +134,7 @@ export class ToolSessionRegistry {
   ): ToolSessionRecord | undefined {
     this.#sweep();
     const record = this.#byResponseId.get(responseId);
-    return record &&
-      record.ownerKey === ownerKey &&
-      !record.session.closed
+    return record && record.ownerKey === ownerKey && !record.session.closed
       ? record
       : undefined;
   }

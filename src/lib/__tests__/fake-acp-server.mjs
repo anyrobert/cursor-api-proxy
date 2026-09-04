@@ -130,7 +130,7 @@ async function connectMcp() {
   return { server, sessionId: initialized.sessionId };
 }
 
-async function requestToolPermission(name, index) {
+async function requestToolPermission(_name, index) {
   const toolCallId = `fake-tool-${index}`;
   update("tool_call", {
     toolCallId,
@@ -154,9 +154,7 @@ async function requestToolPermission(name, index) {
       },
     ],
   });
-  process.stderr.write(
-    `__FAKE_ACP_PERMISSION__:${JSON.stringify(response)}\n`,
-  );
+  process.stderr.write(`__FAKE_ACP_PERMISSION__:${JSON.stringify(response)}\n`);
   if (response?.outcome?.optionId !== "allow-once") {
     throw new Error("Proxy rejected caller MCP tool");
   }
@@ -219,9 +217,7 @@ async function runBuiltinPermissionPrompt() {
       },
     ],
   });
-  process.stderr.write(
-    `__FAKE_ACP_PERMISSION__:${JSON.stringify(response)}\n`,
-  );
+  process.stderr.write(`__FAKE_ACP_PERMISSION__:${JSON.stringify(response)}\n`);
   update("agent_message_chunk", { content: { text: "Builtin handled" } });
 }
 

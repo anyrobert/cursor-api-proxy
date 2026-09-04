@@ -184,10 +184,7 @@ function executableOnPath(
   return undefined;
 }
 
-function resolveAgentBinary(
-  env: EnvSource,
-  platform: NodeJS.Platform,
-): string {
+function resolveAgentBinary(env: EnvSource, platform: NodeJS.Platform): string {
   const explicit = envString(env, [
     "CURSOR_AGENT_BIN",
     "CURSOR_CLI_BIN",
@@ -208,9 +205,9 @@ function parseVersionToInt(name: string): number {
   const m = name.match(VERSION_DIR_REGEX);
   if (!m) return 0;
   const [, year, month, day] = m;
-  const y = year!.padStart(4, "0");
-  const mo = month!.padStart(2, "0");
-  const d = day!.padStart(2, "0");
+  const y = year?.padStart(4, "0");
+  const mo = month?.padStart(2, "0");
+  const d = day?.padStart(2, "0");
   return parseInt(y + mo + d, 10);
 }
 
@@ -228,7 +225,7 @@ function findLatestVersionDir(dir: string): string | undefined {
     .filter((e) => e.isDirectory() && VERSION_DIR_REGEX.test(e.name))
     .sort((a, b) => parseVersionToInt(b.name) - parseVersionToInt(a.name));
   if (versionDirs.length === 0) return undefined;
-  return path.join(versionsDir, versionDirs[0]!.name);
+  return path.join(versionsDir, versionDirs[0]?.name);
 }
 
 function configDirFromAgentDir(dir: string): string | undefined {
@@ -385,12 +382,14 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
 
   const contextExtra = envContextExtra(env);
 
-  const chatOnlyWorkspaceExplicit = Object.prototype.hasOwnProperty.call(
+  const chatOnlyWorkspaceExplicit = Object.hasOwn(
     env,
     "CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE",
   );
 
-  const mode = tryParseExecutionModeEnv(firstDefined(env, ["CURSOR_BRIDGE_MODE"]));
+  const mode = tryParseExecutionModeEnv(
+    firstDefined(env, ["CURSOR_BRIDGE_MODE"]),
+  );
   const dshAutoMode = envBool(env, ["CURSOR_BRIDGE_DSH_AUTO_MODE"], false);
 
   return {

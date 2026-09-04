@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createStreamParser } from "./cli-stream-parser.js";
 
 describe("createStreamParser", () => {
@@ -7,17 +7,21 @@ describe("createStreamParser", () => {
     const onDone = vi.fn();
     const parse = createStreamParser(onText, onDone);
 
-    parse(JSON.stringify({
-      type: "assistant",
-      message: { content: [{ type: "text", text: "Hello" }] },
-    }));
+    parse(
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Hello" }] },
+      }),
+    );
     expect(onText).toHaveBeenCalledTimes(1);
     expect(onText).toHaveBeenCalledWith("Hello");
 
-    parse(JSON.stringify({
-      type: "assistant",
-      message: { content: [{ type: "text", text: "Hello world" }] },
-    }));
+    parse(
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Hello world" }] },
+      }),
+    );
     expect(onText).toHaveBeenCalledTimes(2);
     expect(onText).toHaveBeenLastCalledWith(" world");
   });
@@ -27,23 +31,29 @@ describe("createStreamParser", () => {
     const onDone = vi.fn();
     const parse = createStreamParser(onText, onDone);
 
-    parse(JSON.stringify({
-      type: "assistant",
-      message: { content: [{ type: "text", text: "Hi" }] },
-    }));
-    parse(JSON.stringify({
-      type: "assistant",
-      message: { content: [{ type: "text", text: "Hi there" }] },
-    }));
+    parse(
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Hi" }] },
+      }),
+    );
+    parse(
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Hi there" }] },
+      }),
+    );
     expect(onText).toHaveBeenCalledTimes(2);
     expect(onText).toHaveBeenNthCalledWith(1, "Hi");
     expect(onText).toHaveBeenNthCalledWith(2, " there");
 
     // Final duplicate: full accumulated text again
-    parse(JSON.stringify({
-      type: "assistant",
-      message: { content: [{ type: "text", text: "Hi there" }] },
-    }));
+    parse(
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Hi there" }] },
+      }),
+    );
     expect(onText).toHaveBeenCalledTimes(2); // no new call
   });
 
@@ -63,10 +73,12 @@ describe("createStreamParser", () => {
     const parse = createStreamParser(onText, onDone);
 
     parse(JSON.stringify({ type: "result", subtype: "success" }));
-    parse(JSON.stringify({
-      type: "assistant",
-      message: { content: [{ type: "text", text: "late" }] },
-    }));
+    parse(
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "late" }] },
+      }),
+    );
     expect(onText).not.toHaveBeenCalled();
     expect(onDone).toHaveBeenCalledTimes(1);
   });
@@ -78,7 +90,9 @@ describe("createStreamParser", () => {
 
     parse(JSON.stringify({ type: "user", message: {} }));
     parse(JSON.stringify({ type: "assistant", message: { content: [] } }));
-    parse('{"type":"assistant","message":{"content":[{"type":"code","text":"x"}]}}');
+    parse(
+      '{"type":"assistant","message":{"content":[{"type":"code","text":"x"}]}}',
+    );
     expect(onText).not.toHaveBeenCalled();
   });
 
@@ -99,10 +113,12 @@ describe("createStreamParser", () => {
     const onDone = vi.fn();
     const parse = createStreamParser(onText, onDone);
 
-    parse(JSON.stringify({
-      type: "assistant",
-      message: { content: [{ type: "text", text: "Full response" }] },
-    }));
+    parse(
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Full response" }] },
+      }),
+    );
     expect(onText).toHaveBeenCalledTimes(1);
     expect(onText).toHaveBeenCalledWith("Full response");
   });
@@ -112,16 +128,18 @@ describe("createStreamParser", () => {
     const onDone = vi.fn();
     const parse = createStreamParser(onText, onDone);
 
-    parse(JSON.stringify({
-      type: "assistant",
-      message: {
-        content: [
-          { type: "text", text: "Hello" },
-          { type: "text", text: " " },
-          { type: "text", text: "world" },
-        ],
-      },
-    }));
+    parse(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "Hello" },
+            { type: "text", text: " " },
+            { type: "text", text: "world" },
+          ],
+        },
+      }),
+    );
     expect(onText).toHaveBeenCalledTimes(1);
     expect(onText).toHaveBeenCalledWith("Hello world");
   });

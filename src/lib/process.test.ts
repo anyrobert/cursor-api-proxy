@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { run, runStreaming, killAllChildProcesses } from "./process.js";
+import { describe, expect, it, vi } from "vitest";
+import { killAllChildProcesses, run, runStreaming } from "./process.js";
 
 const node = process.execPath;
 

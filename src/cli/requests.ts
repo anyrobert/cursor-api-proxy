@@ -22,8 +22,8 @@ export type RequestsOutput = {
 
 export type FormatRequestsOptions = {
   logPath: string;
-  width?: number;
-  color?: boolean;
+  width?: number | undefined;
+  color?: boolean | undefined;
 };
 
 export type HandleRequestsOptions = {

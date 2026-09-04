@@ -302,7 +302,7 @@ export function chatToolOutputs(
   const outputs: ClientToolOutput[] = [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = asRecord(messages[i]);
-    if (!message || message.role !== "tool") break;
+    if (message?.role !== "tool") break;
     if (typeof message.tool_call_id !== "string" || !message.tool_call_id) {
       throw new Error("Tool message is missing tool_call_id");
     }
@@ -341,11 +341,11 @@ export function anthropicToolOutputs(
   messages: readonly unknown[],
 ): ClientToolOutput[] {
   const last = asRecord(messages[messages.length - 1]);
-  if (!last || last.role !== "user" || !Array.isArray(last.content)) return [];
+  if (last?.role !== "user" || !Array.isArray(last.content)) return [];
   const outputs: ClientToolOutput[] = [];
   for (const value of last.content) {
     const block = asRecord(value);
-    if (!block || block.type !== "tool_result") continue;
+    if (block?.type !== "tool_result") continue;
     if (typeof block.tool_use_id !== "string" || !block.tool_use_id) {
       throw new Error("tool_result is missing tool_use_id");
     }

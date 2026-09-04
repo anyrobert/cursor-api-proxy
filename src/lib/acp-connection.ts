@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import * as readline from "node:readline";
 import { debuglog } from "node:util";
 
@@ -155,7 +155,8 @@ function selectedOption(
 ): string {
   return (
     params.options?.find((option) => option.kind === preferredKind)?.optionId ??
-    params.options?.find((option) => option.optionId === fallbackId)?.optionId ??
+    params.options?.find((option) => option.optionId === fallbackId)
+      ?.optionId ??
     fallbackId
   );
 }

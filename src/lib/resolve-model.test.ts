@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-
-import { rememberResolvedModel, resolveModel } from "./resolve-model.js";
 import type { BridgeConfig } from "./config.js";
+import { rememberResolvedModel, resolveModel } from "./resolve-model.js";
 
 function config(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
   return {

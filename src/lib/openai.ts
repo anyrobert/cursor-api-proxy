@@ -68,7 +68,8 @@ function messageContentToText(content: any): string {
         if (typeof p === "string") return p;
         if (p.type === "text" && typeof p.text === "string") return p.text;
         if (p.type === "image_url") return imageUrlToText(p.image_url);
-        if (p.type === "image") return imageUrlToText(p.source?.url ?? p.url ?? p.source);
+        if (p.type === "image")
+          return imageUrlToText(p.source?.url ?? p.url ?? p.source);
         return "";
       })
       .filter(Boolean)
@@ -221,7 +222,6 @@ export function buildPromptFromMessages(messages: any[]): string {
     }
     if (role === "tool" || role === "function") {
       convo.push(`Tool: ${text}`);
-      continue;
     }
   }
 
@@ -229,5 +229,5 @@ export function buildPromptFromMessages(messages: any[]): string {
     ? `System:\n${systemParts.join("\n\n")}\n\n`
     : "";
   const transcript = convo.join("\n\n");
-  return system + transcript + "\n\nAssistant:";
+  return `${system + transcript}\n\nAssistant:`;
 }

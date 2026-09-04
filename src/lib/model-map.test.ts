@@ -8,15 +8,21 @@ import {
 
 describe("resolveToCursorModel", () => {
   it("maps dated sonnet id to cursor sonnet-4.5", () => {
-    expect(resolveToCursorModel("claude-sonnet-4-5-20250929")).toBe("sonnet-4.5");
+    expect(resolveToCursorModel("claude-sonnet-4-5-20250929")).toBe(
+      "sonnet-4.5",
+    );
   });
 
   it("maps dated opus id with v-suffix", () => {
-    expect(resolveToCursorModel("claude-opus-4-6-20260101-v1")).toBe("opus-4.6");
+    expect(resolveToCursorModel("claude-opus-4-6-20260101-v1")).toBe(
+      "opus-4.6",
+    );
   });
 
   it("maps dated haiku id to sonnet fallback", () => {
-    expect(resolveToCursorModel("claude-haiku-4-5-20251001")).toBe("sonnet-4.5");
+    expect(resolveToCursorModel("claude-haiku-4-5-20251001")).toBe(
+      "sonnet-4.5",
+    );
   });
 });
 

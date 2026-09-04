@@ -72,7 +72,7 @@ function parseLsofPidList(stdout: string): number[] {
   const pids = new Set<number>();
   for (const raw of stdout.split("\n")) {
     const line = raw.trim();
-    if (!line || !line.startsWith("p")) continue;
+    if (!line?.startsWith("p")) continue;
     const n = Number(line.slice(1));
     if (Number.isInteger(n) && n > 0) pids.add(n);
   }
@@ -178,13 +178,7 @@ export async function detectClientCwd(
   const established = await runLsof(
     exec,
     bin,
-    [
-      "-nP",
-      `-iTCP:${remotePort}`,
-      "-sTCP:ESTABLISHED",
-      "-F",
-      "pcn",
-    ],
+    ["-nP", `-iTCP:${remotePort}`, "-sTCP:ESTABLISHED", "-F", "pcn"],
     timeoutMs,
   );
   if (!established) {
@@ -202,8 +196,8 @@ export async function detectClientCwd(
     return undefined;
   }
 
-  const clientPid = candidates[0]!.pid;
-  const command = candidates[0]!.command;
+  const clientPid = candidates[0]?.pid;
+  const command = candidates[0]?.command;
 
   const cwdOut = await runLsof(
     exec,
@@ -252,9 +246,7 @@ export type ClientLaunchInfo = {
   command?: string;
 };
 
-function readInvokeCwdHeader(
-  headers: IncomingHttpHeaders,
-): string | undefined {
+function readInvokeCwdHeader(headers: IncomingHttpHeaders): string | undefined {
   const raw = headers["x-cursor-invoke-cwd"];
   if (raw == null) return undefined;
   const s = Array.isArray(raw) ? raw[0] : raw;

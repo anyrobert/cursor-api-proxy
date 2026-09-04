@@ -1,9 +1,11 @@
-import { describe, it, expect, vi } from "vitest";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import { IncomingMessage, ServerResponse } from "node:http";
+import { describe, expect, it, vi } from "vitest";
 import { extractBearerToken, json, readBody } from "./http.js";
 
-function mockRequest(headers: Record<string, string | string[] | undefined> = {}): IncomingMessage {
+function mockRequest(
+  headers: Record<string, string | string[] | undefined> = {},
+): IncomingMessage {
   return {
     headers,
   } as IncomingMessage;
@@ -50,7 +52,9 @@ describe("json", () => {
 
     json(res, 200, { ok: true });
 
-    expect(res.writeHead).toHaveBeenCalledWith(200, { "Content-Type": "application/json" });
+    expect(res.writeHead).toHaveBeenCalledWith(200, {
+      "Content-Type": "application/json",
+    });
     expect(res.end).toHaveBeenCalledWith(JSON.stringify({ ok: true }));
   });
 
@@ -60,11 +64,17 @@ describe("json", () => {
       end: vi.fn(),
     } as unknown as ServerResponse;
 
-    json(res, 401, { error: { message: "Unauthorized", code: "unauthorized" } });
+    json(res, 401, {
+      error: { message: "Unauthorized", code: "unauthorized" },
+    });
 
-    expect(res.writeHead).toHaveBeenCalledWith(401, { "Content-Type": "application/json" });
+    expect(res.writeHead).toHaveBeenCalledWith(401, {
+      "Content-Type": "application/json",
+    });
     expect(res.end).toHaveBeenCalledWith(
-      JSON.stringify({ error: { message: "Unauthorized", code: "unauthorized" } }),
+      JSON.stringify({
+        error: { message: "Unauthorized", code: "unauthorized" },
+      }),
     );
   });
 });

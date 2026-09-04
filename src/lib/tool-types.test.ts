@@ -131,9 +131,9 @@ describe("tool normalization", () => {
         },
       ]),
     ).toEqual([]);
-    expect(() =>
-      parseOpenAiFunctionTools([{ type: "computer" }]),
-    ).toThrow(/Unsupported tool type/);
+    expect(() => parseOpenAiFunctionTools([{ type: "computer" }])).toThrow(
+      /Unsupported tool type/,
+    );
     expect(() =>
       parseOpenAiFunctionTools([
         { type: "function", name: "same" },
@@ -216,8 +216,6 @@ describe("tool output correlation", () => {
           ],
         },
       ]),
-    ).toEqual([
-      { callId: "call_3", output: "failed", isError: true },
-    ]);
+    ).toEqual([{ callId: "call_3", output: "failed", isError: true }]);
   });
 });
