@@ -1,9 +1,8 @@
 import * as fs from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-
+import { type EnvOptions, loadEnvConfig, resolveAgentCommand } from "./env.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
-import { loadEnvConfig, resolveAgentCommand, type EnvOptions } from "./env.js";
 
 function readBridgePackageVersion(): string {
   try {
@@ -29,24 +28,24 @@ export type BridgeConfig = {
   acpEnv: Record<string, string | undefined>;
   host: string;
   port: number;
-  requiredKey?: string;
+  requiredKey?: string | undefined;
   defaultModel: string;
   mode: CursorExecutionMode;
   /** Infer agent/plan from trusted DSH system prompt markers when no explicit mode is provided. */
-  dshAutoMode?: boolean;
+  dshAutoMode?: boolean | undefined;
   /** Stable marker identifying a DSH-owned system prompt. */
-  dshSystemMarker?: string;
+  dshSystemMarker?: string | undefined;
   /** Stable marker present only while DSH plan mode is active. */
-  dshPlanMarker?: string;
+  dshPlanMarker?: string | undefined;
   force: boolean;
   approveMcps: boolean;
   strictModel: boolean;
   workspace: string;
   timeoutMs: number;
   /** Path to TLS certificate file (e.g. Tailscale cert). When set with tlsKeyPath, server uses HTTPS. */
-  tlsCertPath?: string;
+  tlsCertPath?: string | undefined;
   /** Path to TLS private key file. When set with tlsCertPath, server uses HTTPS. */
-  tlsKeyPath?: string;
+  tlsKeyPath?: string | undefined;
   /** Path to sessions log file; each request is appended as a line. Default: sessions.log in cwd. */
   sessionsLogPath: string;
   /** When true (default), run CLI in an empty temp dir so it cannot read or write the real project. Pure chat only. */
@@ -62,7 +61,9 @@ export type BridgeConfig = {
   /** When true, use ACP (Agent Client Protocol) over stdio; fixes prompt delivery on Windows. */
   useAcp: boolean;
   /** Spawn options for ACP (e.g. windowsVerbatimArguments when using cmd.exe fallback). */
-  acpSpawnOptions?: { windowsVerbatimArguments?: boolean };
+  acpSpawnOptions?:
+    | { windowsVerbatimArguments?: boolean | undefined }
+    | undefined;
   /** When true, skip ACP authenticate step (use when pre-authenticated via --api-key or agent login). */
   acpSkipAuthenticate: boolean;
   /** When true, log every raw JSON-RPC line from ACP stdout (very verbose). Set CURSOR_BRIDGE_ACP_RAW_DEBUG=1 to enable. */
@@ -78,20 +79,20 @@ export type BridgeConfig = {
   /** `version` field from this package’s package.json (shown in the bridge preamble). */
   bridgePackageVersion: string;
   /** Optional operator notes appended to the preamble (see CURSOR_BRIDGE_CONTEXT_EXTRA). */
-  contextExtra?: string;
+  contextExtra?: string | undefined;
 };
 
 export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
   const env = loadEnvConfig(opts);
   const acpResolved = resolveAgentCommand(env.agentBin, ["acp"], opts);
   const envSource = opts.env ?? process.env;
-  const apiKey = envSource.CURSOR_API_KEY ?? envSource.CURSOR_AUTH_TOKEN;
+  const apiKey = envSource["CURSOR_API_KEY"] ?? envSource["CURSOR_AUTH_TOKEN"];
   const acpArgs = acpResolved.args;
 
   const acpEnv = { ...acpResolved.env } as Record<string, string | undefined>;
   if (apiKey) {
-    acpEnv.CURSOR_API_KEY = apiKey;
-    acpEnv.CURSOR_AUTH_TOKEN = apiKey;
+    acpEnv["CURSOR_API_KEY"] = apiKey;
+    acpEnv["CURSOR_AUTH_TOKEN"] = apiKey;
   }
 
   return {
@@ -128,10 +129,10 @@ export function loadBridgeConfig(opts: EnvOptions = {}): BridgeConfig {
     acpSkipAuthenticate:
       !!apiKey ||
       /^(1|true|yes|on)$/i.test(
-        String(envSource.CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE ?? "").trim(),
+        String(envSource["CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE"] ?? "").trim(),
       ),
     acpRawDebug: /^(1|true|yes|on)$/i.test(
-      String(envSource.CURSOR_BRIDGE_ACP_RAW_DEBUG ?? "").trim(),
+      String(envSource["CURSOR_BRIDGE_ACP_RAW_DEBUG"] ?? "").trim(),
     ),
     configDirs: env.configDirs ?? [],
     multiPort: env.multiPort,

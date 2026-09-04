@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
-import * as http from "node:http";
-
-import { buildAgentFixedArgs } from "../agent-cmd-args.js";
+import type * as http from "node:http";
 import {
   getAccountStats,
   getNextAccountConfigDir,
@@ -11,20 +9,22 @@ import {
   reportRequestStart,
   reportRequestSuccess,
 } from "../account-pool.js";
-import {
-  BRIDGE_AGENT_PROMPT_SEPARATOR,
-  buildBridgeContextPreamble,
-} from "../bridge-context-preamble.js";
-import type { BridgeConfig } from "../config.js";
-import type { CursorExecutionMode } from "../execution-mode.js";
-import { json, writeSseHeaders } from "../http.js";
+import type { ToolTurnEvent, ToolTurnResult } from "../acp-tool-session.js";
+import { buildAgentFixedArgs } from "../agent-cmd-args.js";
 import {
   runAgentStream,
   runAgentSync,
   startAgentToolSession,
 } from "../agent-runner.js";
-import type { ToolTurnEvent, ToolTurnResult } from "../acp-tool-session.js";
+import {
+  BRIDGE_AGENT_PROMPT_SEPARATOR,
+  buildBridgeContextPreamble,
+} from "../bridge-context-preamble.js";
 import { createStreamParser } from "../cli-stream-parser.js";
+import { abortOnClientDisconnect } from "../client-disconnect.js";
+import type { BridgeConfig } from "../config.js";
+import type { CursorExecutionMode } from "../execution-mode.js";
+import { json, writeSseHeaders } from "../http.js";
 import {
   resolveModelForExecution,
   UnsupportedReasoningEffortError,
@@ -32,9 +32,9 @@ import {
 import {
   buildPromptFromMessages,
   normalizeModelId,
+  type OpenAiResponsesRequest,
   responsesInputToMessages,
   toolsToSystemText,
-  type OpenAiResponsesRequest,
 } from "../openai.js";
 import {
   logAccountAssigned,
@@ -45,27 +45,28 @@ import {
   logTrafficResponse,
   type TrafficMessage,
 } from "../request-log.js";
-import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
+import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { sanitizeMessages } from "../sanitize.js";
-import { resolveWorkspace } from "../workspace.js";
+import {
+  ToolSessionError,
+  type ToolSessionRecord,
+  type ToolSessionRegistry,
+  toolSessionOwnerKey,
+} from "../tool-session-registry.js";
+import {
+  type ClientToolDefinition,
+  type ClientToolOutput,
+  type PendingClientToolCall,
+  parseOpenAiFunctionTools,
+  resolveToolChoice,
+  responsesToolOutputs,
+} from "../tool-types.js";
 import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
 } from "../win-cmdline-limit.js";
-import { abortOnClientDisconnect } from "../client-disconnect.js";
-import {
-  parseOpenAiFunctionTools,
-  resolveToolChoice,
-  responsesToolOutputs,
-  type PendingClientToolCall,
-} from "../tool-types.js";
-import {
-  ToolSessionError,
-  toolSessionOwnerKey,
-  type ToolSessionRecord,
-  type ToolSessionRegistry,
-} from "../tool-session-registry.js";
+import { resolveWorkspace } from "../workspace.js";
 import { getCachedCursorModels, type ModelCacheRef } from "./models.js";
 
 function isRateLimited(stderr: string): boolean {
@@ -81,13 +82,25 @@ export type ResponsesCtx = {
 
 type ResponseStatus = "in_progress" | "completed" | "failed";
 
-function functionCallItem(call: PendingClientToolCall) {
+function responseToolCallItem(call: PendingClientToolCall) {
+  if (call.type === "custom") {
+    return {
+      id: call.itemId,
+      type: "custom_tool_call",
+      status: "completed",
+      call_id: call.callId,
+      name: call.name,
+      ...(call.namespace ? { namespace: call.namespace } : {}),
+      input: call.arguments,
+    };
+  }
   return {
     id: call.itemId,
     type: "function_call",
     status: "completed",
     call_id: call.callId,
     name: call.name,
+    ...(call.namespace ? { namespace: call.namespace } : {}),
     arguments: call.arguments,
   };
 }
@@ -98,7 +111,7 @@ function structuredResponseObject(opts: {
   createdAt: number;
   model: string | undefined;
   result: ToolTurnResult;
-  previousResponseId?: string | null;
+  previousResponseId?: string | null | undefined;
   promptLength: number;
   messageId?: string;
 }) {
@@ -119,7 +132,7 @@ function structuredResponseObject(opts: {
     });
   }
   if (opts.result.status === "tool_calls") {
-    output.push(...opts.result.toolCalls.map(functionCallItem));
+    output.push(...opts.result.toolCalls.map(responseToolCallItem));
   }
   const inputTokens = Math.max(1, Math.round(opts.promptLength / 4));
   const outputTokens = Math.max(1, Math.round(opts.result.text.length / 4));
@@ -167,11 +180,9 @@ async function writeStructuredResponseTurn(opts: {
   id: string;
   createdAt: number;
   model: string | undefined;
-  previousResponseId?: string | null;
+  previousResponseId?: string | null | undefined;
   promptLength: number;
-  run: (
-    listener?: (event: ToolTurnEvent) => void,
-  ) => Promise<ToolTurnResult>;
+  run: (listener?: (event: ToolTurnEvent) => void) => Promise<ToolTurnResult>;
 }): Promise<ToolTurnResult> {
   const messageId = `msg_${randomUUID().replace(/-/g, "")}`;
   if (!opts.stream) {
@@ -266,50 +277,58 @@ async function writeStructuredResponseTurn(opts: {
         type: "message",
         status: "completed",
         role: "assistant",
-        content: [
-          { type: "output_text", text: result.text, annotations: [] },
-        ],
+        content: [{ type: "output_text", text: result.text, annotations: [] }],
       },
     });
   }
   if (result.status === "tool_calls") {
     for (const call of result.toolCalls) {
+      const custom = call.type === "custom";
       writeResponseEvent(opts.res, "response.output_item.added", {
         response_id: opts.id,
         output_index: outputIndex,
         item: {
           id: call.itemId,
-          type: "function_call",
+          type: custom ? "custom_tool_call" : "function_call",
           status: "in_progress",
           call_id: call.callId,
           name: call.name,
-          arguments: "",
+          ...(call.namespace ? { namespace: call.namespace } : {}),
+          ...(custom ? { input: "" } : { arguments: "" }),
         },
       });
       writeResponseEvent(
         opts.res,
-        "response.function_call_arguments.delta",
+        custom
+          ? "response.custom_tool_call_input.delta"
+          : "response.function_call_arguments.delta",
         {
           response_id: opts.id,
           item_id: call.itemId,
           output_index: outputIndex,
+          call_id: call.callId,
           delta: call.arguments,
         },
       );
       writeResponseEvent(
         opts.res,
-        "response.function_call_arguments.done",
+        custom
+          ? "response.custom_tool_call_input.done"
+          : "response.function_call_arguments.done",
         {
           response_id: opts.id,
           item_id: call.itemId,
           output_index: outputIndex,
-          arguments: call.arguments,
+          call_id: call.callId,
+          ...(custom
+            ? { input: call.arguments }
+            : { arguments: call.arguments }),
         },
       );
       writeResponseEvent(opts.res, "response.output_item.done", {
         response_id: opts.id,
         output_index: outputIndex,
-        item: functionCallItem(call),
+        item: responseToolCallItem(call),
       });
       outputIndex += 1;
     }
@@ -326,8 +345,7 @@ async function writeStructuredResponseTurn(opts: {
       messageId,
     }),
   });
-  opts.res.write("data: [DONE]\n\n");
-  opts.res.end();
+  endResponseStream(opts.res, "structured-response-completed");
   return result;
 }
 
@@ -399,7 +417,11 @@ function createResponseObject(opts: {
   };
 }
 
-function createOutputItem(itemId: string, status: ResponseStatus, text: string) {
+function createOutputItem(
+  itemId: string,
+  status: ResponseStatus,
+  text: string,
+) {
   return {
     id: itemId,
     type: "message",
@@ -415,17 +437,81 @@ function createOutputItem(itemId: string, status: ResponseStatus, text: string) 
   };
 }
 
+function sseDebugEnabled(): boolean {
+  return /^(1|true|yes|on)$/i.test(
+    String(process.env["CURSOR_BRIDGE_SSE_DEBUG"] ?? "").trim(),
+  );
+}
+
+/**
+ * Codex 0.153.2 Responses SSE treats stream end without a successfully parsed
+ * `response.completed` as a retryable disconnect ("stream closed before
+ * response.completed"). Chat Completions markers (`error` + `data: [DONE]`) are
+ * not terminal for that parser.
+ */
 function writeResponseEvent(
   res: http.ServerResponse,
   type: string,
   data: Record<string, unknown>,
 ): void {
-  res.write(`event: ${type}\n`);
-  res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+  const payload = JSON.stringify({ type, ...data });
+  if (sseDebugEnabled()) {
+    console.error(
+      `[sse-debug ${new Date().toISOString()}] write type=${type} writableEnded=${res.writableEnded} destroyed=${res.destroyed} bytes=${payload.length} data=${payload}`,
+    );
+  }
+  if (res.writableEnded || res.destroyed) {
+    if (sseDebugEnabled()) {
+      console.error(
+        `[sse-debug ${new Date().toISOString()}] skipped write type=${type}: response already closed`,
+      );
+    }
+    return;
+  }
+  try {
+    res.write(`event: ${type}\n`);
+    res.write(`data: ${payload}\n\n`);
+  } catch (error) {
+    if (sseDebugEnabled()) {
+      console.error(
+        `[sse-debug ${new Date().toISOString()}] write failed type=${type}:`,
+        error,
+      );
+    }
+    throw error;
+  }
 }
 
-function responseContentText(message: any): string {
-  const content = message?.content;
+function writeResponseFailed(
+  res: http.ServerResponse,
+  id: string,
+  error: { message: string; code: string },
+): void {
+  writeResponseEvent(res, "response.failed", {
+    response: {
+      id,
+      object: "response",
+      status: "failed",
+      error,
+    },
+  });
+}
+
+function endResponseStream(res: http.ServerResponse, reason: string): void {
+  if (sseDebugEnabled()) {
+    console.error(
+      `[sse-debug ${new Date().toISOString()}] end reason=${reason} writableEnded=${res.writableEnded} destroyed=${res.destroyed}`,
+    );
+  }
+  if (!res.writableEnded) {
+    res.end();
+  }
+}
+
+function responseContentText(message: unknown): string {
+  if (!message || typeof message !== "object" || Array.isArray(message))
+    return "";
+  const content = (message as Record<string, unknown>)["content"];
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content
@@ -452,13 +538,15 @@ export async function handleResponses(
 ): Promise<void> {
   const { config, lastRequestedModelRef, modelCacheRef } = ctx;
   const body = JSON.parse(rawBody || "{}") as OpenAiResponsesRequest;
-  let selectedTools;
+  let selectedTools: ClientToolDefinition[] = [];
   let toolInstruction: string | undefined;
   let requireToolCall = false;
   let maxParallelToolCalls: number | undefined;
-  let submittedToolOutputs;
+  let submittedToolOutputs: ClientToolOutput[] = [];
   try {
-    const parsedTools = parseOpenAiFunctionTools(body.tools);
+    const parsedTools = parseOpenAiFunctionTools(body.tools, undefined, {
+      ignoreProviderExecutedTools: true,
+    });
     const choice = resolveToolChoice(parsedTools, body.tool_choice, {
       parallelToolCalls: body.parallel_tool_calls,
     });
@@ -484,7 +572,8 @@ export async function handleResponses(
         (item) =>
           !item ||
           typeof item !== "object" ||
-          (item as { type?: unknown }).type !== "function_call_output",
+          (item as { type?: unknown }).type !== "function_call_output" &&
+          (item as { type?: unknown }).type !== "custom_tool_call_output",
       )
     ) {
       json(res, 400, {
@@ -513,16 +602,18 @@ export async function handleResponses(
   const requested = normalizeModelId(body.model);
   const model = resolveModel(requested, lastRequestedModelRef, config);
   const models = await getCachedCursorModels(config, modelCacheRef);
-  let decision;
+  let decision: ReturnType<typeof resolveModelForExecution>;
   try {
     decision = resolveModelForExecution({
       requested: model,
       defaultModel: config.defaultModel,
       availableCursorIds: models.map((m) => m.id),
-      reasoningEffort:
-        typeof body.reasoning?.effort === "string"
-          ? body.reasoning.effort
-          : undefined,
+      ...(typeof (body.reasoning as { effort?: unknown } | undefined)
+        ?.effort === "string"
+        ? {
+            reasoningEffort: (body.reasoning as { effort: string }).effort,
+          }
+        : {}),
     });
   } catch (error) {
     if (!(error instanceof UnsupportedReasoningEffortError)) throw error;
@@ -542,9 +633,7 @@ export async function handleResponses(
     decision.requestedWasDefault && config.defaultModel !== "default"
       ? config.defaultModel
       : model;
-  const modelCatalogName = models.find(
-    (item) => item.id === cursorModel,
-  )?.name;
+  const modelCatalogName = models.find((item) => item.id === cursorModel)?.name;
   const id = `resp_${randomUUID().replace(/-/g, "")}`;
   const createdAt = Math.floor(Date.now() / 1000);
 
@@ -578,8 +667,8 @@ export async function handleResponses(
   ];
   const prompt = buildPromptFromMessages(messagesWithTools);
 
-  const trafficMessages: TrafficMessage[] = cleanMessages.map((m: any) => ({
-    role: String(m?.role ?? "user"),
+  const trafficMessages: TrafficMessage[] = cleanMessages.map((m) => ({
+    role: String(m["role"] ?? "user"),
     content: responseContentText(m),
   }));
   logTrafficRequest(
@@ -596,8 +685,7 @@ export async function handleResponses(
         ? ctx.toolSessions.findByResponseId(ownerKey, previousResponseId)
         : undefined;
     if (
-      !record ||
-      record.api !== "responses" ||
+      record?.api !== "responses" ||
       !submittedToolOutputs.every((output) =>
         record.session.hasCall(output.callId),
       )
@@ -665,18 +753,11 @@ export async function handleResponses(
           },
         });
       } else if (!res.writableEnded) {
-        writeResponseEvent(res, "response.failed", {
-          response: {
-            id,
-            object: "response",
-            status: "failed",
-            error: {
-              message: error instanceof Error ? error.message : String(error),
-              code: "tool_session_error",
-            },
-          },
+        writeResponseFailed(res, id, {
+          message: error instanceof Error ? error.message : String(error),
+          code: "tool_session_error",
         });
-        res.end();
+        endResponseStream(res, "tool-resume-failed");
       }
     } finally {
       reportRequestEnd(configDir);
@@ -757,8 +838,7 @@ export async function handleResponses(
   // When the prompt is delivered via stdin (or ACP), keep it OUT of argv,
   // otherwise a long prompt still blows past the kernel ARG_MAX (spawn E2BIG
   // on Linux). fit.args appends the full prompt for the argv path only.
-  const cmdArgs =
-    config.promptViaStdin || config.useAcp ? fixedArgs : fit.args;
+  const cmdArgs = config.promptViaStdin || config.useAcp ? fixedArgs : fit.args;
 
   const itemId = `msg_${randomUUID().replace(/-/g, "")}`;
   const promptForAgent =
@@ -783,20 +863,21 @@ export async function handleResponses(
         cmdArgs,
         prompt: agentPrompt,
         tools: selectedTools,
-        tempDir,
-        configDir,
+        ...(tempDir ? { tempDir } : {}),
+        ...(configDir ? { configDir } : {}),
         signal: abortController.signal,
-        modelDisplayName: modelCatalogName,
-        requireToolCall,
-        maxParallelToolCalls,
+        ...(modelCatalogName ? { modelDisplayName: modelCatalogName } : {}),
+        ...(requireToolCall !== undefined ? { requireToolCall } : {}),
+        ...(maxParallelToolCalls !== undefined ? { maxParallelToolCalls } : {}),
       });
-      record = ctx.toolSessions.createRecord({
+      const sessionRecord = ctx.toolSessions.createRecord({
         api: "responses",
         ownerKey,
         model: displayModel ?? cursorModel,
         configDir,
         session,
       });
+      record = sessionRecord;
       abortController.signal.addEventListener(
         "abort",
         () => void session.close(),
@@ -812,9 +893,9 @@ export async function handleResponses(
         previousResponseId: body.previous_response_id,
         promptLength: agentPrompt.length,
         run: async (listener) => {
-          const turn = await ctx.toolSessions.collect(record!, listener);
+          const turn = await ctx.toolSessions.collect(sessionRecord, listener);
           if (turn.status === "tool_calls") {
-            ctx.toolSessions.aliasResponse(record!, id);
+            ctx.toolSessions.aliasResponse(sessionRecord, id);
           }
           return turn;
         },
@@ -848,18 +929,11 @@ export async function handleResponses(
           },
         });
       } else if (!res.writableEnded) {
-        writeResponseEvent(res, "response.failed", {
-          response: {
-            id,
-            object: "response",
-            status: "failed",
-            error: {
-              message: error instanceof Error ? error.message : String(error),
-              code: "tool_session_error",
-            },
-          },
+        writeResponseFailed(res, id, {
+          message: error instanceof Error ? error.message : String(error),
+          code: "tool_session_error",
         });
-        res.end();
+        endResponseStream(res, "tool-start-failed");
       }
     } finally {
       reportRequestEnd(configDir);
@@ -918,8 +992,16 @@ export async function handleResponses(
       return accumulated + chunk;
     };
 
+    let terminalSent = false;
     const finishStream = (accumulated: string) => {
-      logTrafficResponse(config.verbose, model ?? cursorModel, accumulated, true);
+      if (terminalSent || res.writableEnded || res.destroyed) return;
+      terminalSent = true;
+      logTrafficResponse(
+        config.verbose,
+        model ?? cursorModel,
+        accumulated,
+        true,
+      );
       const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
       const completionTokens = Math.max(1, Math.round(accumulated.length / 4));
       const completedItem = createOutputItem(itemId, "completed", accumulated);
@@ -955,7 +1037,14 @@ export async function handleResponses(
           completionTokens,
         }),
       });
-      res.write("data: [DONE]\n\n");
+      endResponseStream(res, "text-stream-completed");
+    };
+
+    const failStream = (message: string, code = "cursor_cli_error") => {
+      if (terminalSent || res.writableEnded || res.destroyed) return;
+      terminalSent = true;
+      writeResponseFailed(res, id, { message, code });
+      endResponseStream(res, "text-stream-failed");
     };
 
     if (config.useAcp && typeof promptForAgent === "string") {
@@ -983,7 +1072,7 @@ export async function handleResponses(
           }
 
           if (abortController.signal.aborted) {
-            /* client disconnected — do not count as success or failure */
+            endResponseStream(res, "acp-stream-aborted");
           } else if (code !== 0) {
             reportRequestError(configDir, latencyMs);
             const publicMsg = logAgentError(
@@ -994,38 +1083,28 @@ export async function handleResponses(
               code,
               stderrOut,
             );
-            writeResponseEvent(res, "error", {
-              error: { message: publicMsg, code: "cursor_cli_error" },
-            });
-            res.write("data: [DONE]\n\n");
             logAccountStats(config.verbose, getAccountStats());
-            res.end();
-            return;
+            failStream(publicMsg);
           } else {
             reportRequestSuccess(configDir, latencyMs);
+            logAccountStats(config.verbose, getAccountStats());
+            finishStream(accumulated);
           }
-          logAccountStats(config.verbose, getAccountStats());
-          finishStream(accumulated);
-          res.end();
         })
         .catch((err) => {
           reportRequestEnd(configDir);
           if (!abortController.signal.aborted) {
             reportRequestError(configDir, Date.now() - streamStart);
-            writeResponseEvent(res, "error", {
-              error: {
-                message:
-                  "The Cursor agent stream failed. See server logs for details.",
-                code: "cursor_cli_error",
-              },
-            });
-            res.write("data: [DONE]\n\n");
+            failStream(
+              "The Cursor agent stream failed. See server logs for details.",
+            );
+          } else {
+            endResponseStream(res, "acp-stream-catch-aborted");
           }
           console.error(
             `[${new Date().toISOString()}] Agent stream error:`,
             err,
           );
-          res.end();
         });
       return;
     }
@@ -1061,10 +1140,10 @@ export async function handleResponses(
         }
 
         if (abortController.signal.aborted) {
-          /* client disconnected — do not count as success or failure */
+          endResponseStream(res, "cli-stream-aborted");
         } else if (code !== 0) {
           reportRequestError(configDir, latencyMs);
-          logAgentError(
+          const publicMsg = logAgentError(
             config.sessionsLogPath,
             method,
             pathname,
@@ -1072,22 +1151,26 @@ export async function handleResponses(
             code,
             stderrOut,
           );
+          logAccountStats(config.verbose, getAccountStats());
+          failStream(publicMsg);
         } else {
           reportRequestSuccess(configDir, latencyMs);
+          logAccountStats(config.verbose, getAccountStats());
+          // CLI may exit 0 without emitting result/success; still terminate.
+          finishStream(accumulated);
         }
-        logAccountStats(config.verbose, getAccountStats());
-        res.end();
       })
       .catch((err) => {
         reportRequestEnd(configDir);
         if (!abortController.signal.aborted) {
           reportRequestError(configDir, Date.now() - streamStart);
+          failStream(
+            "The Cursor agent stream failed. See server logs for details.",
+          );
+        } else {
+          endResponseStream(res, "cli-stream-catch-aborted");
         }
-        console.error(
-          `[${new Date().toISOString()}] Agent stream error:`,
-          err,
-        );
-        res.end();
+        console.error(`[${new Date().toISOString()}] Agent stream error:`, err);
       });
     return;
   }

@@ -1,14 +1,37 @@
+type JsonRecord = {
+  [key: string]: unknown;
+  arguments?: unknown;
+  content?: unknown;
+  description?: unknown;
+  image_url?: unknown;
+  name?: unknown;
+  output?: unknown;
+  parameters?: unknown;
+  role?: unknown;
+  source?: unknown;
+  text?: unknown;
+  type?: unknown;
+  url?: unknown;
+  function?: unknown;
+};
+
+function asRecord(value: unknown): JsonRecord | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return undefined;
+  return value as JsonRecord;
+}
+
 export type OpenAiChatCompletionRequest = {
   model?: string;
   /** Cursor CLI mode override: agent | ask | plan */
   mode?: string;
-  messages: any[];
+  messages: JsonRecord[];
   stream?: boolean;
-  tools?: any[];
-  tool_choice?: any;
+  tools?: unknown[];
+  tool_choice?: unknown;
   parallel_tool_calls?: boolean;
-  functions?: any[];
-  function_call?: any;
+  functions?: unknown[];
+  function_call?: unknown;
   reasoning_effort?: string;
 };
 
@@ -16,20 +39,20 @@ export type OpenAiResponsesRequest = {
   model?: string;
   /** Cursor CLI mode override: agent | ask | plan */
   mode?: string;
-  input?: any;
+  input?: unknown;
   instructions?: string | null;
   stream?: boolean;
-  tools?: any[];
-  tool_choice?: any;
+  tools?: unknown[];
+  tool_choice?: unknown;
   max_output_tokens?: number | null;
   metadata?: Record<string, unknown> | null;
   parallel_tool_calls?: boolean;
   previous_response_id?: string | null;
-  reasoning?: any;
+  reasoning?: unknown;
   service_tier?: string | null;
   store?: boolean | null;
   temperature?: number | null;
-  text?: any;
+  text?: unknown;
   top_p?: number | null;
   truncation?: string | null;
   user?: string | null;
@@ -43,13 +66,13 @@ export function normalizeModelId(raw: string | undefined): string | undefined {
   return parts[parts.length - 1] || undefined;
 }
 
-function imageUrlToText(imageUrl: any): string {
+function imageUrlToText(imageUrl: unknown): string {
   if (!imageUrl) return "[Image]";
   const url: string =
     typeof imageUrl === "string"
       ? imageUrl
-      : typeof imageUrl?.url === "string"
-        ? imageUrl.url
+      : typeof asRecord(imageUrl)?.url === "string"
+        ? (asRecord(imageUrl)?.url as string)
         : "";
   if (!url) return "[Image]";
   if (url.startsWith("data:")) {
@@ -59,16 +82,22 @@ function imageUrlToText(imageUrl: any): string {
   return `[Image: ${url}]`;
 }
 
-function messageContentToText(content: any): string {
+function messageContentToText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content
       .map((p) => {
         if (!p) return "";
         if (typeof p === "string") return p;
-        if (p.type === "text" && typeof p.text === "string") return p.text;
-        if (p.type === "image_url") return imageUrlToText(p.image_url);
-        if (p.type === "image") return imageUrlToText(p.source?.url ?? p.url ?? p.source);
+        const part = asRecord(p);
+        if (!part) return "";
+        if (part.type === "text" && typeof part.text === "string")
+          return part.text;
+        if (part.type === "image_url") return imageUrlToText(part.image_url);
+        if (part.type === "image") {
+          const source = asRecord(part.source);
+          return imageUrlToText(source?.url ?? part.url ?? part.source);
+        }
         return "";
       })
       .filter(Boolean)
@@ -77,32 +106,35 @@ function messageContentToText(content: any): string {
   return "";
 }
 
-function responseItemContentToText(content: any): string {
+function responseItemContentToText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content
       .map((p) => {
         if (!p) return "";
         if (typeof p === "string") return p;
+        const part = asRecord(p);
+        if (!part) return "";
         if (
-          (p.type === "input_text" ||
-            p.type === "output_text" ||
-            p.type === "text") &&
-          typeof p.text === "string"
+          (part.type === "input_text" ||
+            part.type === "output_text" ||
+            part.type === "text") &&
+          typeof part.text === "string"
         ) {
-          return p.text;
+          return part.text;
         }
-        if (p.type === "input_image" || p.type === "image_url") {
-          return imageUrlToText(p.image_url ?? p.url);
+        if (part.type === "input_image" || part.type === "image_url") {
+          return imageUrlToText(part.image_url ?? part.url);
         }
-        if (typeof p.output === "string") return p.output;
+        if (typeof part.output === "string") return part.output;
         return "";
       })
       .filter(Boolean)
       .join(" ");
   }
-  if (typeof content?.text === "string") return content.text;
-  if (typeof content?.output === "string") return content.output;
+  const record = asRecord(content);
+  if (typeof record?.text === "string") return record.text;
+  if (typeof record?.output === "string") return record.output;
   return "";
 }
 
@@ -135,18 +167,24 @@ export function responsesInputToMessages(
       continue;
     }
 
-    if (item.type === "function_call_output") {
-      const output = responseItemContentToText(item.output ?? item.content);
+    const record = asRecord(item);
+    if (!record) continue;
+
+    if (
+      record.type === "function_call_output" ||
+      record.type === "custom_tool_call_output"
+    ) {
+      const output = responseItemContentToText(record.output ?? record.content);
       if (output) messages.push({ role: "tool", content: output });
       continue;
     }
 
-    if (item.type === "function_call") {
-      const name = typeof item.name === "string" ? item.name : "function";
+    if (record.type === "function_call") {
+      const name = typeof record.name === "string" ? record.name : "function";
       const args =
-        typeof item.arguments === "string"
-          ? item.arguments
-          : JSON.stringify(item.arguments ?? {});
+        typeof record.arguments === "string"
+          ? record.arguments
+          : JSON.stringify(record.arguments ?? {});
       messages.push({
         role: "assistant",
         content: `Function call ${name}: ${args}`,
@@ -154,8 +192,8 @@ export function responsesInputToMessages(
       continue;
     }
 
-    const role = typeof item.role === "string" ? item.role : "user";
-    const content = responseItemContentToText(item.content ?? item.text);
+    const role = typeof record.role === "string" ? record.role : "user";
+    const content = responseItemContentToText(record.content ?? record.text);
     if (content) messages.push({ role, content });
   }
 
@@ -168,19 +206,23 @@ export function responsesInputToMessages(
  * return tool_call deltas natively.
  */
 export function toolsToSystemText(
-  tools?: any[],
-  functions?: any[],
+  tools?: unknown[],
+  functions?: unknown[],
 ): string | undefined {
-  const defs: any[] = [];
+  const defs: JsonRecord[] = [];
 
   if (tools && tools.length > 0) {
     for (const t of tools) {
-      const fn = t?.type === "function" ? t.function : t;
+      const tool = asRecord(t);
+      const fn = tool?.type === "function" ? asRecord(tool.function) : tool;
       if (fn) defs.push(fn);
     }
   }
   if (functions && functions.length > 0) {
-    defs.push(...functions);
+    for (const fn of functions) {
+      const record = asRecord(fn);
+      if (record) defs.push(record);
+    }
   }
 
   if (defs.length === 0) return undefined;
@@ -198,13 +240,13 @@ export function toolsToSystemText(
   return lines.join("\n");
 }
 
-export function buildPromptFromMessages(messages: any[]): string {
+export function buildPromptFromMessages(messages?: JsonRecord[]): string {
   const systemParts: string[] = [];
   const convo: string[] = [];
 
   for (const m of messages || []) {
-    const role = m?.role;
-    const text = messageContentToText(m?.content);
+    const role = m.role;
+    const text = messageContentToText(m.content);
     if (!text) continue;
 
     if (role === "system" || role === "developer") {
@@ -221,7 +263,6 @@ export function buildPromptFromMessages(messages: any[]): string {
     }
     if (role === "tool" || role === "function") {
       convo.push(`Tool: ${text}`);
-      continue;
     }
   }
 
@@ -229,5 +270,5 @@ export function buildPromptFromMessages(messages: any[]): string {
     ? `System:\n${systemParts.join("\n\n")}\n\n`
     : "";
   const transcript = convo.join("\n\n");
-  return system + transcript + "\n\nAssistant:";
+  return `${system + transcript}\n\nAssistant:`;
 }

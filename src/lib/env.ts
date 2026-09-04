@@ -7,38 +7,38 @@ import { tryParseExecutionModeEnv } from "./execution-mode.js";
 export type EnvSource = Record<string, string | undefined>;
 
 export type EnvOptions = {
-  tailscale?: boolean;
-  env?: EnvSource;
-  cwd?: string;
-  platform?: NodeJS.Platform;
+  tailscale?: boolean | undefined;
+  env?: EnvSource | undefined;
+  cwd?: string | undefined;
+  platform?: NodeJS.Platform | undefined;
   /** CLI `--mode` (overridden by CURSOR_BRIDGE_MODE when set). */
-  mode?: CursorExecutionMode;
+  mode?: CursorExecutionMode | undefined;
 };
 
 export type LoadedEnv = {
   agentBin: string;
-  agentNode?: string;
-  agentScript?: string;
+  agentNode?: string | undefined;
+  agentScript?: string | undefined;
   commandShell: string;
   host: string;
   port: number;
-  requiredKey?: string;
+  requiredKey?: string | undefined;
   defaultModel: string;
   force: boolean;
   approveMcps: boolean;
   strictModel: boolean;
   workspace: string;
   timeoutMs: number;
-  tlsCertPath?: string;
-  tlsKeyPath?: string;
+  tlsCertPath?: string | undefined;
+  tlsKeyPath?: string | undefined;
   sessionsLogPath: string;
   chatOnlyWorkspace: boolean;
   /** True when CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE key exists in env. */
   chatOnlyWorkspaceExplicit: boolean;
-  mode?: CursorExecutionMode;
+  mode?: CursorExecutionMode | undefined;
   dshAutoMode: boolean;
-  dshSystemMarker?: string;
-  dshPlanMarker?: string;
+  dshSystemMarker?: string | undefined;
+  dshPlanMarker?: string | undefined;
   verbose: boolean;
   /** When true, set maxMode in cli-config.json before each run (larger context, more tools). */
   maxMode: boolean;
@@ -64,18 +64,18 @@ export type LoadedEnv = {
    * Optional free-text block appended to the bridge preamble (operator facts).
    * From `CURSOR_BRIDGE_CONTEXT_EXTRA`; stripped of NUL, max 400 UTF-16 units.
    */
-  contextExtra?: string;
+  contextExtra?: string | undefined;
 };
 
 export type AgentCommand = {
   command: string;
   args: string[];
   env: EnvSource;
-  windowsVerbatimArguments?: boolean;
+  windowsVerbatimArguments?: boolean | undefined;
   /** Path to agent entry script (e.g. index.js). Set when using node+script so max-mode preflight can find config. */
-  agentScriptPath?: string;
+  agentScriptPath?: string | undefined;
   /** Cursor config dir (cli-config.json). Set so CLI reads the same config preflight wrote to. */
-  configDir?: string;
+  configDir?: string | undefined;
 };
 
 function getEnvSource(env?: EnvSource): EnvSource {
@@ -159,11 +159,11 @@ function executableOnPath(
   env: EnvSource,
   platform: NodeJS.Platform,
 ): string | undefined {
-  const rawPath = env.PATH ?? env.Path ?? env.path;
+  const rawPath = env["PATH"] ?? env["Path"] ?? env["path"];
   if (!rawPath) return undefined;
   const extensions =
     platform === "win32"
-      ? (env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";")
+      ? (env["PATHEXT"] ?? ".EXE;.CMD;.BAT;.COM").split(";")
       : [""];
   for (const directory of rawPath.split(path.delimiter).filter(Boolean)) {
     for (const extension of extensions) {
@@ -184,10 +184,7 @@ function executableOnPath(
   return undefined;
 }
 
-function resolveAgentBinary(
-  env: EnvSource,
-  platform: NodeJS.Platform,
-): string {
+function resolveAgentBinary(env: EnvSource, platform: NodeJS.Platform): string {
   const explicit = envString(env, [
     "CURSOR_AGENT_BIN",
     "CURSOR_CLI_BIN",
@@ -208,9 +205,9 @@ function parseVersionToInt(name: string): number {
   const m = name.match(VERSION_DIR_REGEX);
   if (!m) return 0;
   const [, year, month, day] = m;
-  const y = year!.padStart(4, "0");
-  const mo = month!.padStart(2, "0");
-  const d = day!.padStart(2, "0");
+  const y = year?.padStart(4, "0") ?? "";
+  const mo = month?.padStart(2, "0") ?? "";
+  const d = day?.padStart(2, "0") ?? "";
   return parseInt(y + mo + d, 10);
 }
 
@@ -228,7 +225,9 @@ function findLatestVersionDir(dir: string): string | undefined {
     .filter((e) => e.isDirectory() && VERSION_DIR_REGEX.test(e.name))
     .sort((a, b) => parseVersionToInt(b.name) - parseVersionToInt(a.name));
   if (versionDirs.length === 0) return undefined;
-  return path.join(versionsDir, versionDirs[0]!.name);
+  const latest = versionDirs[0];
+  if (!latest) return undefined;
+  return path.join(versionsDir, latest.name);
 }
 
 function configDirFromAgentDir(dir: string): string | undefined {
@@ -385,12 +384,14 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
 
   const contextExtra = envContextExtra(env);
 
-  const chatOnlyWorkspaceExplicit = Object.prototype.hasOwnProperty.call(
+  const chatOnlyWorkspaceExplicit = Object.hasOwn(
     env,
     "CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE",
   );
 
-  const mode = tryParseExecutionModeEnv(firstDefined(env, ["CURSOR_BRIDGE_MODE"]));
+  const mode = tryParseExecutionModeEnv(
+    firstDefined(env, ["CURSOR_BRIDGE_MODE"]),
+  );
   const dshAutoMode = envBool(env, ["CURSOR_BRIDGE_DSH_AUTO_MODE"], false);
 
   return {

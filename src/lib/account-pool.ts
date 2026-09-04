@@ -72,6 +72,7 @@ export class AccountPool {
     });
 
     const selected = sorted[0];
+    if (!selected) return undefined;
     selected.lastUsed = now;
     return selected.configDir;
   }

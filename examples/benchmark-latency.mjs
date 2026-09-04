@@ -1,13 +1,13 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Latency breakdown: spawn/setup vs inference, CLI vs ACP vs client tools.
  *
  * Prereqs:
- *   - npm run build  (for ephemeral proxy + optional direct ACP import)
+ *   - bun run build  (for ephemeral proxy + optional direct ACP import)
  *   - Cursor CLI installed + logged in (or CURSOR_API_KEY / account pool)
  *
  * Run:
- *   node examples/benchmark-latency.mjs
+ *   bun examples/benchmark-latency.mjs
  *
  * Env:
  *   CURSOR_PROXY_URL       existing proxy (default http://127.0.0.1:8765)
@@ -18,13 +18,16 @@
  */
 
 import { spawn } from "node:child_process";
-import { createServer } from "node:net";
 import * as fs from "node:fs";
+import { createServer } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 const CLI_PATH = path.join(REPO_ROOT, "dist/cli.js");
 
 const DEFAULT_PROXY_URL =
@@ -54,7 +57,7 @@ const WEATHER_TOOL = {
 
 const TOOL_PROMPT =
   process.env.BENCH_TOOL_PROMPT ??
-  'Use the weather tool for Paris. Reply with the tool result only.';
+  "Use the weather tool for Paris. Reply with the tool result only.";
 
 function discoverAccountConfigDir() {
   if (process.env.CURSOR_CONFIG_DIR) return process.env.CURSOR_CONFIG_DIR;
@@ -78,7 +81,9 @@ function discoverAccountConfigDir() {
 
 function discoverAccountConfigDirs() {
   if (process.env.CURSOR_CONFIG_DIRS) {
-    return process.env.CURSOR_CONFIG_DIRS.split(",").map((s) => s.trim()).filter(Boolean);
+    return process.env.CURSOR_CONFIG_DIRS.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
   }
   const root = path.join(
     process.env.HOME ?? process.env.USERPROFILE ?? "",
@@ -244,7 +249,9 @@ async function waitForHealth(baseUrl, timeoutMs = HEALTH_TIMEOUT_MS) {
     }
     await sleep(200);
   }
-  throw new Error(`Proxy at ${baseUrl} did not become healthy within ${timeoutMs}ms`);
+  throw new Error(
+    `Proxy at ${baseUrl} did not become healthy within ${timeoutMs}ms`,
+  );
 }
 
 class EphemeralProxy {
@@ -263,7 +270,7 @@ class EphemeralProxy {
 
   async start(authConfigDirs) {
     if (!fs.existsSync(CLI_PATH)) {
-      throw new Error(`Missing ${CLI_PATH} — run npm run build first`);
+      throw new Error(`Missing ${CLI_PATH} — run bun run build first`);
     }
     this.#port = await getFreePort();
     const env = {
@@ -360,7 +367,9 @@ async function proxyChatSync(baseUrl, label, opts = {}) {
     label,
     ms: ms(start),
     status: result.status,
-    content: String(content ?? "").trim().slice(0, 80),
+    content: String(content ?? "")
+      .trim()
+      .slice(0, 80),
     toolCalls,
     finishReason,
     raw: result.text,
@@ -440,12 +449,20 @@ async function proxyToolRoundTrip(baseUrl) {
       {
         role: "tool",
         tool_call_id: call.id,
-        content: JSON.stringify({ city: "Paris", temp_c: 22, condition: "sunny" }),
+        content: JSON.stringify({
+          city: "Paris",
+          temp_c: 22,
+          condition: "sunny",
+        }),
       },
     ],
     tools: [WEATHER_TOOL],
   };
-  const followRes = await proxyFetch(baseUrl, "/v1/chat/completions", followBody);
+  const followRes = await proxyFetch(
+    baseUrl,
+    "/v1/chat/completions",
+    followBody,
+  );
   const followMs = ms(followStart);
   let followContent = "";
   try {
@@ -492,7 +509,15 @@ async function directAcpSync(authConfigDir) {
     const acpIdx = resolved.args.indexOf("acp");
     const args =
       acpIdx === -1
-        ? [...resolved.args, "--workspace", workspace, "--model", MODEL, "--mode", "ask"]
+        ? [
+            ...resolved.args,
+            "--workspace",
+            workspace,
+            "--model",
+            MODEL,
+            "--mode",
+            "ask",
+          ]
         : [
             ...resolved.args.slice(0, acpIdx),
             "--workspace",
@@ -558,7 +583,9 @@ async function main() {
   console.log(`proxy:     ${DEFAULT_PROXY_URL}`);
   console.log(`model:     ${MODEL}`);
   console.log(`prompt:    ${JSON.stringify(PROMPT)}`);
-  console.log(`build:     ${fs.existsSync(CLI_PATH) ? CLI_PATH : "MISSING — npm run build"}`);
+  console.log(
+    `build:     ${fs.existsSync(CLI_PATH) ? CLI_PATH : "MISSING — bun run build"}`,
+  );
   const authConfigDir = discoverAccountConfigDir();
   const authConfigDirs = discoverAccountConfigDirs();
   if (authConfigDir) {
@@ -576,34 +603,44 @@ async function main() {
   const version = await runCommand("agent --version", AGENT_BIN, ["--version"]);
   printRow("agent --version", version.ms, "process spawn only");
 
-  const listModels = await runCommand("agent --list-models", AGENT_BIN, [
-    "--list-models",
-  ], authConfigDir ? { env: { CURSOR_CONFIG_DIR: authConfigDir } } : {});
+  const listModels = await runCommand(
+    "agent --list-models",
+    AGENT_BIN,
+    ["--list-models"],
+    authConfigDir ? { env: { CURSOR_CONFIG_DIR: authConfigDir } } : {},
+  );
   MODEL = await resolveBenchModel(listModels);
   printRow("agent --list-models", listModels.ms, "spawn + model catalog");
-  console.log(`    resolved model: ${MODEL}${MODEL !== MODEL_ENV ? ` (from ${MODEL_ENV})` : ""}`);
+  console.log(
+    `    resolved model: ${MODEL}${MODEL !== MODEL_ENV ? ` (from ${MODEL_ENV})` : ""}`,
+  );
   results.listModels = listModels.ms;
 
   console.log("");
   console.log("Phase 2 — Direct CLI completion (spawn + inference)");
   const workspace = makeChatOnlyWorkspace();
   try {
-    const direct = await runCommand("agent --print direct", AGENT_BIN, [
-      "--print",
-      "--trust",
-      "--mode",
-      "ask",
-      "--workspace",
-      workspace,
-      "--model",
-      MODEL,
-      "--output-format",
-      "text",
-      PROMPT,
-    ], {
-      env: chatOnlyEnv(workspace, authConfigDir),
-      cwd: workspace,
-    });
+    const direct = await runCommand(
+      "agent --print direct",
+      AGENT_BIN,
+      [
+        "--print",
+        "--trust",
+        "--mode",
+        "ask",
+        "--workspace",
+        workspace,
+        "--model",
+        MODEL,
+        "--output-format",
+        "text",
+        PROMPT,
+      ],
+      {
+        env: chatOnlyEnv(workspace, authConfigDir),
+        cwd: workspace,
+      },
+    );
     printRow("agent --print (ask)", direct.ms, `exit ${direct.code}`);
     results.directAsk = direct.code === 0 ? direct.ms : null;
     if (direct.code !== 0) {
@@ -613,21 +650,30 @@ async function main() {
     }
 
     if (COMPARE_AGENT) {
-      const agentMode = await runCommand("agent --print agent", AGENT_BIN, [
-        "--print",
-        "--trust",
-        "--workspace",
-        workspace,
-        "--model",
-        MODEL,
-        "--output-format",
-        "text",
-        PROMPT,
-      ], {
-        env: chatOnlyEnv(workspace, authConfigDir),
-        cwd: workspace,
-      });
-      printRow("agent --print (agent mode)", agentMode.ms, `exit ${agentMode.code}`);
+      const agentMode = await runCommand(
+        "agent --print agent",
+        AGENT_BIN,
+        [
+          "--print",
+          "--trust",
+          "--workspace",
+          workspace,
+          "--model",
+          MODEL,
+          "--output-format",
+          "text",
+          PROMPT,
+        ],
+        {
+          env: chatOnlyEnv(workspace, authConfigDir),
+          cwd: workspace,
+        },
+      );
+      printRow(
+        "agent --print (agent mode)",
+        agentMode.ms,
+        `exit ${agentMode.code}`,
+      );
       results.directAgent = agentMode.code === 0 ? agentMode.ms : null;
       if (agentMode.code !== 0) {
         console.log(`    stderr: ${agentMode.stderr.slice(0, 200)}`);
@@ -733,7 +779,11 @@ async function main() {
             return;
           }
           printRow("tool call #1 (to tool_calls)", trip.initialMs, "HTTP 200");
-          printRow("tool call #2 (with result)", trip.followMs, `HTTP ${trip.followStatus}`);
+          printRow(
+            "tool call #2 (with result)",
+            trip.followMs,
+            `HTTP ${trip.followStatus}`,
+          );
           printRow("tool round-trip total", trip.totalMs, "");
           results.toolCall1 = trip.initialMs;
           results.toolCall2 = trip.followMs;
@@ -798,11 +848,15 @@ async function main() {
     );
   }
   if (results.toolTotal != null) {
-    console.log(`  Tool round-trip:      ${fmt(results.toolTotal)}  (#1 ${fmt(results.toolCall1)} + #2 ${fmt(results.toolCall2)})`);
+    console.log(
+      `  Tool round-trip:      ${fmt(results.toolTotal)}  (#1 ${fmt(results.toolCall1)} + #2 ${fmt(results.toolCall2)})`,
+    );
   }
   console.log("");
   console.log("How to read this for issue #37:");
-  console.log("  • ~1s on list-models, ~5–10s on direct CLI → normal; 60s+ is elsewhere.");
+  console.log(
+    "  • ~1s on list-models, ~5–10s on direct CLI → normal; 60s+ is elsewhere.",
+  );
   console.log("  • ACP >> CLI → ACP handshake/MCP startup cost.");
   console.log("  • tool #1 >> plain sync → tool session + MCP bridge.");
   console.log("  • agent mode >> ask → heavier Cursor path.");

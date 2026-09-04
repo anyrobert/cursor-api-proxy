@@ -5,9 +5,9 @@ import { AcpToolSession } from "./acp-tool-session.js";
 import type { BridgeConfig } from "./config.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
 import { run, runStreaming } from "./process.js";
+import { readKeychainToken, writeCachedToken } from "./token-cache.js";
 import type { ClientToolDefinition } from "./tool-types.js";
 import { getChatOnlyEnvOverrides } from "./workspace.js";
-import { readKeychainToken, writeCachedToken } from "./token-cache.js";
 
 function cacheTokenForAccount(configDir?: string): void {
   if (!configDir) return;
@@ -24,10 +24,18 @@ export type AgentRunResult = {
 function acpArgsWithModel(acpArgs: string[], model: string): string[] {
   const i = acpArgs.indexOf("acp");
   if (i === -1) return acpArgs;
-  return [...acpArgs.slice(0, i + 1), "--model", model, ...acpArgs.slice(i + 1)];
+  return [
+    ...acpArgs.slice(0, i + 1),
+    "--model",
+    model,
+    ...acpArgs.slice(i + 1),
+  ];
 }
 
-function acpArgsWithMode(acpArgs: string[], mode: CursorExecutionMode): string[] {
+function acpArgsWithMode(
+  acpArgs: string[],
+  mode: CursorExecutionMode,
+): string[] {
   const i = acpArgs.indexOf("acp");
   if (i === -1) return acpArgs;
   // cursor-agent only accepts --mode plan|ask; agent mode is the default.
@@ -35,10 +43,18 @@ function acpArgsWithMode(acpArgs: string[], mode: CursorExecutionMode): string[]
   return [...acpArgs.slice(0, i + 1), "--mode", mode, ...acpArgs.slice(i + 1)];
 }
 
-function acpArgsWithWorkspace(acpArgs: string[], workspaceDir: string): string[] {
+function acpArgsWithWorkspace(
+  acpArgs: string[],
+  workspaceDir: string,
+): string[] {
   const i = acpArgs.indexOf("acp");
   if (i === -1) return acpArgs;
-  return [...acpArgs.slice(0, i), "--workspace", workspaceDir, ...acpArgs.slice(i)];
+  return [
+    ...acpArgs.slice(0, i),
+    "--workspace",
+    workspaceDir,
+    ...acpArgs.slice(i),
+  ];
 }
 
 function extractModelFromCmdArgs(cmdArgs: string[]): string | undefined {
@@ -48,10 +64,17 @@ function extractModelFromCmdArgs(cmdArgs: string[]): string | undefined {
 
 function extractModeFromCmdArgs(cmdArgs: string[]): CursorExecutionMode {
   const i = cmdArgs.indexOf("--mode");
-  const m =
-    i >= 0 && i + 1 < cmdArgs.length ? cmdArgs[i + 1] : undefined;
+  const m = i >= 0 && i + 1 < cmdArgs.length ? cmdArgs[i + 1] : undefined;
   if (m === "agent" || m === "ask" || m === "plan") return m;
   return "ask";
+}
+
+function acpArgsWithForce(acpArgs: string[], force: boolean): string[] {
+  if (!force) return acpArgs;
+  const i = acpArgs.indexOf("acp");
+  if (i === -1) return acpArgs;
+  // Non-interactive proxy cannot answer workspace trust prompts.
+  return [...acpArgs.slice(0, i), "--force", "--trust", ...acpArgs.slice(i)];
 }
 
 function acpInvocation(
@@ -63,18 +86,19 @@ function acpInvocation(
 ): {
   args: string[];
   env: Record<string, string | undefined>;
-  model?: string;
+  model?: string | undefined;
 } {
   const model = extractModelFromCmdArgs(cmdArgs);
   const mode = extractModeFromCmdArgs(cmdArgs);
   let args = acpArgsWithWorkspace(config.acpArgs, workspaceDir);
+  args = acpArgsWithForce(args, config.force || !effectiveChatOnly);
   args = model ? acpArgsWithModel(args, model) : args;
   args = acpArgsWithMode(args, mode);
   const env = { ...config.acpEnv };
   if (effectiveChatOnly) {
     Object.assign(env, getChatOnlyEnvOverrides(workspaceDir, configDir));
   } else if (configDir) {
-    env.CURSOR_CONFIG_DIR = configDir;
+    env["CURSOR_CONFIG_DIR"] = configDir;
   }
   return { args, env, model };
 }
@@ -102,14 +126,16 @@ export function runAgentSync(
       cwd: workspaceDir,
       timeoutMs: config.timeoutMs,
       env: invocation.env,
-      model: invocation.model,
-      modelAliases: modelDisplayName ? [modelDisplayName] : undefined,
+      ...(invocation.model !== undefined ? { model: invocation.model } : {}),
+      ...(modelDisplayName ? { modelAliases: [modelDisplayName] } : {}),
       strictModel: config.strictModel,
       requestTimeoutMs: config.timeoutMs,
-      spawnOptions: config.acpSpawnOptions,
+      ...(config.acpSpawnOptions
+        ? { spawnOptions: config.acpSpawnOptions }
+        : {}),
       skipAuthenticate: config.acpSkipAuthenticate,
       rawDebug: config.acpRawDebug,
-      signal,
+      ...(signal ? { signal } : {}),
     }).then((out) => {
       cacheTokenForAccount(configDir);
       if (tempDir) {
@@ -176,14 +202,16 @@ export function runAgentStream(
         cwd: workspaceDir,
         timeoutMs: config.timeoutMs,
         env: invocation.env,
-        model: invocation.model,
-        modelAliases: modelDisplayName ? [modelDisplayName] : undefined,
+        ...(invocation.model !== undefined ? { model: invocation.model } : {}),
+        ...(modelDisplayName ? { modelAliases: [modelDisplayName] } : {}),
         strictModel: config.strictModel,
         requestTimeoutMs: config.timeoutMs,
-        spawnOptions: config.acpSpawnOptions,
+        ...(config.acpSpawnOptions
+          ? { spawnOptions: config.acpSpawnOptions }
+          : {}),
         skipAuthenticate: config.acpSkipAuthenticate,
         rawDebug: config.acpRawDebug,
-        signal,
+        ...(signal ? { signal } : {}),
       },
       onLine,
     ).then((result) => {
@@ -270,10 +298,9 @@ export async function startAgentToolSession(opts: {
     skipAuthenticate: opts.config.acpSkipAuthenticate,
     rawDebug: opts.config.acpRawDebug,
     signal: opts.signal,
-    modelCandidates: [
-      invocation.model,
-      opts.modelDisplayName,
-    ].filter((value): value is string => Boolean(value)),
+    modelCandidates: [invocation.model, opts.modelDisplayName].filter(
+      (value): value is string => Boolean(value),
+    ),
     strictModel: opts.config.strictModel,
     tools: opts.tools,
     requireToolCall: opts.requireToolCall,

@@ -7,9 +7,7 @@ import {
 
 describe("readHttpHeader", () => {
   it("reads the first header value case-insensitively", () => {
-    expect(
-      readHttpHeader({ "x-foo": "  bar  " } as any, "X-Foo"),
-    ).toBe("bar");
+    expect(readHttpHeader({ "x-foo": "  bar  " }, "X-Foo")).toBe("bar");
   });
 
   it("returns undefined for missing or empty", () => {

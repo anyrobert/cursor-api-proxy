@@ -15,7 +15,7 @@ export type BridgeContextPreambleInput = {
   isolatedChatOnly: boolean;
   cursorMode: CursorExecutionMode;
   /** Optional extra from `CURSOR_BRIDGE_CONTEXT_EXTRA` (already length-capped in config). */
-  contextExtra?: string;
+  contextExtra?: string | undefined;
   /**
    * Working directory of the HTTP client that opened the connection (e.g. the
    * directory the user launched `claude` from). Forwarded so the agent gains
@@ -57,7 +57,9 @@ export function buildBridgeContextPreamble(
   const loc = samePath
     ? `cwd=${input.agentWorkspaceDir}`
     : `workspace=${input.bridgeWorkspaceBase}; agent cwd=${input.agentWorkspaceDir}`;
-  const sandbox = input.isolatedChatOnly ? " (agent cwd is a temp sandbox)" : "";
+  const sandbox = input.isolatedChatOnly
+    ? " (agent cwd is a temp sandbox)"
+    : "";
 
   const lines: string[] = [
     `Via cursor-api-proxy → Cursor CLI. ${loc}; mode=${input.cursorMode}${sandbox}.`,

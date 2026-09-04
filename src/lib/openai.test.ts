@@ -1,10 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  normalizeModelId,
   buildPromptFromMessages,
+  normalizeModelId,
   responsesInputToMessages,
   toolsToSystemText,
-  type OpenAiChatCompletionRequest,
 } from "./openai.js";
 
 describe("normalizeModelId", () => {
@@ -124,7 +123,7 @@ describe("buildPromptFromMessages", () => {
   });
 
   it("handles undefined messages", () => {
-    const prompt = buildPromptFromMessages(undefined as unknown as any[]);
+    const prompt = buildPromptFromMessages(undefined);
     expect(prompt).toBe("\n\nAssistant:");
   });
 
@@ -217,7 +216,9 @@ describe("responsesInputToMessages", () => {
 
   it("converts function call output items as tool messages", () => {
     const result = responsesInputToMessages({
-      input: [{ type: "function_call_output", call_id: "call_1", output: "42" }],
+      input: [
+        { type: "function_call_output", call_id: "call_1", output: "42" },
+      ],
     });
     expect(result).toEqual([{ role: "tool", content: "42" }]);
   });

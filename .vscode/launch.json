@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:cursor-api-proxy-next}/widget-mac",
+      "name": "Debug CursorProxyWidget (widget-mac)",
+      "target": "CursorProxyWidget",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug CursorProxyWidget (widget-mac)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:cursor-api-proxy-next}/widget-mac",
+      "name": "Release CursorProxyWidget (widget-mac)",
+      "target": "CursorProxyWidget",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release CursorProxyWidget (widget-mac)"
+    }
+  ]
+}

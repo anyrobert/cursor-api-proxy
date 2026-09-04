@@ -3,13 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
-
+import type { SessionRequest } from "../lib/session-log.js";
 import {
   formatRequests,
   handleRequests,
   readRecentRequests,
 } from "./requests.js";
-import type { SessionRequest } from "../lib/session-log.js";
 
 const tempDirs: string[] = [];
 
@@ -90,7 +89,10 @@ describe("requests command", () => {
 
     const result = await readRecentRequests(logPath, 1);
     expect(result).toHaveLength(1);
-    expect(result[0].pathname).toBe("/second");
+    const request = result[0];
+    expect(request).toBeDefined();
+    if (!request) return;
+    expect(request.pathname).toBe("/second");
   });
 
   it("prints an empty state for a missing log", async () => {

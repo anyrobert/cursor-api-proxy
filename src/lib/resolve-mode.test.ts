@@ -38,9 +38,9 @@ function base(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
 
 describe("resolveRequestMode", () => {
   it("prefers body.mode over header and config", () => {
-    expect(
-      resolveRequestMode(base({ mode: "plan" }), "agent", "ask"),
-    ).toBe("ask");
+    expect(resolveRequestMode(base({ mode: "plan" }), "agent", "ask")).toBe(
+      "ask",
+    );
   });
 
   it("uses header when body absent", () => {
@@ -99,12 +99,7 @@ describe("resolveRequestMode", () => {
       },
     ];
     expect(
-      resolveRequestMode(
-        base({ dshAutoMode: true }),
-        "agent",
-        "ask",
-        messages,
-      ),
+      resolveRequestMode(base({ dshAutoMode: true }), "agent", "ask", messages),
     ).toBe("ask");
     expect(
       resolveRequestMode(
@@ -132,14 +127,14 @@ describe("resolveRequestMode", () => {
   });
 
   it("throws on invalid body.mode", () => {
-    expect(() =>
-      resolveRequestMode(base(), undefined, "nope"),
-    ).toThrow(/invalid mode/);
+    expect(() => resolveRequestMode(base(), undefined, "nope")).toThrow(
+      /invalid mode/,
+    );
   });
 
   it("throws when body.mode is not a string", () => {
-    expect(() =>
-      resolveRequestMode(base(), undefined, 1),
-    ).toThrow(/must be a string/);
+    expect(() => resolveRequestMode(base(), undefined, 1)).toThrow(
+      /must be a string/,
+    );
   });
 });

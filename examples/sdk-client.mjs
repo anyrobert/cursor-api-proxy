@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Example: use the SDK minimal client (createCursorProxyClient).
  * The proxy starts in the background automatically if not already running,
@@ -6,7 +6,7 @@
  *
  * Prereq: Cursor CLI installed and logged in (agent login)
  *
- * Run: node examples/sdk-client.mjs
+ * Run: bun examples/sdk-client.mjs
  */
 
 import { createCursorProxyClient } from "cursor-api-proxy";
@@ -14,7 +14,10 @@ import { createCursorProxyClient } from "cursor-api-proxy";
 async function main() {
   const proxy = createCursorProxyClient();
 
-  console.log("Proxy will start automatically if needed. Base URL:", proxy.baseUrl);
+  console.log(
+    "Proxy will start automatically if needed. Base URL:",
+    proxy.baseUrl,
+  );
   console.log("---");
 
   const data = await proxy.chatCompletionsCreate({
@@ -25,7 +28,10 @@ async function main() {
   const content = data.choices?.[0]?.message?.content ?? "(no content)";
   console.log("Response:", content);
   console.log("---");
-  console.log("Full response (choices):", JSON.stringify(data.choices, null, 2));
+  console.log(
+    "Full response (choices):",
+    JSON.stringify(data.choices, null, 2),
+  );
 }
 
 main().catch((err) => {

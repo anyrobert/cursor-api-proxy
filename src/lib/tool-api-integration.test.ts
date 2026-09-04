@@ -1,4 +1,4 @@
-import * as http from "node:http";
+import type * as http from "node:http";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -6,9 +6,9 @@ import type { BridgeConfig } from "./config.js";
 import { startBridgeServer } from "./server.js";
 
 vi.mock("./cursor-cli.js", () => ({
-  listCursorCliModels: vi.fn().mockResolvedValue([
-    { id: "gpt-4", name: "gpt-4" },
-  ]),
+  listCursorCliModels: vi
+    .fn()
+    .mockResolvedValue([{ id: "gpt-4", name: "gpt-4" }]),
 }));
 
 const fakeServerPath = join(
@@ -81,19 +81,32 @@ async function post(
   };
 }
 
-function sseData(text: string): any[] {
+type SseEvent = {
+  choices?: Array<{
+    delta?: { tool_calls?: unknown[] };
+    finish_reason?: string;
+  }>;
+  content_block?: { type?: string };
+  delta?: { type?: string };
+  response?: Record<string, unknown>;
+  type?: string;
+};
+
+function sseData(text: string): SseEvent[] {
   return text
     .split(/\r?\n/)
     .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
-    .map((line) => JSON.parse(line.slice(6)));
+    .map((line) => JSON.parse(line.slice(6)) as SseEvent);
 }
 
 afterEach(async () => {
   await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve) => server.close(() => resolve())),
-    ),
+    servers
+      .splice(0)
+      .map(
+        (server) =>
+          new Promise<void>((resolve) => server.close(() => resolve())),
+      ),
   );
 });
 
@@ -124,7 +137,10 @@ describe.each([false, true])("ACP tool APIs stream=%s", (stream) => {
     const call = stream
       ? chunks
           .flatMap((chunk) => chunk.choices ?? [])
-          .flatMap((choice: any) => choice.delta?.tool_calls ?? [])[0]
+          .flatMap(
+            (choice: { delta?: { tool_calls?: unknown[] } }) =>
+              choice.delta?.tool_calls ?? [],
+          )[0]
       : payload.choices[0].message.tool_calls[0];
     expect(call.function.name).toBe("weather");
     expect(
@@ -178,11 +194,17 @@ describe.each([false, true])("ACP tool APIs stream=%s", (stream) => {
     });
     expect(initial.status).toBe(200);
     const events = stream ? sseData(initial.text) : [];
+    const completedEvent = events.find(
+      (event) => event.type === "response.completed",
+    );
     const payload = stream
-      ? events.find((event) => event.type === "response.completed").response
+      ? (completedEvent?.response ??
+        (() => {
+          throw new Error("missing response event");
+        })())
       : JSON.parse(initial.text);
     const call = payload.output.find(
-      (item: any) => item.type === "function_call",
+      (item: { type?: string }) => item.type === "function_call",
     );
     expect(call.name).toBe("weather");
 
@@ -200,6 +222,94 @@ describe.each([false, true])("ACP tool APIs stream=%s", (stream) => {
     });
     expect(follow.status).toBe(200);
     expect(JSON.parse(follow.text).output_text).toContain("Tool result: sunny");
+  });
+
+  it("round-trips Responses namespace calls and preserves namespace on resume", async () => {
+    const base = await start();
+    const initial = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      stream,
+      input: "Read a file",
+      tools: [
+        {
+          type: "namespace",
+          name: "workspace",
+          tools: [
+            {
+              type: "function",
+              name: "read_file",
+              parameters: { type: "object", properties: {} },
+            },
+          ],
+        },
+      ],
+    });
+    expect(initial.status).toBe(200);
+    const events = stream ? sseData(initial.text) : [];
+    const payload = stream
+      ? (events.find((event) => event.type === "response.completed")?.response ??
+        (() => { throw new Error("missing response event"); })())
+      : JSON.parse(initial.text);
+    const call = payload.output.find(
+      (item: { type?: string }) => item.type === "function_call",
+    );
+    expect(call).toMatchObject({ name: "read_file", namespace: "workspace" });
+
+    const follow = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      previous_response_id: payload.id,
+      input: [
+        {
+          type: "function_call_output",
+          call_id: call.call_id,
+          output: "contents",
+        },
+      ],
+    });
+    expect(follow.status).toBe(200);
+    expect(JSON.parse(follow.text).output_text).toContain("Tool result: contents");
+  });
+
+  it("round-trips Responses custom calls and streams custom input events", async () => {
+    const base = await start();
+    const initial = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      stream: true,
+      input: "Apply this patch",
+      tools: [
+        {
+          type: "custom",
+          name: "apply_patch",
+          description: "Apply raw patch text",
+          format: { type: "text" },
+        },
+      ],
+    });
+    expect(initial.status).toBe(200);
+    const events = sseData(initial.text);
+    expect(events.some((event) => event.type === "response.custom_tool_call_input.delta")).toBe(true);
+    const payload = events.find((event) => event.type === "response.completed")?.response;
+    expect(payload).toBeDefined();
+    const output = payload?.["output"];
+    const call = (Array.isArray(output) ? output : []).find(
+      (item: { type?: string }) => item.type === "custom_tool_call",
+    );
+    expect(call).toBeDefined();
+    expect(call).toMatchObject({ name: "apply_patch", input: "raw-input-0" });
+
+    const follow = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      previous_response_id: payload?.["id"],
+      input: [
+        {
+          type: "custom_tool_call_output",
+          call_id: call.call_id,
+          output: "patched",
+        },
+      ],
+    });
+    expect(follow.status).toBe(200);
+    expect(JSON.parse(follow.text).output_text).toContain("Tool result: patched");
   });
 
   it("round-trips Anthropic tool_use blocks", async () => {
@@ -223,13 +333,19 @@ describe.each([false, true])("ACP tool APIs stream=%s", (stream) => {
     expect(initial.status).toBe(200);
     const events = stream ? sseData(initial.text) : [];
     const payload = stream ? undefined : JSON.parse(initial.text);
+    const toolEvent = events.find(
+      (event) =>
+        event.type === "content_block_start" &&
+        event.content_block?.type === "tool_use",
+    );
     const call = stream
-      ? events.find(
-          (event) =>
-            event.type === "content_block_start" &&
-            event.content_block?.type === "tool_use",
-        ).content_block
-      : payload.content.find((block: any) => block.type === "tool_use");
+      ? (toolEvent?.content_block ??
+        (() => {
+          throw new Error("missing tool event");
+        })())
+      : payload.content.find(
+          (block: { type?: string }) => block.type === "tool_use",
+        );
     expect(call.name).toBe("weather");
     if (stream) {
       expect(
@@ -409,7 +525,7 @@ describe("ACP tool session errors", () => {
     });
     const calls = JSON.parse(initial.text).choices[0].message.tool_calls;
     const replies = await Promise.all(
-      calls.map((call: any) =>
+      calls.map((call: { id: string; function: { name: string } }) =>
         post(base, "/v1/chat/completions", {
           model: "gpt-4",
           messages: [

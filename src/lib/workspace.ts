@@ -34,15 +34,15 @@ export function getChatOnlyEnvOverrides(
     return overrides;
   }
 
-  overrides.HOME = workspaceDir;
-  overrides.USERPROFILE = workspaceDir;
+  overrides["HOME"] = workspaceDir;
+  overrides["USERPROFILE"] = workspaceDir;
   if (process.platform === "win32") {
     const appDataRoaming = path.join(workspaceDir, "AppData", "Roaming");
     const appDataLocal = path.join(workspaceDir, "AppData", "Local");
-    overrides.APPDATA = appDataRoaming;
-    overrides.LOCALAPPDATA = appDataLocal;
+    overrides["APPDATA"] = appDataRoaming;
+    overrides["LOCALAPPDATA"] = appDataLocal;
   } else {
-    overrides.XDG_CONFIG_HOME = path.join(workspaceDir, ".config");
+    overrides["XDG_CONFIG_HOME"] = path.join(workspaceDir, ".config");
   }
   return overrides;
 }
@@ -72,7 +72,9 @@ export function resolveWorkspace(
       "utf8",
     );
     if (process.platform === "win32") {
-      fs.mkdirSync(path.join(tempDir, "AppData", "Roaming"), { recursive: true });
+      fs.mkdirSync(path.join(tempDir, "AppData", "Roaming"), {
+        recursive: true,
+      });
       fs.mkdirSync(path.join(tempDir, "AppData", "Local"), { recursive: true });
     } else {
       fs.mkdirSync(path.join(tempDir, ".config"), { recursive: true });

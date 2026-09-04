@@ -58,15 +58,18 @@ describe("AcpToolSession", () => {
     if (first.status !== "tool_calls") return;
     expect(first.text).toBe("Checking tools.");
     expect(first.toolCalls).toHaveLength(1);
-    expect(first.toolCalls[0]).toMatchObject({
+    const call = first.toolCalls[0];
+    expect(call).toBeDefined();
+    if (!call) return;
+    expect(call).toMatchObject({
       name: "weather",
     });
-    expect(JSON.parse(first.toolCalls[0].arguments)).toMatchObject({
+    expect(JSON.parse(call.arguments)).toMatchObject({
       city: "Paris",
     });
 
     const final = await session.resume([
-      { callId: first.toolCalls[0].callId, output: "sunny" },
+      { callId: call.callId, output: "sunny" },
     ]);
     expect(final.status).toBe("completed");
     expect(final.text).toContain("Tool result: sunny");
@@ -110,14 +113,19 @@ describe("AcpToolSession", () => {
     if (first.status !== "tool_calls") return;
 
     const second = await session.resume([
-      { callId: first.toolCalls[0].callId, output: "first" },
+      { callId: first.toolCalls[0]?.callId ?? "", output: "first" },
     ]);
     expect(second.status).toBe("tool_calls");
     if (second.status !== "tool_calls") return;
-    expect(second.toolCalls[0].callId).not.toBe(first.toolCalls[0].callId);
+    const secondCall = second.toolCalls[0];
+    const firstCall = first.toolCalls[0];
+    expect(secondCall).toBeDefined();
+    expect(firstCall).toBeDefined();
+    if (!secondCall || !firstCall) return;
+    expect(secondCall.callId).not.toBe(firstCall.callId);
 
     const final = await session.resume([
-      { callId: second.toolCalls[0].callId, output: "second" },
+      { callId: secondCall.callId, output: "second" },
     ]);
     expect(final.status).toBe("completed");
     expect(final.text).toContain("first, second");

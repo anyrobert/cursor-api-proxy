@@ -28,9 +28,7 @@ vi.mock("./request-log.js", () => ({
   logAccountStats: vi.fn(),
 }));
 
-function createTestConfig(
-  overrides: Partial<BridgeConfig> = {},
-): BridgeConfig {
+function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
   return {
     agentBin: "agent",
     acpCommand: "agent",
@@ -111,10 +109,13 @@ describe("client disconnect", () => {
       version: "1.0.0",
       config: createTestConfig(),
     }) as http.Server[];
-    await new Promise<void>((r) => servers[0].on("listening", () => r()));
+    const server = servers[0];
+    expect(server).toBeDefined();
+    if (!server) return;
+    await new Promise<void>((r) => server.on("listening", () => r()));
 
     const disconnected = requestThenDisconnect(
-      servers[0],
+      server,
       JSON.stringify({
         model: "claude-3-opus",
         messages: [{ role: "user", content: "hi" }],
@@ -123,11 +124,11 @@ describe("client disconnect", () => {
 
     await agentReached;
     expect(seenSignal).toBeDefined();
-    expect(seenSignal!.aborted).toBe(false);
+    expect(seenSignal?.aborted).toBe(false);
 
     await disconnected;
     await vi.waitFor(() => {
-      expect(seenSignal!.aborted).toBe(true);
+      expect(seenSignal?.aborted).toBe(true);
     });
   });
 });

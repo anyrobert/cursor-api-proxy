@@ -1,6 +1,8 @@
-import * as http from "node:http";
+import type * as http from "node:http";
 
-export function extractBearerToken(req: http.IncomingMessage): string | undefined {
+export function extractBearerToken(
+  req: http.IncomingMessage,
+): string | undefined {
   const h = req.headers["authorization"];
   if (!h) return undefined;
   const val = Array.isArray(h) ? h[0] : h;

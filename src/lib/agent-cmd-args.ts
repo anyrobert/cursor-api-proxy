@@ -15,7 +15,8 @@ export function buildAgentFixedArgs(
   const args = ["--print"];
   if (config.approveMcps) args.push("--approve-mcps");
   if (config.force) args.push("--force");
-  if (effectiveChatOnly) args.push("--trust");
+  // Proxy runs non-interactively; without --trust the CLI exits on workspace trust prompts.
+  if (effectiveChatOnly || config.force) args.push("--trust");
   // cursor-agent only accepts --mode plan|ask; agent mode is the default
   // and rejects --mode agent with "argument 'agent' is invalid".
   if (mode !== "agent") {
