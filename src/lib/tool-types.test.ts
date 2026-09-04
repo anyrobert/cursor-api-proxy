@@ -26,40 +26,125 @@ describe("tool normalization", () => {
           parameters: { type: "object", properties: { y: {} } },
         },
       ]),
-    ).toEqual([
+    ).toMatchObject([
       {
         name: "chat",
-        description: undefined,
+        responseType: "function",
+        responseName: "chat",
         inputSchema: { type: "object", properties: { x: {} } },
       },
       {
         name: "response",
-        description: undefined,
+        responseType: "function",
+        responseName: "response",
         inputSchema: { type: "object", properties: { y: {} } },
       },
     ]);
-    expect(
-      parseOpenAiFunctionTools(undefined, [
-        {
-          name: "legacy",
-          parameters: { type: "object", properties: {} },
-        },
-      ])[0].name,
-    ).toBe("legacy");
-    expect(
-      parseAnthropicFunctionTools([
-        {
-          name: "anthropic",
-          input_schema: { type: "object", properties: {} },
-        },
-      ])[0].inputSchema,
-    ).toEqual({ type: "object", properties: {} });
+    const legacyTools = parseOpenAiFunctionTools(undefined, [
+      {
+        name: "legacy",
+        parameters: { type: "object", properties: {} },
+      },
+    ]);
+    const legacy = legacyTools[0];
+    expect(legacy).toBeDefined();
+    if (!legacy) return;
+    expect(legacy.name).toBe("legacy");
+    const anthropicTools = parseAnthropicFunctionTools([
+      {
+        name: "anthropic",
+        input_schema: { type: "object", properties: {} },
+      },
+    ]);
+    const anthropic = anthropicTools[0];
+    expect(anthropic).toBeDefined();
+    if (!anthropic) return;
+    expect(anthropic.inputSchema).toEqual({
+      type: "object",
+      properties: {},
+    });
   });
 
-  it("rejects unsupported and duplicate tools", () => {
-    expect(() =>
-      parseOpenAiFunctionTools([{ type: "web_search" }]),
-    ).toThrow(/Unsupported tool type/);
+  it("flattens Responses namespaces and wraps custom tools", () => {
+    expect(
+      parseOpenAiFunctionTools([
+        {
+          type: "namespace",
+          name: "skills",
+          tools: [
+            {
+              type: "function",
+              name: "read",
+              parameters: { type: "object", properties: { path: {} } },
+            },
+            {
+              type: "custom",
+              name: "exec",
+              description: "Execute source text",
+              format: {
+                type: "grammar",
+                syntax: "lark",
+                definition: "start: /.+/",
+              },
+            },
+          ],
+        },
+        {
+          type: "custom",
+          name: "apply_patch",
+          description: "Apply a patch",
+          format: {
+            type: "grammar",
+            syntax: "lark",
+            definition: "start: /.+/",
+          },
+        },
+      ]),
+    ).toMatchObject([
+      {
+        name: "skills__read",
+        responseType: "function",
+        responseName: "read",
+        responseNamespace: "skills",
+      },
+      {
+        name: "skills__exec",
+        responseType: "custom",
+        responseName: "exec",
+        responseNamespace: "skills",
+        inputSchema: {
+          type: "object",
+          required: ["input"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "apply_patch",
+        responseType: "custom",
+        responseName: "apply_patch",
+      },
+    ]);
+  });
+
+  it("ignores provider-executed tools and rejects unknown/duplicate tools", () => {
+    expect(
+      parseOpenAiFunctionTools(
+        [
+          { type: "web_search" },
+          {
+            type: "tool_search",
+            execution: "server",
+            description: "Search deferred tools",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+        undefined,
+        { ignoreProviderExecutedTools: true },
+      ),
+    ).toEqual([]);
+    expect(() => parseOpenAiFunctionTools([{ type: "computer" }])).toThrow(
+      /Unsupported tool type/,
+    );
     expect(() =>
       parseOpenAiFunctionTools([
         { type: "function", name: "same" },
@@ -107,7 +192,7 @@ describe("tool output correlation", () => {
     ).toEqual([{ callId: "call_1", output: '{"ok":true}' }]);
   });
 
-  it("reads Responses function_call_output", () => {
+  it("reads Responses function and custom tool outputs", () => {
     expect(
       responsesToolOutputs([
         {
@@ -115,8 +200,16 @@ describe("tool output correlation", () => {
           call_id: "call_2",
           output: "done",
         },
+        {
+          type: "custom_tool_call_output",
+          call_id: "call_4",
+          output: "patched",
+        },
       ]),
-    ).toEqual([{ callId: "call_2", output: "done" }]);
+    ).toEqual([
+      { callId: "call_2", output: "done" },
+      { callId: "call_4", output: "patched" },
+    ]);
   });
 
   it("reads Anthropic tool_result and error state", () => {
@@ -134,8 +227,6 @@ describe("tool output correlation", () => {
           ],
         },
       ]),
-    ).toEqual([
-      { callId: "call_3", output: "failed", isError: true },
-    ]);
+    ).toEqual([{ callId: "call_3", output: "failed", isError: true }]);
   });
 });

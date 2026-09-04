@@ -1,7 +1,7 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { resolveAgentCommand } from "./env.js";
-import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
 import { runMaxModePreflight } from "./max-mode-preflight.js";
+import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
 
 export type RunResult = {
   code: number;
@@ -10,18 +10,18 @@ export type RunResult = {
 };
 
 export type RunOptions = {
-  cwd?: string;
-  timeoutMs?: number;
+  cwd?: string | undefined;
+  timeoutMs?: number | undefined;
   /** Enable Cursor Max Mode (preflight writes maxMode to cli-config.json). */
-  maxMode?: boolean;
+  maxMode?: boolean | undefined;
   /** When set, pass this string to the child process stdin and close it (avoids long prompt in argv on Windows). */
-  stdinContent?: string;
+  stdinContent?: string | undefined;
   /** Env overrides for the child (e.g. HOME, CURSOR_CONFIG_DIR to isolate from global rules). */
-  envOverrides?: Record<string, string>;
+  envOverrides?: Record<string, string> | undefined;
   /** Custom config dir for round-robin account rotation */
-  configDir?: string;
+  configDir?: string | undefined;
   /** Abort signal — when aborted, the child process is killed immediately */
-  signal?: AbortSignal;
+  signal?: AbortSignal | undefined;
 };
 
 export type RunStreamingOptions = RunOptions & {
@@ -58,11 +58,11 @@ function spawnChild(
   cmd: string,
   args: string[],
   opts?: {
-    cwd?: string;
-    maxMode?: boolean;
-    stdinContent?: string;
-    envOverrides?: Record<string, string>;
-    configDir?: string;
+    cwd?: string | undefined;
+    maxMode?: boolean | undefined;
+    stdinContent?: string | undefined;
+    envOverrides?: Record<string, string> | undefined;
+    configDir?: string | undefined;
   },
 ) {
   const resolved = resolveAgentCommand(cmd, args);
@@ -73,9 +73,9 @@ function spawnChild(
 
   const env = { ...resolved.env };
   if (opts?.configDir) {
-    env.CURSOR_CONFIG_DIR = opts.configDir;
-  } else if (resolved.configDir && !env.CURSOR_CONFIG_DIR) {
-    env.CURSOR_CONFIG_DIR = resolved.configDir;
+    env["CURSOR_CONFIG_DIR"] = opts.configDir;
+  } else if (resolved.configDir && !env["CURSOR_CONFIG_DIR"]) {
+    env["CURSOR_CONFIG_DIR"] = resolved.configDir;
   }
   if (opts?.envOverrides) {
     Object.assign(env, opts.envOverrides);
@@ -90,7 +90,7 @@ function spawnChild(
     detached: DETACH_CHILDREN,
   });
 
-  if (useStdin && opts!.stdinContent !== undefined && child.stdin) {
+  if (useStdin && opts?.stdinContent !== undefined && child.stdin) {
     child.stdin.write(opts.stdinContent, "utf8");
     child.stdin.end();
   }
@@ -139,11 +139,11 @@ export function runStreaming(
     let stderr = "";
     let lineBuffer = "";
 
-    child.stderr!.setEncoding("utf8");
-    child.stderr!.on("data", (c) => (stderr += c));
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (c) => (stderr += c));
 
-    child.stdout!.setEncoding("utf8");
-    child.stdout!.on("data", (chunk: string) => {
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
       lineBuffer += chunk;
       const lines = lineBuffer.split("\n");
       lineBuffer = lines.pop() ?? "";
@@ -218,10 +218,10 @@ export function run(
     let stdout = "";
     let stderr = "";
 
-    child.stdout!.setEncoding("utf8");
-    child.stderr!.setEncoding("utf8");
-    child.stdout!.on("data", (c) => (stdout += c));
-    child.stderr!.on("data", (c) => (stderr += c));
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (c) => (stdout += c));
+    child.stderr?.on("data", (c) => (stderr += c));
 
     child.on("error", (err: NodeJS.ErrnoException) => {
       if (timeout) clearTimeout(timeout);

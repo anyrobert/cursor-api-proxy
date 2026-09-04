@@ -52,14 +52,7 @@ describe("buildAgentFixedArgs", () => {
   });
 
   it("passes --mode ask when mode is ask", () => {
-    const args = buildAgentFixedArgs(
-      cfg(),
-      "/ws",
-      "gpt-5",
-      false,
-      "ask",
-      true,
-    );
+    const args = buildAgentFixedArgs(cfg(), "/ws", "gpt-5", false, "ask", true);
     expect(args).toContain("--mode");
     expect(args[args.indexOf("--mode") + 1]).toBe("ask");
   });

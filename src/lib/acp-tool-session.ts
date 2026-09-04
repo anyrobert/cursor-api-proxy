@@ -1,11 +1,11 @@
+import { resolveAcpModelConfigValue } from "./acp-client.js";
 import {
   AcpConnection,
-  permissionOption,
   type AcpConnectionOptions,
   type AcpPermissionParams,
   type AcpSessionResult,
+  permissionOption,
 } from "./acp-connection.js";
-import { resolveAcpModelConfigValue } from "./acp-client.js";
 import { ClientToolBridge } from "./client-tool-bridge.js";
 import type {
   ClientToolDefinition,
@@ -38,18 +38,18 @@ export type AcpToolSessionOptions = {
   command: string;
   args: readonly string[];
   cwd: string;
-  env?: Record<string, string | undefined>;
+  env?: Record<string, string | undefined> | undefined;
   timeoutMs: number;
-  spawnOptions?: { windowsVerbatimArguments?: boolean };
-  skipAuthenticate?: boolean;
-  rawDebug?: boolean;
-  signal?: AbortSignal;
-  modelCandidates?: string[];
-  strictModel?: boolean;
+  spawnOptions?: { windowsVerbatimArguments?: boolean | undefined } | undefined;
+  skipAuthenticate?: boolean | undefined;
+  rawDebug?: boolean | undefined;
+  signal?: AbortSignal | undefined;
+  modelCandidates?: string[] | undefined;
+  strictModel?: boolean | undefined;
   tools: readonly ClientToolDefinition[];
-  requireToolCall?: boolean;
-  maxParallelToolCalls?: number;
-  onClose?: () => void | Promise<void>;
+  requireToolCall?: boolean | undefined;
+  maxParallelToolCalls?: number | undefined;
+  onClose?: (() => void | Promise<void>) | undefined;
 };
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -60,7 +60,9 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function toolCallId(value: unknown): string | undefined {
   const rec = record(value);
-  return typeof rec?.toolCallId === "string" ? rec.toolCallId : undefined;
+  return typeof rec?.["toolCallId"] === "string"
+    ? rec["toolCallId"]
+    : undefined;
 }
 
 export class AcpToolSession {
@@ -73,7 +75,7 @@ export class AcpToolSession {
   #promptDone?: Promise<{ ok: true } | { ok: false; error: Error }>;
   #text = "";
   #reasoning = "";
-  #listener?: (event: ToolTurnEvent) => void;
+  #listener: ((event: ToolTurnEvent) => void) | undefined;
   #ttl?: ReturnType<typeof setTimeout>;
   #closed = false;
   #terminal = false;
@@ -126,8 +128,9 @@ export class AcpToolSession {
       const session = await this.#connection.newSession(this.#opts.cwd, [
         this.bridge.mcpServer,
       ]);
-      this.#sessionId = session.sessionId;
-      if (!this.#sessionId) throw new Error("ACP session/new returned no sessionId");
+      const sessionId = session.sessionId;
+      if (!sessionId) throw new Error("ACP session/new returned no sessionId");
+      this.#sessionId = sessionId;
       await this.#setModel(session);
       this.#armTtl();
       this.#promptDone = this.#connection
@@ -235,7 +238,9 @@ export class AcpToolSession {
     this.#listener = undefined;
     this.bridge.rejectAll(new Error("ACP tool session closed"));
     if (this.#connection && this.#sessionId) {
-      await this.#connection.cancelSession(this.#sessionId).catch(() => undefined);
+      await this.#connection
+        .cancelSession(this.#sessionId)
+        .catch(() => undefined);
     }
     await this.#connection?.close("SIGKILL").catch(() => undefined);
     await this.bridge.close().catch(() => undefined);
@@ -269,21 +274,24 @@ export class AcpToolSession {
   #permissionFor(params: AcpPermissionParams): string {
     const call = record(params.toolCall) ?? {};
     const id = toolCallId(call);
-    const merged = id ? { ...(this.#toolUpdates.get(id) ?? {}), ...call } : call;
+    const merged = id
+      ? { ...(this.#toolUpdates.get(id) ?? {}), ...call }
+      : call;
     const payload = JSON.stringify(merged).toLowerCase();
     const title =
-      typeof merged.title === "string" ? merged.title.trim().toLowerCase() : "";
+      typeof merged["title"] === "string"
+        ? merged["title"].trim().toLowerCase()
+        : "";
     const kind =
-      typeof merged.kind === "string" ? merged.kind.trim().toLowerCase() : "";
+      typeof merged["kind"] === "string"
+        ? merged["kind"].trim().toLowerCase()
+        : "";
     const proxyOwned =
       this.bridge.listed &&
       kind === "other" &&
       (title === "mcp: tool" ||
         payload.includes(this.bridge.serverName.toLowerCase()));
-    return permissionOption(
-      params,
-      proxyOwned ? "allow_once" : "reject_once",
-    );
+    return permissionOption(params, proxyOwned ? "allow_once" : "reject_once");
   }
 
   #drainOutput(): { text: string; reasoning: string } {

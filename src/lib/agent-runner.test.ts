@@ -1,8 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-
-import type { BridgeConfig } from "./config.js";
-import { runAgentSync, runAgentStream } from "./agent-runner.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runAcpStream, runAcpSync } from "./acp-client.js";
+import { runAgentStream, runAgentSync } from "./agent-runner.js";
+import type { BridgeConfig } from "./config.js";
 
 vi.mock("./acp-client.js", () => ({
   runAcpSync: vi.fn().mockResolvedValue({ code: 0, stdout: "ok", stderr: "" }),
@@ -68,7 +67,10 @@ describe("ACP requestTimeoutMs", () => {
       "hello",
     );
     expect(runAcpSync).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(runAcpSync).mock.calls[0][3]).toMatchObject({
+    const call = vi.mocked(runAcpSync).mock.calls[0];
+    expect(call).toBeDefined();
+    if (!call) return;
+    expect(call[3]).toMatchObject({
       timeoutMs: 123_456,
       requestTimeoutMs: 123_456,
     });
@@ -85,7 +87,10 @@ describe("ACP requestTimeoutMs", () => {
       "hello",
     );
     expect(runAcpStream).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(runAcpStream).mock.calls[0][3]).toMatchObject({
+    const call = vi.mocked(runAcpStream).mock.calls[0];
+    expect(call).toBeDefined();
+    if (!call) return;
+    expect(call[3]).toMatchObject({
       timeoutMs: 123_456,
       requestTimeoutMs: 123_456,
     });

@@ -3,6 +3,13 @@ import * as fs from "node:fs";
 const SESSION_LINE_RE =
   /^(\S+) (GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) (\S+) (\S+) (\d{3})$/;
 
+function matchGroup(
+  match: RegExpMatchArray,
+  index: number,
+): string | undefined {
+  return match[index];
+}
+
 export type SessionRequest = {
   ts: string;
   method: string;
@@ -46,15 +53,18 @@ export function parseSessionLine(line: string): SessionRequest | null {
   const match = line.match(SESSION_LINE_RE);
   if (!match) return null;
 
-  const ts = Date.parse(match[1]);
-  const status = Number(match[5]);
+  const tsValue = matchGroup(match, 1);
+  const statusValue = matchGroup(match, 5);
+  if (tsValue === undefined || statusValue === undefined) return null;
+  const ts = Date.parse(tsValue);
+  const status = Number(statusValue);
   if (!Number.isFinite(ts) || !Number.isInteger(status)) return null;
 
   return {
-    ts: match[1],
-    method: match[2],
-    pathname: match[3],
-    remoteAddress: match[4],
+    ts: tsValue,
+    method: matchGroup(match, 2) ?? "",
+    pathname: matchGroup(match, 3) ?? "",
+    remoteAddress: matchGroup(match, 4) ?? "",
     status,
   };
 }
@@ -65,7 +75,9 @@ export function recentSessionRequests(
 ): SessionRequest[] {
   const requests: SessionRequest[] = [];
   for (let i = lines.length - 1; i >= 0 && requests.length < limit; i--) {
-    const request = parseSessionLine(lines[i]);
+    const line = lines[i];
+    if (line === undefined) continue;
+    const request = parseSessionLine(line);
     if (request) requests.push(request);
   }
   return requests;
@@ -90,8 +102,7 @@ export function computeSessionStats(
 
     stats.total++;
     if (request.status >= 400) stats.errors++;
-    stats.byPath[request.pathname] =
-      (stats.byPath[request.pathname] ?? 0) + 1;
+    stats.byPath[request.pathname] = (stats.byPath[request.pathname] ?? 0) + 1;
     stats.recent.push({
       ts: request.ts,
       method: request.method,

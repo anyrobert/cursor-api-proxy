@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # cursor-api-proxy — launcher (install to ~/.local/bin/cursor-api-proxy).
-# Requires: Node 18+, built dist/cli.js under CURSOR_API_PROXY_ROOT.
+# Requires: Bun, built dist/cli.js under CURSOR_API_PROXY_ROOT.
 
 set -euo pipefail
 
@@ -41,14 +41,14 @@ _resolve_root() {
 
 ROOT="$(_resolve_root)"
 
-# Lazy node lookup: only commands that actually need node (start/run/enable)
+# Lazy Bun lookup: only commands that actually need Bun (start/run/enable)
 # call _entry. Doing this at top-level used to kill the script under
-# `set -euo pipefail` when launchd's minimal PATH had no `node`, even for
-# `stop`/`health` which don't need node at all.
+# `set -euo pipefail` when launchd's minimal PATH had no `bun`, even for
+# `stop`/`health` which don't need Bun at all.
 #
-# Returns "<node>|<cli.js>" on stdout, or non-zero exit + stderr message.
+# Returns "<bun>|<cli.js>" on stdout, or non-zero exit + stderr message.
 # Callers MUST guard with `if ! out=$(_entry); then exit 1; fi` — using
-# `IFS=| read … <<<"$(_entry)"` masks the failure (issue: empty $node + $exe
+# `IFS=| read … <<<"$(_entry)"` masks the failure (issue: empty $bun + $exe
 # leading to `nohup: : No such file or directory`).
 _entry() {
   if [[ -z "$ROOT" ]]; then
@@ -57,55 +57,47 @@ _entry() {
   fi
   local cli="${ROOT}/dist/cli.js"
   if [[ ! -f "$cli" ]]; then
-    echo "Missing ${cli} — run: cd \"$ROOT\" && npm install && npm run build" >&2
+    echo "Missing ${cli} — run: cd \"$ROOT\" && bun install && bun run build" >&2
     return 1
   fi
-  local node_bin="${CURSOR_API_PROXY_NODE:-}"
-  if [[ -z "$node_bin" ]]; then
-    node_bin="$(command -v node 2>/dev/null || true)"
+  local bun_bin="${CURSOR_API_PROXY_BUN:-}"
+  if [[ -z "$bun_bin" ]]; then
+    bun_bin="$(command -v bun 2>/dev/null || true)"
   fi
-  if [[ -z "$node_bin" || ! -x "$node_bin" ]]; then
+  if [[ -z "$bun_bin" || ! -x "$bun_bin" ]]; then
     # launchd/widget can run with a minimal PATH; probe common install locations.
     local candidates=(
-      "${HOME}/.local/bin/node"
-      "/opt/homebrew/bin/node"
-      "/usr/local/bin/node"
-      "${HOME}/.volta/bin/node"
-      "${HOME}/.asdf/shims/node"
+      "${HOME}/.bun/bin/bun"
+      "${HOME}/.local/bin/bun"
+      "/opt/homebrew/bin/bun"
+      "/usr/local/bin/bun"
+      "${HOME}/.asdf/shims/bun"
     )
-    local nvm_root="${HOME}/.nvm/versions/node"
-    if [[ -d "$nvm_root" ]]; then
-      local nvm_ver
-      for nvm_ver in "$nvm_root"/*; do
-        [[ -d "$nvm_ver" ]] || continue
-        candidates+=("${nvm_ver}/bin/node")
-      done
-    fi
     local candidate
     for candidate in "${candidates[@]}"; do
       if [[ -x "$candidate" ]]; then
-        node_bin="$candidate"
+        bun_bin="$candidate"
         break
       fi
     done
   fi
-  if [[ -z "$node_bin" || ! -x "$node_bin" ]]; then
-    echo "node not found. Install Node 18+ or set CURSOR_API_PROXY_NODE." >&2
+  if [[ -z "$bun_bin" || ! -x "$bun_bin" ]]; then
+    echo "bun not found. Install Bun or set CURSOR_API_PROXY_BUN." >&2
     return 1
   fi
-  echo "$node_bin|$cli"
+  echo "$bun_bin|$cli"
 }
 
-# Tiny helper: resolve _entry and split into $node / $exe in the caller's scope,
+# Tiny helper: resolve _entry and split into $bun / $exe in the caller's scope,
 # but propagate the failure (unlike `<<<"$(_entry)"`).
 _load_entry() {
   local entry
   if ! entry="$(_entry)"; then
     return 1
   fi
-  IFS='|' read -r node exe <<<"$entry"
-  if [[ -z "${node:-}" || -z "${exe:-}" ]]; then
-    echo "Internal error: empty node/cli from _entry" >&2
+  IFS='|' read -r bun exe <<<"$entry"
+  if [[ -z "${bun:-}" || -z "${exe:-}" ]]; then
+    echo "Internal error: empty bun/cli from _entry" >&2
     return 1
   fi
 }
@@ -158,7 +150,7 @@ _health_text() {
 }
 
 cmd_start() {
-  local node exe
+  local bun exe
   _load_entry || exit 1
   mkdir -p "$STORAGE"
   if _http_ok; then
@@ -171,7 +163,7 @@ cmd_start() {
     exit 1
   fi
   echo "Starting (background) → $LOG"
-  nohup "$node" "$exe" >>"$LOG" 2>&1 &
+  nohup "$bun" "$exe" >>"$LOG" 2>&1 &
   local npid=$!
   echo "$npid" >"$PIDFILE" || true
   for _ in $(seq 1 20); do
@@ -225,14 +217,14 @@ cmd_rebuild() {
     echo "Set CURSOR_API_PROXY_ROOT to your cursor-api-proxy checkout (directory containing dist/cli.js)." >&2
     exit 1
   fi
-  if ! command -v npm >/dev/null 2>&1; then
-    echo "npm not found in PATH. Install Node/npm or run with a shell that has npm." >&2
+  if ! command -v bun >/dev/null 2>&1; then
+    echo "bun not found in PATH. Install Bun or run with a shell that has bun." >&2
     exit 1
   fi
   echo "Rebuilding in $ROOT"
   (
     cd "$ROOT"
-    npm run build
+    bun run build
   )
 }
 
@@ -255,7 +247,7 @@ cmd_folder() {
 }
 
 cmd_enable() {
-  local node exe
+  local bun exe
   _load_entry || exit 1
   [[ "$(uname -s)" == "Darwin" ]] || { echo "launchd is macOS-only." >&2; exit 1; }
   mkdir -p "$(dirname "$PLIST")"
@@ -276,7 +268,7 @@ cmd_enable() {
   <key>WorkingDirectory</key><string>${ROOT}</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${HOME}/.asdf/shims:/usr/bin:/bin</string>
+    <key>PATH</key><string>${HOME}/.bun/bin:${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${HOME}/.asdf/shims:/usr/bin:/bin</string>
     <key>CURSOR_API_PROXY_ROOT</key><string>${ROOT}</string>
     <key>CURSOR_BRIDGE_PORT</key><string>${PORT}</string>
     <key>CURSOR_BRIDGE_HOST</key><string>${HOST}</string>${agent_bin:+
@@ -307,10 +299,10 @@ cmd_disable() {
 }
 
 cmd_run() {
-  local node exe
+  local bun exe
   _load_entry || exit 1
   mkdir -p "$STORAGE"
-  exec "$node" "$exe"
+  exec "$bun" "$exe"
 }
 
 cmd_health() {
@@ -318,9 +310,9 @@ cmd_health() {
 }
 
 cmd_requests() {
-  local node exe
+  local bun exe
   _load_entry || exit 1
-  exec "$node" "$exe" requests "$@"
+  exec "$bun" "$exe" requests "$@"
 }
 
 cmd_menu() {

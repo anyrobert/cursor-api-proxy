@@ -1,12 +1,12 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Test streaming from cursor-api-proxy.
  *
  * Prereqs:
- *   1. Start the proxy: npm start (from repo root)
+ *   1. Start the proxy: bun start (from repo root)
  *   2. Cursor CLI installed and logged in (agent login)
  *
- * Run: node examples/test-stream.mjs
+ * Run: bun examples/test-stream.mjs
  */
 
 const BASE_URL = process.env.CURSOR_PROXY_URL || "http://127.0.0.1:8765";

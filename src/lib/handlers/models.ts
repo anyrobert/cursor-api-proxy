@@ -1,4 +1,4 @@
-import * as http from "node:http";
+import type * as http from "node:http";
 
 import type { BridgeConfig } from "../config.js";
 import type { CursorCliModel } from "../cursor-cli.js";
@@ -11,7 +11,7 @@ const MODEL_CACHE_TTL_MS = 5 * 60_000;
 export type ModelCache = { at: number; models: CursorCliModel[] };
 export type ModelCacheRef = {
   current?: ModelCache;
-  inflight?: Promise<CursorCliModel[]>;
+  inflight?: Promise<CursorCliModel[]> | undefined;
 };
 
 export type HandleModelsOpts = {

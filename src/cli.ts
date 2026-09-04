@@ -1,17 +1,16 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-import { loadBridgeConfig } from "./lib/config.js";
-import { loadEnvConfig } from "./lib/env.js";
-import { startBridgeServer, setupGracefulShutdown } from "./lib/server.js";
-import { parseArgs, printHelp } from "./cli/args.js";
 import { handleAccountsList, handleLogout } from "./cli/accounts.js";
+import { parseArgs, printHelp } from "./cli/args.js";
 import { handleLogin } from "./cli/login.js";
 import { handleRequests } from "./cli/requests.js";
 import { handleResetHwid } from "./cli/reset-hwid.js";
+import { loadBridgeConfig } from "./lib/config.js";
+import { loadEnvConfig } from "./lib/env.js";
+import { setupGracefulShutdown, startBridgeServer } from "./lib/server.js";
 
 // Re-export parseArgs so src/cli.test.ts can import it without a separate path
 export { parseArgs } from "./cli/args.js";

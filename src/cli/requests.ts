@@ -22,8 +22,8 @@ export type RequestsOutput = {
 
 export type FormatRequestsOptions = {
   logPath: string;
-  width?: number;
-  color?: boolean;
+  width?: number | undefined;
+  color?: boolean | undefined;
 };
 
 export type HandleRequestsOptions = {
@@ -149,7 +149,7 @@ export async function handleRequests(
 ): Promise<void> {
   const output = opts.output ?? process.stdout;
   const env = opts.env ?? process.env;
-  const color = Boolean(output.isTTY) && env.NO_COLOR === undefined;
+  const color = Boolean(output.isTTY) && env["NO_COLOR"] === undefined;
   const render = async (redraw: boolean): Promise<void> => {
     const requests = await readRecentRequests(opts.logPath, opts.limit);
     const formatted = formatRequests(requests, {

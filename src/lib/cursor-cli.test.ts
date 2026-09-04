@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { parseCursorCliModels } from "./cursor-cli.js";
 
 describe("parseCursorCliModels", () => {
@@ -23,13 +23,15 @@ describe("parseCursorCliModels", () => {
   });
 
   it("deduplicates by id", () => {
-    const output = [
-      "claude-3 - Claude 3",
-      "claude-3 - Claude 3 Sonnet",
-    ].join("\n");
+    const output = ["claude-3 - Claude 3", "claude-3 - Claude 3 Sonnet"].join(
+      "\n",
+    );
     const models = parseCursorCliModels(output);
     expect(models).toHaveLength(1);
-    expect(models[0].id).toBe("claude-3");
+    const model = models[0];
+    expect(model).toBeDefined();
+    if (!model) return;
+    expect(model.id).toBe("claude-3");
   });
 
   it("handles Windows line endings", () => {
@@ -56,7 +58,9 @@ describe("parseCursorCliModels", () => {
   it("handles model ids with slashes and colons", () => {
     const output = "org/models/claude-3:latest - Claude 3";
     const models = parseCursorCliModels(output);
-    expect(models).toEqual([{ id: "org/models/claude-3:latest", name: "Claude 3" }]);
+    expect(models).toEqual([
+      { id: "org/models/claude-3:latest", name: "Claude 3" },
+    ]);
   });
 
   it("strips ANSI color codes from FORCE_COLOR output", () => {

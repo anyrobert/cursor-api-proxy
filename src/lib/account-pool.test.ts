@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AccountPool,
-  initAccountPool,
   getNextAccountConfigDir,
-  reportRequestStart,
-  reportRequestEnd,
+  initAccountPool,
   reportRateLimit,
+  reportRequestEnd,
+  reportRequestStart,
 } from "./account-pool.js";
 
 describe("AccountPool", () => {
@@ -176,9 +176,12 @@ describe("AccountPool edge cases", () => {
     pool.reportRequestError("/dir1", 50);
     pool.reportRequestEnd("/dir1");
     const stats = pool.getStats();
-    expect(stats[0].totalSuccess).toBe(1);
-    expect(stats[0].totalErrors).toBe(1);
-    expect(stats[0].totalLatencyMs).toBe(150);
+    const account = stats[0];
+    expect(account).toBeDefined();
+    if (!account) return;
+    expect(account.totalSuccess).toBe(1);
+    expect(account.totalErrors).toBe(1);
+    expect(account.totalLatencyMs).toBe(150);
   });
 });
 

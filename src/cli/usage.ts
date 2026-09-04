@@ -1,10 +1,10 @@
 import * as https from "node:https";
 
 export {
-  TOKEN_FILE,
   readCachedToken,
-  writeCachedToken,
   readKeychainToken,
+  TOKEN_FILE,
+  writeCachedToken,
 } from "../lib/token-cache.js";
 
 // ---------------------------------------------------------------------------
@@ -15,7 +15,8 @@ export function decodeJwtPayload(token: string): Record<string, unknown> {
   try {
     const parts = token.split(".");
     if (parts.length < 2) return {};
-    const padded = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = parts[1]?.replace(/-/g, "+").replace(/_/g, "/");
+    if (!padded) return {};
     return JSON.parse(Buffer.from(padded, "base64").toString("utf-8"));
   } catch {
     return {};
@@ -25,14 +26,12 @@ export function decodeJwtPayload(token: string): Record<string, unknown> {
 /** Extract the auth0 user sub from a Cursor access token (e.g. "auth0|user_01KK…"). */
 export function tokenSub(token: string): string | undefined {
   const p = decodeJwtPayload(token);
-  return typeof p.sub === "string" ? p.sub : undefined;
+  return typeof p["sub"] === "string" ? p["sub"] : undefined;
 }
 
 // ---------------------------------------------------------------------------
 // Cursor API
 // ---------------------------------------------------------------------------
-
-const API_BASE = "https://api2.cursor.sh";
 
 function apiGet(path: string, token: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -131,14 +130,14 @@ export async function fetchStripeProfile(
     > | null;
     if (!raw || typeof raw !== "object") return null;
     return {
-      membershipType: String(raw.membershipType ?? ""),
-      subscriptionStatus: String(raw.subscriptionStatus ?? ""),
+      membershipType: String(raw["membershipType"] ?? ""),
+      subscriptionStatus: String(raw["subscriptionStatus"] ?? ""),
       daysRemainingOnTrial:
-        typeof raw.daysRemainingOnTrial === "number"
-          ? raw.daysRemainingOnTrial
+        typeof raw["daysRemainingOnTrial"] === "number"
+          ? raw["daysRemainingOnTrial"]
           : null,
-      isTeamMember: Boolean(raw.isTeamMember),
-      isYearlyPlan: Boolean(raw.isYearlyPlan),
+      isTeamMember: Boolean(raw["isTeamMember"]),
+      isYearlyPlan: Boolean(raw["isYearlyPlan"]),
     };
   } catch {
     return null;

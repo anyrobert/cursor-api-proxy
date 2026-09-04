@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the Swift widget, installs it to ~/.local/bin, and registers a
 # LaunchAgent so it auto-starts at login. Completely independent of the
-# Node proxy — failure here cannot affect the proxy process.
+# Bun proxy — failure here cannot affect the proxy process.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

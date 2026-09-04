@@ -24,7 +24,7 @@ export function createStreamParser(
       if (obj.type === "assistant" && obj.message?.content) {
         const text = obj.message.content
           .filter((p) => p.type === "text" && p.text)
-          .map((p) => p.text!)
+          .map((p) => p.text ?? "")
           .join("");
         if (!text) return;
 

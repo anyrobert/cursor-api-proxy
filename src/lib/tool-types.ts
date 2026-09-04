@@ -1,34 +1,62 @@
 export type ClientToolDefinition = {
   name: string;
-  description?: string;
+  description?: string | undefined;
   inputSchema: Record<string, unknown>;
+  responseType?: "function" | "custom" | undefined;
+  responseName?: string | undefined;
+  responseNamespace?: string | undefined;
 };
 
 export type ClientToolOutput = {
   callId: string;
   output: string;
-  isError?: boolean;
+  isError?: boolean | undefined;
 };
 
 export type PendingClientToolCall = {
   callId: string;
   itemId: string;
   name: string;
+  namespace?: string | undefined;
+  type?: "function" | "custom" | undefined;
   arguments: string;
 };
 
 export type ResolvedToolChoice = {
   tools: ClientToolDefinition[];
-  instruction?: string;
+  instruction?: string | undefined;
   required: boolean;
-  maxParallelToolCalls?: number;
+  maxParallelToolCalls?: number | undefined;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
+export type OpenAiToolParsingOptions = {
+  ignoreProviderExecutedTools?: boolean;
+};
+
+type JsonRecord = Record<string, unknown> & {
+  type?: unknown;
+  function?: unknown;
+  name?: unknown;
+  description?: unknown;
+  parameters?: unknown;
+  tools?: unknown;
+  input_schema?: unknown;
+  namespace?: unknown;
+  role?: unknown;
+  tool_call_id?: unknown;
+  content?: unknown;
+  call_id?: unknown;
+  output?: unknown;
+  tool_use_id?: unknown;
+  is_error?: unknown;
+  text?: unknown;
+};
+
+function asRecord(value: unknown): JsonRecord | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
-  return value as Record<string, unknown>;
+  return value as JsonRecord;
 }
 
 function schemaOrDefault(value: unknown): Record<string, unknown> {
@@ -38,6 +66,20 @@ function schemaOrDefault(value: unknown): Record<string, unknown> {
       properties: {},
     }
   );
+}
+
+function customToolSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      input: {
+        type: "string",
+        description: "Raw input for the custom tool.",
+      },
+    },
+    required: ["input"],
+    additionalProperties: false,
+  };
 }
 
 function pushUnique(
@@ -55,13 +97,76 @@ function pushUnique(
   out.push(definition);
 }
 
+function pushResponsesTool(
+  out: ClientToolDefinition[],
+  seen: Set<string>,
+  tool: JsonRecord,
+  namespace?: string,
+): void {
+  if (tool.type === "function") {
+    const wrapped = asRecord(tool.function);
+    const fn = wrapped ?? tool;
+    if (typeof fn.name !== "string") {
+      throw new Error(
+        namespace
+          ? `Function tool in namespace ${namespace} is missing name`
+          : "Function tool is missing name",
+      );
+    }
+    pushUnique(out, seen, {
+      name: namespace ? `${namespace}__${fn.name}` : fn.name,
+      responseType: "function",
+      responseName: fn.name,
+      ...(namespace ? { responseNamespace: namespace } : {}),
+      ...(typeof fn.description === "string"
+        ? { description: fn.description }
+        : {}),
+      inputSchema: schemaOrDefault(fn.parameters),
+    });
+    return;
+  }
+
+  if (tool.type === "custom") {
+    if (typeof tool.name !== "string") {
+      throw new Error(
+        namespace
+          ? `Custom tool in namespace ${namespace} is missing name`
+          : "Custom tool is missing name",
+      );
+    }
+    pushUnique(out, seen, {
+      name: namespace ? `${namespace}__${tool.name}` : tool.name,
+      responseType: "custom",
+      responseName: tool.name,
+      ...(namespace ? { responseNamespace: namespace } : {}),
+      ...(typeof tool.description === "string"
+        ? { description: tool.description }
+        : {}),
+      inputSchema: customToolSchema(),
+    });
+    return;
+  }
+
+  throw new Error(
+    `${namespace ? `Unsupported tool type in namespace ${namespace}` : "Unsupported tool type"}: ${
+      typeof tool.type === "string" ? tool.type : "unknown"
+    }`,
+  );
+}
+
 /**
  * Parse OpenAI Chat Completions (`function` wrapper), Responses (flat
- * function), and legacy Chat `functions` definitions.
+ * function/custom and namespace), and legacy Chat `functions` definitions.
+ *
+ * Responses namespaces are flattened to MCP-safe names for Cursor and their
+ * original namespace/name pair is retained for the response adapter.
+ * Responses custom tools are represented to Cursor as functions accepting one
+ * string property named `input`; the response adapter restores custom calls.
  */
 export function parseOpenAiFunctionTools(
   tools?: readonly unknown[],
   functions?: readonly unknown[],
+  options?: OpenAiToolParsingOptions,
 ): ClientToolDefinition[] {
   const out: ClientToolDefinition[] = [];
   const seen = new Set<string>();
@@ -69,24 +174,33 @@ export function parseOpenAiFunctionTools(
   for (const value of tools ?? []) {
     const tool = asRecord(value);
     if (!tool) throw new Error("Invalid tool definition");
-    if (tool.type !== "function") {
-      throw new Error(
-        `Unsupported tool type: ${
-          typeof tool.type === "string" ? tool.type : "unknown"
-        }`,
-      );
+
+    if (
+      options?.ignoreProviderExecutedTools &&
+      (tool.type === "tool_search" || tool.type === "web_search")
+    ) {
+      // Provider-executed Responses tools cannot be round-tripped through the
+      // client-owned MCP bridge. Ignore them here; Cursor may use equivalent
+      // native capabilities independently.
+      continue;
     }
-    const wrapped = asRecord(tool.function);
-    const fn = wrapped ?? tool;
-    if (typeof fn.name !== "string") {
-      throw new Error("Function tool is missing name");
+
+    if (tool.type === "namespace") {
+      if (typeof tool.name !== "string" || !tool.name.trim()) {
+        throw new Error("Namespace tool is missing name");
+      }
+      if (!Array.isArray(tool.tools)) {
+        throw new Error(`Namespace ${tool.name} is missing tools`);
+      }
+      for (const nestedValue of tool.tools) {
+        const nested = asRecord(nestedValue);
+        if (!nested) throw new Error(`Invalid tool in namespace ${tool.name}`);
+        pushResponsesTool(out, seen, nested, tool.name);
+      }
+      continue;
     }
-    pushUnique(out, seen, {
-      name: fn.name,
-      description:
-        typeof fn.description === "string" ? fn.description : undefined,
-      inputSchema: schemaOrDefault(fn.parameters),
-    });
+
+    pushResponsesTool(out, seen, tool);
   }
 
   for (const value of functions ?? []) {
@@ -96,8 +210,11 @@ export function parseOpenAiFunctionTools(
     }
     pushUnique(out, seen, {
       name: fn.name,
-      description:
-        typeof fn.description === "string" ? fn.description : undefined,
+      responseType: "function",
+      responseName: fn.name,
+      ...(typeof fn.description === "string"
+        ? { description: fn.description }
+        : {}),
       inputSchema: schemaOrDefault(fn.parameters),
     });
   }
@@ -117,8 +234,11 @@ export function parseAnthropicFunctionTools(
     }
     pushUnique(out, seen, {
       name: tool.name,
-      description:
-        typeof tool.description === "string" ? tool.description : undefined,
+      responseType: "function",
+      responseName: tool.name,
+      ...(typeof tool.description === "string"
+        ? { description: tool.description }
+        : {}),
       inputSchema: schemaOrDefault(tool.input_schema),
     });
   }
@@ -128,16 +248,30 @@ export function parseAnthropicFunctionTools(
 function namedChoice(choice: unknown): string | undefined {
   const rec = asRecord(choice);
   if (!rec) return undefined;
-  if (typeof rec.name === "string") return rec.name;
   const fn = asRecord(rec.function);
-  if (fn && typeof fn.name === "string") return fn.name;
-  return undefined;
+  const name =
+    typeof rec.name === "string"
+      ? rec.name
+      : fn && typeof fn.name === "string"
+        ? fn.name
+        : undefined;
+  if (!name) return undefined;
+  const namespace =
+    typeof rec.namespace === "string"
+      ? rec.namespace
+      : fn && typeof fn.namespace === "string"
+        ? fn.namespace
+        : undefined;
+  return namespace ? `${namespace}__${name}` : name;
 }
 
 export function resolveToolChoice(
   tools: readonly ClientToolDefinition[],
   choice: unknown,
-  opts: { parallelToolCalls?: boolean; anthropic?: boolean } = {},
+  opts: {
+    parallelToolCalls?: boolean | undefined;
+    anthropic?: boolean | undefined;
+  } = {},
 ): ResolvedToolChoice {
   if (choice === "none" || asRecord(choice)?.type === "none") {
     return { tools: [], required: false };
@@ -202,7 +336,7 @@ export function chatToolOutputs(
   const outputs: ClientToolOutput[] = [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = asRecord(messages[i]);
-    if (!message || message.role !== "tool") break;
+    if (message?.role !== "tool") break;
     if (typeof message.tool_call_id !== "string" || !message.tool_call_id) {
       throw new Error("Tool message is missing tool_call_id");
     }
@@ -219,9 +353,15 @@ export function responsesToolOutputs(input: unknown): ClientToolOutput[] {
   const outputs: ClientToolOutput[] = [];
   for (const value of input) {
     const item = asRecord(value);
-    if (!item || item.type !== "function_call_output") continue;
+    if (
+      !item ||
+      (item.type !== "function_call_output" &&
+        item.type !== "custom_tool_call_output")
+    ) {
+      continue;
+    }
     if (typeof item.call_id !== "string" || !item.call_id) {
-      throw new Error("function_call_output is missing call_id");
+      throw new Error(`${item.type} is missing call_id`);
     }
     outputs.push({
       callId: item.call_id,
@@ -235,11 +375,11 @@ export function anthropicToolOutputs(
   messages: readonly unknown[],
 ): ClientToolOutput[] {
   const last = asRecord(messages[messages.length - 1]);
-  if (!last || last.role !== "user" || !Array.isArray(last.content)) return [];
+  if (last?.role !== "user" || !Array.isArray(last.content)) return [];
   const outputs: ClientToolOutput[] = [];
   for (const value of last.content) {
     const block = asRecord(value);
-    if (!block || block.type !== "tool_result") continue;
+    if (block?.type !== "tool_result") continue;
     if (typeof block.tool_use_id !== "string" || !block.tool_use_id) {
       throw new Error("tool_result is missing tool_use_id");
     }

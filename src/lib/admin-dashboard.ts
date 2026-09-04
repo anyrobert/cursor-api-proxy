@@ -1,6 +1,6 @@
 import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
-import * as http from "node:http";
+import type * as http from "node:http";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,7 +49,10 @@ function safeJoin(root: string, rel: string): string | null {
 
 function serveFile(res: http.ServerResponse, filePath: string): void {
   fs.stat(filePath, (err, stat) => {
-    if (err || !stat.isFile()) return notFound(res);
+    if (err || !stat.isFile()) {
+      notFound(res);
+      return;
+    }
     const ext = path.extname(filePath).toLowerCase();
     const mime = MIME[ext] ?? "application/octet-stream";
     res.writeHead(200, {
@@ -118,9 +121,14 @@ function getStatus(
     }
   }
 
-  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
-  const plistPath = path.join(home, "Library/LaunchAgents", `${PLIST_LABEL}.plist`);
-  const launchdLoaded = process.platform === "darwin" ? launchdLoadedSync() : false;
+  const home = process.env["HOME"] ?? process.env["USERPROFILE"] ?? "";
+  const plistPath = path.join(
+    home,
+    "Library/LaunchAgents",
+    `${PLIST_LABEL}.plist`,
+  );
+  const launchdLoaded =
+    process.platform === "darwin" ? launchdLoadedSync() : false;
 
   const env = process.env;
   cb({
@@ -139,7 +147,9 @@ function getStatus(
     sessionsLogPath: config.sessionsLogPath,
     serviceLog,
     pidFile,
-    apiKeyConfigured: Boolean(env.CURSOR_API_KEY ?? env.CURSOR_AUTH_TOKEN),
+    apiKeyConfigured: Boolean(
+      env["CURSOR_API_KEY"] ?? env["CURSOR_AUTH_TOKEN"],
+    ),
     bridgeApiKeyRequired: Boolean(config.requiredKey),
     node: process.version,
     platform: `${process.platform} ${process.arch}`,
@@ -177,16 +187,21 @@ function sanitizedBridgeConfig(config: BridgeConfig): Record<string, unknown> {
 function runControl(
   action: string,
   config: BridgeConfig,
-  cb: (err: Error | null, result?: { ok: boolean; action: string; scheduled: boolean }) => void,
+  cb: (
+    err: Error | null,
+    result?: { ok: boolean; action: string; scheduled: boolean },
+  ) => void,
 ): void {
   const allowed = ["start", "stop", "restart", "enable", "disable"];
   if (!allowed.includes(action)) {
-    return cb(new Error(`invalid action: ${action}`));
+    cb(new Error(`invalid action: ${action}`));
+    return;
   }
-  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  const home = process.env["HOME"] ?? process.env["USERPROFILE"] ?? "";
   const cliPath = path.join(home, ".local", "bin", "cursor-api-proxy");
   if (!fs.existsSync(cliPath)) {
-    return cb(new Error(`CLI not found at ${cliPath} (see docs/WIKI.md)`));
+    cb(new Error(`CLI not found at ${cliPath} (see docs/WIKI.md)`));
+    return;
   }
   const { serviceLog } = storagePaths(config);
   try {
@@ -224,7 +239,8 @@ export type AdminDashboardOpts = {
 export function adminDashboardMatches(req: http.IncomingMessage): boolean {
   const url = req.url ?? "";
   const pathname = url.split("?")[0] ?? "";
-  if (req.method === "GET" && (pathname === "/" || pathname === "/wiki")) return true;
+  if (req.method === "GET" && (pathname === "/" || pathname === "/wiki"))
+    return true;
   if (req.method === "GET" && pathname.startsWith("/static/")) return true;
   if (req.method === "GET" && pathname.startsWith("/api/")) return true;
   if (req.method === "POST" && pathname === "/api/control") return true;
@@ -246,30 +262,42 @@ export function handleAdminDashboard(
   const q = parseQuery(url);
 
   if (req.method === "GET" && pathname === "/") {
-    return serveFile(res, path.join(publicDir, "index.html"));
+    serveFile(res, path.join(publicDir, "index.html"));
+    return;
   }
   if (req.method === "GET" && pathname === "/wiki") {
-    return serveFile(res, path.join(publicDir, "wiki.html"));
+    serveFile(res, path.join(publicDir, "wiki.html"));
+    return;
   }
   if (req.method === "GET" && pathname.startsWith("/static/")) {
     const rel = pathname.slice("/static/".length);
     const target = safeJoin(publicDir, rel);
-    if (!target) return notFound(res);
-    return serveFile(res, target);
+    if (!target) {
+      notFound(res);
+      return;
+    }
+    serveFile(res, target);
+    return;
   }
 
   if (req.method === "GET" && pathname === "/api/status") {
-    return getStatus(config, version, (s) => json(res, 200, s));
+    getStatus(config, version, (s) => json(res, 200, s));
+    return;
   }
   if (req.method === "GET" && pathname === "/api/config") {
-    return json(res, 200, sanitizedBridgeConfig(config));
+    json(res, 200, sanitizedBridgeConfig(config));
+    return;
   }
   if (req.method === "GET" && pathname === "/api/log") {
-    const n = Math.min(5000, Math.max(1, Number(q.lines) || 100));
-    return readLastLines(config.sessionsLogPath, n, (err, lines) => {
-      if (err) return json(res, 500, { error: String(err) });
+    const n = Math.min(5000, Math.max(1, Number(q["lines"]) || 100));
+    readLastLines(config.sessionsLogPath, n, (err, lines) => {
+      if (err) {
+        json(res, 500, { error: String(err) });
+        return;
+      }
       json(res, 200, { path: config.sessionsLogPath, lines });
     });
+    return;
   }
   if (req.method === "POST" && pathname === "/api/log/clear") {
     // Archive+truncate the sessions log.
@@ -294,7 +322,8 @@ export function handleAdminDashboard(
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return json(res, 500, { error: msg });
+      json(res, 500, { error: msg });
+      return;
     }
 
     // Ensure dashboard polling continues to work immediately.
@@ -302,21 +331,30 @@ export function handleAdminDashboard(
       fs.writeFileSync(logPath, "", "utf8");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return json(res, 500, { error: msg });
+      json(res, 500, { error: msg });
+      return;
     }
 
-    return json(res, 200, { archivePath });
+    json(res, 200, { archivePath });
+    return;
   }
   if (req.method === "GET" && pathname === "/api/stats") {
-    const hours = Math.min(168, Math.max(1, Number(q.hours) || 24));
-    return readLastLines(config.sessionsLogPath, 20_000, (err, lines) => {
-      if (err) return json(res, 500, { error: String(err) });
+    const hours = Math.min(168, Math.max(1, Number(q["hours"]) || 24));
+    readLastLines(config.sessionsLogPath, 20_000, (err, lines) => {
+      if (err) {
+        json(res, 500, { error: String(err) });
+        return;
+      }
       json(res, 200, computeSessionStats(lines, hours));
     });
+    return;
   }
   if (req.method === "GET" && pathname === "/api/wiki") {
     fs.readFile(wikiFile, "utf8", (err, data) => {
-      if (err) return json(res, 500, { error: "wiki not readable" });
+      if (err) {
+        json(res, 500, { error: "wiki not readable" });
+        return;
+      }
       res.writeHead(200, {
         "content-type": "text/markdown; charset=utf-8",
         "cache-control": "no-cache",
@@ -333,10 +371,14 @@ export function handleAdminDashboard(
       try {
         body = JSON.parse(raw || "{}") as { action?: string };
       } catch {
-        return json(res, 400, { error: "invalid json" });
+        json(res, 400, { error: "invalid json" });
+        return;
       }
       runControl(String(body.action ?? ""), config, (err, result) => {
-        if (err) return json(res, 400, { error: err.message });
+        if (err) {
+          json(res, 400, { error: err.message });
+          return;
+        }
         json(res, 200, result);
       });
     });

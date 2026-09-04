@@ -1,67 +1,67 @@
 import { randomUUID } from "node:crypto";
-import * as http from "node:http";
-
-import type { AnthropicMessagesRequest } from "../anthropic.js";
-import { buildPromptFromAnthropicMessages } from "../anthropic.js";
+import type * as http from "node:http";
 import {
-  buildBridgeContextPreamble,
-  BRIDGE_AGENT_PROMPT_SEPARATOR,
-} from "../bridge-context-preamble.js";
-import { resolveClientLaunchInfo } from "../client-process.js";
+  getAccountStats,
+  getNextAccountConfigDir,
+  reportRateLimit,
+  reportRequestEnd,
+  reportRequestError,
+  reportRequestStart,
+  reportRequestSuccess,
+} from "../account-pool.js";
+import type { ToolTurnEvent, ToolTurnResult } from "../acp-tool-session.js";
 import { buildAgentFixedArgs } from "../agent-cmd-args.js";
 import {
   runAgentStream,
   runAgentSync,
   startAgentToolSession,
 } from "../agent-runner.js";
-import type { ToolTurnEvent, ToolTurnResult } from "../acp-tool-session.js";
+import type { AnthropicMessagesRequest } from "../anthropic.js";
+import { buildPromptFromAnthropicMessages } from "../anthropic.js";
+import {
+  BRIDGE_AGENT_PROMPT_SEPARATOR,
+  buildBridgeContextPreamble,
+} from "../bridge-context-preamble.js";
 import { createStreamParser } from "../cli-stream-parser.js";
+import { abortOnClientDisconnect } from "../client-disconnect.js";
 import type { BridgeConfig } from "../config.js";
 import type { CursorExecutionMode } from "../execution-mode.js";
-import type { ModelCacheRef } from "./models.js";
-import { getCachedCursorModels } from "./models.js";
 import { json, writeSseHeaders } from "../http.js";
 import { resolveModelForExecution } from "../model-map.js";
 import { normalizeModelId, toolsToSystemText } from "../openai.js";
 import {
-  logAgentError,
   logAccountAssigned,
   logAccountStats,
+  logAgentError,
   logModelResolution,
   logTrafficRequest,
   logTrafficResponse,
   type TrafficMessage,
 } from "../request-log.js";
-import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
-import { resolveWorkspace } from "../workspace.js";
+import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { sanitizeMessages, sanitizeSystem } from "../sanitize.js";
 import {
-  getNextAccountConfigDir,
-  reportRequestStart,
-  reportRequestEnd,
-  reportRateLimit,
-  reportRequestSuccess,
-  reportRequestError,
-  getAccountStats,
-} from "../account-pool.js";
+  ToolSessionError,
+  type ToolSessionRecord,
+  type ToolSessionRegistry,
+  toolSessionOwnerKey,
+} from "../tool-session-registry.js";
+import {
+  anthropicToolOutputs,
+  type ClientToolDefinition,
+  type ClientToolOutput,
+  type PendingClientToolCall,
+  parseAnthropicFunctionTools,
+  resolveToolChoice,
+} from "../tool-types.js";
 import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
 } from "../win-cmdline-limit.js";
-import { abortOnClientDisconnect } from "../client-disconnect.js";
-import {
-  anthropicToolOutputs,
-  parseAnthropicFunctionTools,
-  resolveToolChoice,
-  type PendingClientToolCall,
-} from "../tool-types.js";
-import {
-  ToolSessionError,
-  toolSessionOwnerKey,
-  type ToolSessionRecord,
-  type ToolSessionRegistry,
-} from "../tool-session-registry.js";
+import { resolveWorkspace } from "../workspace.js";
+import type { ModelCacheRef } from "./models.js";
+import { getCachedCursorModels } from "./models.js";
 
 function isRateLimited(stderr: string): boolean {
   return /\b429\b|rate.?limit|too many requests/i.test(stderr);
@@ -107,8 +107,7 @@ function structuredAnthropicResponse(opts: {
     role: "assistant",
     model: opts.model,
     content,
-    stop_reason:
-      opts.result.status === "tool_calls" ? "tool_use" : "end_turn",
+    stop_reason: opts.result.status === "tool_calls" ? "tool_use" : "end_turn",
     stop_sequence: null,
     usage: {
       input_tokens: Math.max(1, Math.round(opts.promptLength / 4)),
@@ -122,7 +121,9 @@ function writeAnthropicEvent(
   event: string,
   data: Record<string, unknown>,
 ): void {
-  res.write(`event: ${event}\ndata: ${JSON.stringify({ type: event, ...data })}\n\n`);
+  res.write(
+    `event: ${event}\ndata: ${JSON.stringify({ type: event, ...data })}\n\n`,
+  );
 }
 
 async function writeStructuredAnthropicTurn(opts: {
@@ -132,9 +133,7 @@ async function writeStructuredAnthropicTurn(opts: {
   id: string;
   model: string | undefined;
   promptLength: number;
-  run: (
-    listener?: (event: ToolTurnEvent) => void,
-  ) => Promise<ToolTurnResult>;
+  run: (listener?: (event: ToolTurnEvent) => void) => Promise<ToolTurnResult>;
 }): Promise<ToolTurnResult> {
   if (!opts.stream) {
     const result = await opts.run();
@@ -219,8 +218,7 @@ async function writeStructuredAnthropicTurn(opts: {
   }
   writeAnthropicEvent(opts.res, "message_delta", {
     delta: {
-      stop_reason:
-        result.status === "tool_calls" ? "tool_use" : "end_turn",
+      stop_reason: result.status === "tool_calls" ? "tool_use" : "end_turn",
       stop_sequence: null,
     },
     usage: {
@@ -243,11 +241,11 @@ export async function handleAnthropicMessages(
 ): Promise<void> {
   const { config, lastRequestedModelRef, modelCacheRef } = ctx;
   const body = JSON.parse(rawBody || "{}") as AnthropicMessagesRequest;
-  let selectedTools;
+  let selectedTools: ClientToolDefinition[] = [];
   let toolInstruction: string | undefined;
   let requireToolCall = false;
   let maxParallelToolCalls: number | undefined;
-  let submittedToolOutputs;
+  let submittedToolOutputs: ClientToolOutput[] = [];
   try {
     const parsedTools = parseAnthropicFunctionTools(body.tools);
     const choice = resolveToolChoice(parsedTools, body.tool_choice, {
@@ -303,9 +301,7 @@ export async function handleAnthropicMessages(
     decision.requestedWasDefault && config.defaultModel !== "default"
       ? config.defaultModel
       : model;
-  const modelCatalogName = models.find(
-    (item) => item.id === cursorModel,
-  )?.name;
+  const modelCatalogName = models.find((item) => item.id === cursorModel)?.name;
   const msgId = `msg_${randomUUID().replace(/-/g, "")}`;
 
   const cleanSystem = sanitizeSystem(body.system);
@@ -325,7 +321,7 @@ export async function handleAnthropicMessages(
   const cleanSystemText =
     typeof cleanSystem === "string"
       ? cleanSystem
-      : (cleanSystem ?? [])
+      : (Array.isArray(cleanSystem) ? cleanSystem : [])
           .filter(
             (part: { type?: string; text?: string }) => part?.type === "text",
           )
@@ -450,11 +446,7 @@ export async function handleAnthropicMessages(
 
   let mode: CursorExecutionMode;
   try {
-    mode = resolveRequestMode(
-      config,
-      req.headers["x-cursor-mode"],
-      body.mode,
-    );
+    mode = resolveRequestMode(config, req.headers["x-cursor-mode"], body.mode);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Invalid mode";
     json(res, 400, {
@@ -527,8 +519,7 @@ export async function handleAnthropicMessages(
   // When the prompt is delivered via stdin (or ACP), keep it OUT of argv,
   // otherwise a long prompt still blows past the kernel ARG_MAX (spawn E2BIG
   // on Linux). fit.args appends the full prompt for the argv path only.
-  const cmdArgs =
-    config.promptViaStdin || config.useAcp ? fixedArgs : fit.args;
+  const cmdArgs = config.promptViaStdin || config.useAcp ? fixedArgs : fit.args;
 
   const truncatedHeaders = fit.truncated
     ? { "X-Cursor-Proxy-Prompt-Truncated": "true" }
@@ -553,20 +544,21 @@ export async function handleAnthropicMessages(
         cmdArgs,
         prompt: agentPrompt,
         tools: selectedTools,
-        tempDir,
-        configDir,
+        ...(tempDir ? { tempDir } : {}),
+        ...(configDir ? { configDir } : {}),
         signal: abortController.signal,
-        modelDisplayName: modelCatalogName,
-        requireToolCall,
-        maxParallelToolCalls,
+        ...(modelCatalogName ? { modelDisplayName: modelCatalogName } : {}),
+        ...(requireToolCall !== undefined ? { requireToolCall } : {}),
+        ...(maxParallelToolCalls !== undefined ? { maxParallelToolCalls } : {}),
       });
-      record = ctx.toolSessions.createRecord({
+      const sessionRecord = ctx.toolSessions.createRecord({
         api: "anthropic",
         ownerKey,
         model: displayModel ?? cursorModel,
         configDir,
         session,
       });
+      record = sessionRecord;
       abortController.signal.addEventListener(
         "abort",
         () => void session.close(),
@@ -579,7 +571,7 @@ export async function handleAnthropicMessages(
         id: msgId,
         model: displayModel,
         promptLength: agentPrompt.length,
-        run: (listener) => ctx.toolSessions.collect(record!, listener),
+        run: (listener) => ctx.toolSessions.collect(sessionRecord, listener),
       });
       reportRequestSuccess(configDir, Date.now() - startedAt);
       if (
@@ -736,7 +728,8 @@ export async function handleAnthropicMessages(
               type: "error",
               error: {
                 type: "api_error",
-                message: "The Cursor agent stream failed. See server logs for details.",
+                message:
+                  "The Cursor agent stream failed. See server logs for details.",
               },
             });
           }
@@ -815,10 +808,7 @@ export async function handleAnthropicMessages(
         if (!abortController.signal.aborted) {
           reportRequestError(configDir, Date.now() - streamStart);
         }
-        console.error(
-          `[${new Date().toISOString()}] Agent stream error:`,
-          err,
-        );
+        console.error(`[${new Date().toISOString()}] Agent stream error:`, err);
         res.end();
       });
     return;

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { run, runStreaming, killAllChildProcesses } from "./process.js";
+import { describe, expect, it, vi } from "vitest";
+import { killAllChildProcesses, run, runStreaming } from "./process.js";
 
 const node = process.execPath;
 
@@ -95,8 +95,13 @@ describe("runStreaming", () => {
       { onLine },
     );
     expect(lines).toHaveLength(2);
-    expect(JSON.parse(lines[0]).type).toBe("assistant");
-    expect(JSON.parse(lines[1]).type).toBe("result");
+    const firstLine = lines[0];
+    const secondLine = lines[1];
+    expect(firstLine).toBeDefined();
+    expect(secondLine).toBeDefined();
+    if (!firstLine || !secondLine) return;
+    expect(JSON.parse(firstLine).type).toBe("assistant");
+    expect(JSON.parse(secondLine).type).toBe("result");
   });
 
   it("flushes the final buffered line even without a trailing newline", async () => {

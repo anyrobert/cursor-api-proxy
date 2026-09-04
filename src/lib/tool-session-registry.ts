@@ -36,7 +36,7 @@ export type ToolSessionRecord = {
   api: ToolApi;
   ownerKey: string;
   model: string;
-  configDir?: string;
+  configDir?: string | undefined;
   session: AcpToolSession;
   mutex: Mutex;
   responseIds: Set<string>;
@@ -45,12 +45,13 @@ export type ToolSessionRecord = {
 };
 
 export class ToolSessionError extends Error {
-  constructor(
-    message: string,
-    readonly status = 409,
-    readonly code = "tool_session_error",
-  ) {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(message: string, status = 409, code = "tool_session_error") {
     super(message);
+    this.status = status;
+    this.code = code;
   }
 }
 
@@ -73,7 +74,7 @@ export class ToolSessionRegistry {
     api: ToolApi;
     ownerKey: string;
     model: string;
-    configDir?: string;
+    configDir?: string | undefined;
     session: AcpToolSession;
   }): ToolSessionRecord {
     this.#sweep();
@@ -96,7 +97,7 @@ export class ToolSessionRegistry {
       api: opts.api,
       ownerKey: opts.ownerKey,
       model: opts.model,
-      configDir: opts.configDir,
+      ...(opts.configDir !== undefined ? { configDir: opts.configDir } : {}),
       session: opts.session,
       mutex: new Mutex(),
       responseIds: new Set(),
@@ -134,9 +135,7 @@ export class ToolSessionRegistry {
   ): ToolSessionRecord | undefined {
     this.#sweep();
     const record = this.#byResponseId.get(responseId);
-    return record &&
-      record.ownerKey === ownerKey &&
-      !record.session.closed
+    return record && record.ownerKey === ownerKey && !record.session.closed
       ? record
       : undefined;
   }
