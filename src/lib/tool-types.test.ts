@@ -56,6 +56,34 @@ describe("tool normalization", () => {
     ).toEqual({ type: "object", properties: {} });
   });
 
+  it("flattens Responses namespace tools and preserves response identity", () => {
+    expect(
+      parseOpenAiFunctionTools([
+        {
+          type: "namespace",
+          name: "skills",
+          description: "Skill tools",
+          tools: [
+            {
+              type: "function",
+              name: "read",
+              description: "Read a skill",
+              parameters: { type: "object", properties: { path: {} } },
+            },
+          ],
+        },
+      ]),
+    ).toEqual([
+      {
+        name: "skills__read",
+        responseName: "read",
+        responseNamespace: "skills",
+        description: "Read a skill",
+        inputSchema: { type: "object", properties: { path: {} } },
+      },
+    ]);
+  });
+
   it("rejects unsupported and duplicate tools", () => {
     expect(() =>
       parseOpenAiFunctionTools([{ type: "web_search" }]),
@@ -68,7 +96,7 @@ describe("tool normalization", () => {
     ).toThrow(/Duplicate/);
   });
 
-  it("implements none, required, named, and no-parallel choices", () => {
+  it("implements none, required, named, namespaced, and no-parallel choices", () => {
     const tools = [
       {
         name: "one",
@@ -87,6 +115,23 @@ describe("tool normalization", () => {
         function: { name: "two" },
       }).tools.map((tool) => tool.name),
     ).toEqual(["two"]);
+
+    const namespaced = [
+      {
+        name: "skills__read",
+        responseName: "read",
+        responseNamespace: "skills",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ];
+    expect(
+      resolveToolChoice(namespaced, {
+        type: "function",
+        name: "read",
+        namespace: "skills",
+      }).tools.map((tool) => tool.name),
+    ).toEqual(["skills__read"]);
+
     expect(
       resolveToolChoice(tools, "auto", { parallelToolCalls: false })
         .instruction,
