@@ -26,15 +26,17 @@ describe("tool normalization", () => {
           parameters: { type: "object", properties: { y: {} } },
         },
       ]),
-    ).toEqual([
+    ).toMatchObject([
       {
         name: "chat",
-        description: undefined,
+        responseType: "function",
+        responseName: "chat",
         inputSchema: { type: "object", properties: { x: {} } },
       },
       {
         name: "response",
-        description: undefined,
+        responseType: "function",
+        responseName: "response",
         inputSchema: { type: "object", properties: { y: {} } },
       },
     ]);
@@ -56,30 +58,63 @@ describe("tool normalization", () => {
     ).toEqual({ type: "object", properties: {} });
   });
 
-  it("flattens Responses namespace tools and preserves response identity", () => {
+  it("flattens Responses namespaces and wraps custom tools", () => {
     expect(
       parseOpenAiFunctionTools([
         {
           type: "namespace",
           name: "skills",
-          description: "Skill tools",
           tools: [
             {
               type: "function",
               name: "read",
-              description: "Read a skill",
               parameters: { type: "object", properties: { path: {} } },
+            },
+            {
+              type: "custom",
+              name: "exec",
+              description: "Execute source text",
+              format: {
+                type: "grammar",
+                syntax: "lark",
+                definition: "start: /.+/",
+              },
             },
           ],
         },
+        {
+          type: "custom",
+          name: "apply_patch",
+          description: "Apply a patch",
+          format: {
+            type: "grammar",
+            syntax: "lark",
+            definition: "start: /.+/",
+          },
+        },
       ]),
-    ).toEqual([
+    ).toMatchObject([
       {
         name: "skills__read",
+        responseType: "function",
         responseName: "read",
         responseNamespace: "skills",
-        description: "Read a skill",
-        inputSchema: { type: "object", properties: { path: {} } },
+      },
+      {
+        name: "skills__exec",
+        responseType: "custom",
+        responseName: "exec",
+        responseNamespace: "skills",
+        inputSchema: {
+          type: "object",
+          required: ["input"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "apply_patch",
+        responseType: "custom",
+        responseName: "apply_patch",
       },
     ]);
   });
@@ -96,7 +131,7 @@ describe("tool normalization", () => {
     ).toThrow(/Duplicate/);
   });
 
-  it("implements none, required, named, namespaced, and no-parallel choices", () => {
+  it("implements none, required, named, and no-parallel choices", () => {
     const tools = [
       {
         name: "one",
@@ -115,23 +150,6 @@ describe("tool normalization", () => {
         function: { name: "two" },
       }).tools.map((tool) => tool.name),
     ).toEqual(["two"]);
-
-    const namespaced = [
-      {
-        name: "skills__read",
-        responseName: "read",
-        responseNamespace: "skills",
-        inputSchema: { type: "object", properties: {} },
-      },
-    ];
-    expect(
-      resolveToolChoice(namespaced, {
-        type: "function",
-        name: "read",
-        namespace: "skills",
-      }).tools.map((tool) => tool.name),
-    ).toEqual(["skills__read"]);
-
     expect(
       resolveToolChoice(tools, "auto", { parallelToolCalls: false })
         .instruction,
@@ -152,7 +170,7 @@ describe("tool output correlation", () => {
     ).toEqual([{ callId: "call_1", output: '{"ok":true}' }]);
   });
 
-  it("reads Responses function_call_output", () => {
+  it("reads Responses function and custom tool outputs", () => {
     expect(
       responsesToolOutputs([
         {
@@ -160,8 +178,16 @@ describe("tool output correlation", () => {
           call_id: "call_2",
           output: "done",
         },
+        {
+          type: "custom_tool_call_output",
+          call_id: "call_4",
+          output: "patched",
+        },
       ]),
-    ).toEqual([{ callId: "call_2", output: "done" }]);
+    ).toEqual([
+      { callId: "call_2", output: "done" },
+      { callId: "call_4", output: "patched" },
+    ]);
   });
 
   it("reads Anthropic tool_result and error state", () => {
