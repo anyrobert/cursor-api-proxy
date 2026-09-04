@@ -162,12 +162,15 @@ async function requestToolPermission(_name, index) {
 
 async function callTool(server, sessionId, tool, index) {
   await requestToolPermission(tool.name, index);
+  const isCustom = tool.inputSchema?.properties?.input?.type === "string";
   const response = await mcpPost(
     server,
     "tools/call",
     {
       name: tool.name,
-      arguments: { city: index === 0 ? "Paris" : "London", index },
+      arguments: isCustom
+        ? { input: `raw-input-${index}` }
+        : { city: index === 0 ? "Paris" : "London", index },
     },
     sessionId,
   );

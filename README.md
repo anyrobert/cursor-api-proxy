@@ -30,27 +30,61 @@ bun add cursor-api-proxy
 From source:
 
 ```bash
-git clone <this-repo>
-cd cursor-api-proxy
+git clone https://github.com/xsyetopz/cursor-api-proxy-next.git
+cd cursor-api-proxy-next
 bun install
 bun run build
 ```
+
+This builds and runs the checkout locally. It does not install or resolve a
+global `cursor-api-proxy` command, and it does not use a registry package or a
+different fork.
+
+For a repeatable local-developer installation, use the repository management
+script:
+
+```bash
+./scripts/local-dev.sh install
+./scripts/local-dev.sh update
+./scripts/local-dev.sh uninstall
+```
+
+`install` and `update` run `bun install` and rebuild `dist`; `update` only
+allows a fast-forward Git update and refuses to overwrite local changes.
+`uninstall` removes the launcher symlink and keeps the checkout intact. Set
+`CURSOR_API_PROXY_INSTALL_DIR` to change the symlink directory.
 
 ## Run the proxy (CLI)
 
 Start the server so the API is available for the SDK or any HTTP client:
 
 ```bash
-bunx cursor-api-proxy
-# or from repo: bun start / bun dist/cli.js
+# From this checkout:
+bun dist/cli.js
+# equivalent:
+bun start
 ```
+
+If you want a shell command that always points at this checkout, install the
+repository launcher as a symlink (macOS/Linux):
+
+```bash
+chmod +x scripts/cursor-api-proxy
+mkdir -p ~/.local/bin
+ln -sfn "$PWD/scripts/cursor-api-proxy" ~/.local/bin/cursor-api-proxy
+export PATH="$HOME/.local/bin:$PATH"
+cursor-api-proxy start
+```
+
+Use `bunx cursor-api-proxy` only when you intentionally want the published
+package rather than this local checkout.
 
 Inspect completed requests without opening the dashboard:
 
 ```bash
-cursor-api-proxy requests
-cursor-api-proxy requests --limit 50
-cursor-api-proxy requests --watch --interval 1
+bun dist/cli.js requests
+bun dist/cli.js requests --limit 50
+bun dist/cli.js requests --watch --interval 1
 ```
 
 The command reads `CURSOR_BRIDGE_SESSIONS_LOG` (default
@@ -61,7 +95,7 @@ Set `NO_COLOR=1` for plain output.
 To expose on your network (e.g. Tailscale):
 
 ```bash
-bunx cursor-api-proxy --tailscale
+bun dist/cli.js --tailscale
 ```
 
 By default the server listens on <http://127.0.0.1:8765>. Set `CURSOR_BRIDGE_API_KEY` to require `Authorization: Bearer <key>` on requests.
@@ -345,7 +379,7 @@ Use multiple Cursor accounts to spread load and stay under usage limits. The pro
 ### Adding accounts
 
 ```bash
-bunx cursor-api-proxy login account1
+bun dist/cli.js login account1
 ```
 
 Opens an isolated browser login. Session saves under `~/.cursor-api-proxy/accounts/` on macOS/Linux, or `%USERPROFILE%\.cursor-api-proxy\accounts\` on Windows.
@@ -353,11 +387,11 @@ Opens an isolated browser login. Session saves under `~/.cursor-api-proxy/accoun
 Repeat for more accounts:
 
 ```bash
-bunx cursor-api-proxy login account2
-bunx cursor-api-proxy login account3
+bun dist/cli.js login account2
+bun dist/cli.js login account3
 ```
 
-When you start the proxy (`bunx cursor-api-proxy`), it finds all accounts under that directory and adds them to the rotation pool.
+When you start the local proxy (`bun dist/cli.js`), it finds all accounts under that directory and adds them to the rotation pool.
 
 ### Manual config directories
 

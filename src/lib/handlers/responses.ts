@@ -82,13 +82,25 @@ export type ResponsesCtx = {
 
 type ResponseStatus = "in_progress" | "completed" | "failed";
 
-function functionCallItem(call: PendingClientToolCall) {
+function responseToolCallItem(call: PendingClientToolCall) {
+  if (call.type === "custom") {
+    return {
+      id: call.itemId,
+      type: "custom_tool_call",
+      status: "completed",
+      call_id: call.callId,
+      name: call.name,
+      ...(call.namespace ? { namespace: call.namespace } : {}),
+      input: call.arguments,
+    };
+  }
   return {
     id: call.itemId,
     type: "function_call",
     status: "completed",
     call_id: call.callId,
     name: call.name,
+    ...(call.namespace ? { namespace: call.namespace } : {}),
     arguments: call.arguments,
   };
 }
@@ -120,7 +132,7 @@ function structuredResponseObject(opts: {
     });
   }
   if (opts.result.status === "tool_calls") {
-    output.push(...opts.result.toolCalls.map(functionCallItem));
+    output.push(...opts.result.toolCalls.map(responseToolCallItem));
   }
   const inputTokens = Math.max(1, Math.round(opts.promptLength / 4));
   const outputTokens = Math.max(1, Math.round(opts.result.text.length / 4));
@@ -271,34 +283,52 @@ async function writeStructuredResponseTurn(opts: {
   }
   if (result.status === "tool_calls") {
     for (const call of result.toolCalls) {
+      const custom = call.type === "custom";
       writeResponseEvent(opts.res, "response.output_item.added", {
         response_id: opts.id,
         output_index: outputIndex,
         item: {
           id: call.itemId,
-          type: "function_call",
+          type: custom ? "custom_tool_call" : "function_call",
           status: "in_progress",
           call_id: call.callId,
           name: call.name,
-          arguments: "",
+          ...(call.namespace ? { namespace: call.namespace } : {}),
+          ...(custom ? { input: "" } : { arguments: "" }),
         },
       });
-      writeResponseEvent(opts.res, "response.function_call_arguments.delta", {
-        response_id: opts.id,
-        item_id: call.itemId,
-        output_index: outputIndex,
-        delta: call.arguments,
-      });
-      writeResponseEvent(opts.res, "response.function_call_arguments.done", {
-        response_id: opts.id,
-        item_id: call.itemId,
-        output_index: outputIndex,
-        arguments: call.arguments,
-      });
+      writeResponseEvent(
+        opts.res,
+        custom
+          ? "response.custom_tool_call_input.delta"
+          : "response.function_call_arguments.delta",
+        {
+          response_id: opts.id,
+          item_id: call.itemId,
+          output_index: outputIndex,
+          call_id: call.callId,
+          delta: call.arguments,
+        },
+      );
+      writeResponseEvent(
+        opts.res,
+        custom
+          ? "response.custom_tool_call_input.done"
+          : "response.function_call_arguments.done",
+        {
+          response_id: opts.id,
+          item_id: call.itemId,
+          output_index: outputIndex,
+          call_id: call.callId,
+          ...(custom
+            ? { input: call.arguments }
+            : { arguments: call.arguments }),
+        },
+      );
       writeResponseEvent(opts.res, "response.output_item.done", {
         response_id: opts.id,
         output_index: outputIndex,
-        item: functionCallItem(call),
+        item: responseToolCallItem(call),
       });
       outputIndex += 1;
     }
@@ -481,7 +511,8 @@ export async function handleResponses(
         (item) =>
           !item ||
           typeof item !== "object" ||
-          (item as { type?: unknown }).type !== "function_call_output",
+          (item as { type?: unknown }).type !== "function_call_output" &&
+          (item as { type?: unknown }).type !== "custom_tool_call_output",
       )
     ) {
       json(res, 400, {

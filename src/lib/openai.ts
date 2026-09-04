@@ -170,7 +170,10 @@ export function responsesInputToMessages(
     const record = asRecord(item);
     if (!record) continue;
 
-    if (record.type === "function_call_output") {
+    if (
+      record.type === "function_call_output" ||
+      record.type === "custom_tool_call_output"
+    ) {
       const output = responseItemContentToText(record.output ?? record.content);
       if (output) messages.push({ role: "tool", content: output });
       continue;

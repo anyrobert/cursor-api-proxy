@@ -224,6 +224,94 @@ describe.each([false, true])("ACP tool APIs stream=%s", (stream) => {
     expect(JSON.parse(follow.text).output_text).toContain("Tool result: sunny");
   });
 
+  it("round-trips Responses namespace calls and preserves namespace on resume", async () => {
+    const base = await start();
+    const initial = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      stream,
+      input: "Read a file",
+      tools: [
+        {
+          type: "namespace",
+          name: "workspace",
+          tools: [
+            {
+              type: "function",
+              name: "read_file",
+              parameters: { type: "object", properties: {} },
+            },
+          ],
+        },
+      ],
+    });
+    expect(initial.status).toBe(200);
+    const events = stream ? sseData(initial.text) : [];
+    const payload = stream
+      ? (events.find((event) => event.type === "response.completed")?.response ??
+        (() => { throw new Error("missing response event"); })())
+      : JSON.parse(initial.text);
+    const call = payload.output.find(
+      (item: { type?: string }) => item.type === "function_call",
+    );
+    expect(call).toMatchObject({ name: "read_file", namespace: "workspace" });
+
+    const follow = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      previous_response_id: payload.id,
+      input: [
+        {
+          type: "function_call_output",
+          call_id: call.call_id,
+          output: "contents",
+        },
+      ],
+    });
+    expect(follow.status).toBe(200);
+    expect(JSON.parse(follow.text).output_text).toContain("Tool result: contents");
+  });
+
+  it("round-trips Responses custom calls and streams custom input events", async () => {
+    const base = await start();
+    const initial = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      stream: true,
+      input: "Apply this patch",
+      tools: [
+        {
+          type: "custom",
+          name: "apply_patch",
+          description: "Apply raw patch text",
+          format: { type: "text" },
+        },
+      ],
+    });
+    expect(initial.status).toBe(200);
+    const events = sseData(initial.text);
+    expect(events.some((event) => event.type === "response.custom_tool_call_input.delta")).toBe(true);
+    const payload = events.find((event) => event.type === "response.completed")?.response;
+    expect(payload).toBeDefined();
+    const output = payload?.["output"];
+    const call = (Array.isArray(output) ? output : []).find(
+      (item: { type?: string }) => item.type === "custom_tool_call",
+    );
+    expect(call).toBeDefined();
+    expect(call).toMatchObject({ name: "apply_patch", input: "raw-input-0" });
+
+    const follow = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      previous_response_id: payload?.["id"],
+      input: [
+        {
+          type: "custom_tool_call_output",
+          call_id: call.call_id,
+          output: "patched",
+        },
+      ],
+    });
+    expect(follow.status).toBe(200);
+    expect(JSON.parse(follow.text).output_text).toContain("Tool result: patched");
+  });
+
   it("round-trips Anthropic tool_use blocks", async () => {
     const base = await start();
     const initial = await post(base, "/v1/messages", {
