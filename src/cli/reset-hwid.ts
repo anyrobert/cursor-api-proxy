@@ -66,11 +66,12 @@ function getCursorGlobalStorage(): string {
     );
   }
   if (process.platform === "win32") {
-    const appdata = process.env.APPDATA ?? "";
+    const appdata = process.env["APPDATA"] ?? "";
     return path.join(appdata, "Cursor", "User", "globalStorage");
   }
   // Linux
-  const xdg = process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config");
+  const xdg =
+    process.env["XDG_CONFIG_HOME"] ?? path.join(os.homedir(), ".config");
   return path.join(xdg, "Cursor", "User", "globalStorage");
 }
 
@@ -234,7 +235,10 @@ function updateMachineIdFile(machineId: string, cursorRoot: string): void {
       ? [path.join(cursorRoot, "machineid"), path.join(cursorRoot, "machineId")]
       : [path.join(cursorRoot, "machineId")];
 
-  const filePath = candidates.find(fs.existsSync) ?? candidates[0];
+  const filePath =
+    candidates.find(fs.existsSync) ??
+    candidates[0] ??
+    path.join(cursorRoot, "machineId");
 
   try {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -347,7 +351,7 @@ export async function handleResetHwid(
   updateStateVscdb(path.join(globalStorage, "state.vscdb"), newIds);
 
   log("🔑", "Updating machineId file...");
-  updateMachineIdFile(newIds["telemetry.machineId"], cursorRoot);
+  updateMachineIdFile(newIds["telemetry.machineId"] ?? "", cursorRoot);
 
   // 4. Optional deep clean
   if (opts.deepClean) {

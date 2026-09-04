@@ -30,7 +30,7 @@ export function createRequestListener(
   runtime: BridgeRequestRuntime,
 ) {
   const { config } = opts;
-  const modelCacheRef: ModelCacheRef = { current: undefined };
+  const modelCacheRef: ModelCacheRef = {};
   const lastRequestedModelRef: { current?: string } = {};
 
   return async (req: http.IncomingMessage, res: http.ServerResponse) => {

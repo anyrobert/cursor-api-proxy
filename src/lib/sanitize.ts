@@ -24,6 +24,13 @@ const RULES: Array<[RegExp, string]> = [
   [/^[;,\s]+/, ""],
 ];
 
+type JsonRecord = {
+  [key: string]: unknown;
+  content?: unknown;
+  text?: unknown;
+  type?: unknown;
+};
+
 /**
  * Apply all sanitization rules to a string.
  * Safe to call with any string; returns the original value if nothing matched.
@@ -43,17 +50,21 @@ export const sanitizePrompt = sanitizeText;
  * Sanitize an OpenAI-style messages array in place (returns a new array).
  * Handles both string and array content parts.
  */
-export function sanitizeMessages(messages: any[]): any[] {
-  return (messages ?? []).map((m: any) => {
-    if (!m) return m;
+export function sanitizeMessages(messages: unknown[]): JsonRecord[] {
+  return (messages ?? []).map((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const m = value as JsonRecord;
     if (typeof m.content === "string") {
       return { ...m, content: sanitizeText(m.content) };
     }
     if (Array.isArray(m.content)) {
       return {
         ...m,
-        content: m.content.map((p: any) => {
-          if (p?.type === "text" && typeof p.text === "string") {
+        content: m.content.map((part) => {
+          if (!part || typeof part !== "object" || Array.isArray(part))
+            return part;
+          const p = part as JsonRecord;
+          if (p.type === "text" && typeof p.text === "string") {
             return { ...p, text: sanitizeText(p.text) };
           }
           return p;
@@ -67,11 +78,13 @@ export function sanitizeMessages(messages: any[]): any[] {
 /**
  * Sanitize an Anthropic-style system field (string or content-block array).
  */
-export function sanitizeSystem(system: any): any {
+export function sanitizeSystem(system: unknown): unknown {
   if (typeof system === "string") return sanitizeText(system);
   if (Array.isArray(system)) {
-    return system.map((p: any) => {
-      if (p?.type === "text" && typeof p.text === "string") {
+    return system.map((part) => {
+      if (!part || typeof part !== "object" || Array.isArray(part)) return part;
+      const p = part as JsonRecord;
+      if (p.type === "text" && typeof p.text === "string") {
         return { ...p, text: sanitizeText(p.text) };
       }
       return p;

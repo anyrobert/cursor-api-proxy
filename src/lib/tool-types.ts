@@ -1,39 +1,62 @@
 export type ClientToolDefinition = {
   name: string;
-  description?: string;
+  description?: string | undefined;
   inputSchema: Record<string, unknown>;
-  responseType?: "function" | "custom";
-  responseName?: string;
-  responseNamespace?: string;
+  responseType?: "function" | "custom" | undefined;
+  responseName?: string | undefined;
+  responseNamespace?: string | undefined;
 };
 
 export type ClientToolOutput = {
   callId: string;
   output: string;
-  isError?: boolean;
+  isError?: boolean | undefined;
 };
 
 export type PendingClientToolCall = {
   callId: string;
   itemId: string;
   name: string;
-  namespace?: string;
-  type?: "function" | "custom";
+  namespace?: string | undefined;
+  type?: "function" | "custom" | undefined;
   arguments: string;
 };
 
 export type ResolvedToolChoice = {
   tools: ClientToolDefinition[];
-  instruction?: string;
+  instruction?: string | undefined;
   required: boolean;
-  maxParallelToolCalls?: number;
+  maxParallelToolCalls?: number | undefined;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
+export type OpenAiToolParsingOptions = {
+  ignoreProviderExecutedTools?: boolean;
+};
+
+type JsonRecord = Record<string, unknown> & {
+  type?: unknown;
+  function?: unknown;
+  name?: unknown;
+  description?: unknown;
+  parameters?: unknown;
+  tools?: unknown;
+  input_schema?: unknown;
+  namespace?: unknown;
+  role?: unknown;
+  tool_call_id?: unknown;
+  content?: unknown;
+  call_id?: unknown;
+  output?: unknown;
+  tool_use_id?: unknown;
+  is_error?: unknown;
+  text?: unknown;
+};
+
+function asRecord(value: unknown): JsonRecord | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
-  return value as Record<string, unknown>;
+  return value as JsonRecord;
 }
 
 function schemaOrDefault(value: unknown): Record<string, unknown> {
@@ -77,7 +100,7 @@ function pushUnique(
 function pushResponsesTool(
   out: ClientToolDefinition[],
   seen: Set<string>,
-  tool: Record<string, unknown>,
+  tool: JsonRecord,
   namespace?: string,
 ): void {
   if (tool.type === "function") {
@@ -95,8 +118,9 @@ function pushResponsesTool(
       responseType: "function",
       responseName: fn.name,
       ...(namespace ? { responseNamespace: namespace } : {}),
-      description:
-        typeof fn.description === "string" ? fn.description : undefined,
+      ...(typeof fn.description === "string"
+        ? { description: fn.description }
+        : {}),
       inputSchema: schemaOrDefault(fn.parameters),
     });
     return;
@@ -115,8 +139,9 @@ function pushResponsesTool(
       responseType: "custom",
       responseName: tool.name,
       ...(namespace ? { responseNamespace: namespace } : {}),
-      description:
-        typeof tool.description === "string" ? tool.description : undefined,
+      ...(typeof tool.description === "string"
+        ? { description: tool.description }
+        : {}),
       inputSchema: customToolSchema(),
     });
     return;
@@ -141,6 +166,7 @@ function pushResponsesTool(
 export function parseOpenAiFunctionTools(
   tools?: readonly unknown[],
   functions?: readonly unknown[],
+  options?: OpenAiToolParsingOptions,
 ): ClientToolDefinition[] {
   const out: ClientToolDefinition[] = [];
   const seen = new Set<string>();
@@ -149,7 +175,10 @@ export function parseOpenAiFunctionTools(
     const tool = asRecord(value);
     if (!tool) throw new Error("Invalid tool definition");
 
-    if (tool.type === "tool_search" || tool.type === "web_search") {
+    if (
+      options?.ignoreProviderExecutedTools &&
+      (tool.type === "tool_search" || tool.type === "web_search")
+    ) {
       // Provider-executed Responses tools cannot be round-tripped through the
       // client-owned MCP bridge. Ignore them here; Cursor may use equivalent
       // native capabilities independently.
@@ -183,8 +212,9 @@ export function parseOpenAiFunctionTools(
       name: fn.name,
       responseType: "function",
       responseName: fn.name,
-      description:
-        typeof fn.description === "string" ? fn.description : undefined,
+      ...(typeof fn.description === "string"
+        ? { description: fn.description }
+        : {}),
       inputSchema: schemaOrDefault(fn.parameters),
     });
   }
@@ -206,8 +236,9 @@ export function parseAnthropicFunctionTools(
       name: tool.name,
       responseType: "function",
       responseName: tool.name,
-      description:
-        typeof tool.description === "string" ? tool.description : undefined,
+      ...(typeof tool.description === "string"
+        ? { description: tool.description }
+        : {}),
       inputSchema: schemaOrDefault(tool.input_schema),
     });
   }
@@ -237,7 +268,10 @@ function namedChoice(choice: unknown): string | undefined {
 export function resolveToolChoice(
   tools: readonly ClientToolDefinition[],
   choice: unknown,
-  opts: { parallelToolCalls?: boolean; anthropic?: boolean } = {},
+  opts: {
+    parallelToolCalls?: boolean | undefined;
+    anthropic?: boolean | undefined;
+  } = {},
 ): ResolvedToolChoice {
   if (choice === "none" || asRecord(choice)?.type === "none") {
     return { tools: [], required: false };

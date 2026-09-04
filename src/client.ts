@@ -374,7 +374,12 @@ export async function getOpenAIOptionsAsync(
   const root = baseUrl.replace(/\/$/, "");
 
   if (startProxy && isDefaultBaseUrl(root)) {
-    await ensureProxyRunning({ baseUrl: root, timeoutMs: options.timeoutMs });
+    await ensureProxyRunning({
+      baseUrl: root,
+      ...(options.timeoutMs !== undefined
+        ? { timeoutMs: options.timeoutMs }
+        : {}),
+    });
   }
   return getOpenAIOptions(options);
 }
@@ -389,13 +394,13 @@ export function createCursorProxyClient(
   const startProxy = options.startProxy !== false;
   const baseUrl =
     options.baseUrl ??
-    ((typeof process !== "undefined" && process.env?.CURSOR_PROXY_URL) ||
+    ((typeof process !== "undefined" && process.env?.["CURSOR_PROXY_URL"]) ||
       DEFAULT_BASE_URL);
   const root = baseUrl.replace(/\/$/, "");
   const apiKeyRaw =
     options.apiKey ??
     (typeof process !== "undefined"
-      ? process.env?.CURSOR_BRIDGE_API_KEY
+      ? process.env?.["CURSOR_BRIDGE_API_KEY"]
       : undefined);
   const apiKey = typeof apiKeyRaw === "string" ? apiKeyRaw : undefined;
 

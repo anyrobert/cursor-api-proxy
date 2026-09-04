@@ -54,6 +54,8 @@ import {
   toolSessionOwnerKey,
 } from "../tool-session-registry.js";
 import {
+  type ClientToolDefinition,
+  type ClientToolOutput,
   chatToolOutputs,
   type PendingClientToolCall,
   parseOpenAiFunctionTools,
@@ -226,18 +228,18 @@ export async function handleChatCompletions(
 ): Promise<void> {
   const { config, lastRequestedModelRef, modelCacheRef } = ctx;
   const body = JSON.parse(rawBody || "{}") as OpenAiChatCompletionRequest;
-  let selectedTools;
+  let selectedTools: ClientToolDefinition[] = [];
   let toolInstruction: string | undefined;
   let requireToolCall = false;
   let maxParallelToolCalls: number | undefined;
-  let submittedToolOutputs;
+  let submittedToolOutputs: ClientToolOutput[] = [];
   try {
     const parsedTools = parseOpenAiFunctionTools(body.tools, body.functions);
     const choice = resolveToolChoice(
       parsedTools,
       body.tool_choice ?? body.function_call,
       {
-        parallelToolCalls: (body as any).parallel_tool_calls,
+        parallelToolCalls: body.parallel_tool_calls,
       },
     );
     selectedTools = choice.tools;
@@ -259,13 +261,15 @@ export async function handleChatCompletions(
   const requested = normalizeModelId(body.model);
   const model = resolveModel(requested, lastRequestedModelRef, config);
   const models = await getCachedCursorModels(config, modelCacheRef);
-  let decision;
+  let decision: ReturnType<typeof resolveModelForExecution>;
   try {
     decision = resolveModelForExecution({
       requested: model,
       defaultModel: config.defaultModel,
       availableCursorIds: models.map((m) => m.id),
-      reasoningEffort: body.reasoning_effort,
+      ...(body.reasoning_effort !== undefined
+        ? { reasoningEffort: body.reasoning_effort }
+        : {}),
     });
   } catch (error) {
     if (!(error instanceof UnsupportedReasoningEffortError)) throw error;
@@ -310,7 +314,7 @@ export async function handleChatCompletions(
   ];
   const prompt = buildPromptFromMessages(messagesWithTools);
 
-  const trafficMessages: TrafficMessage[] = cleanMessages.map((m: any) => {
+  const trafficMessages: TrafficMessage[] = cleanMessages.map((m) => {
     const content =
       typeof m?.content === "string"
         ? m.content
@@ -320,7 +324,7 @@ export async function handleChatCompletions(
               .map((p) => p.text ?? "")
               .join("")
           : "";
-    return { role: String(m?.role ?? "user"), content };
+    return { role: String(m["role"] ?? "user"), content };
   });
   logTrafficRequest(
     config.verbose,
@@ -503,20 +507,21 @@ export async function handleChatCompletions(
         cmdArgs,
         prompt: agentPrompt,
         tools: selectedTools,
-        tempDir,
-        configDir,
+        ...(tempDir ? { tempDir } : {}),
+        ...(configDir ? { configDir } : {}),
         signal: abortController.signal,
-        modelDisplayName: modelCatalogName,
-        requireToolCall,
-        maxParallelToolCalls,
+        ...(modelCatalogName ? { modelDisplayName: modelCatalogName } : {}),
+        ...(requireToolCall !== undefined ? { requireToolCall } : {}),
+        ...(maxParallelToolCalls !== undefined ? { maxParallelToolCalls } : {}),
       });
-      record = ctx.toolSessions.createRecord({
+      const sessionRecord = ctx.toolSessions.createRecord({
         api: "chat",
         ownerKey,
         model: displayModel ?? cursorModel,
         configDir,
         session,
       });
+      record = sessionRecord;
       abortController.signal.addEventListener(
         "abort",
         () => void session.close(),
@@ -529,7 +534,7 @@ export async function handleChatCompletions(
         created,
         model: displayModel,
         promptLength: agentPrompt.length,
-        run: (listener) => ctx.toolSessions.collect(record!, listener),
+        run: (listener) => ctx.toolSessions.collect(sessionRecord, listener),
       });
       reportRequestSuccess(configDir, Date.now() - startedAt);
       if (

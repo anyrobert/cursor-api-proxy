@@ -20,7 +20,7 @@ export type BridgeServerOptions = {
 
 export function startBridgeServer(
   opts: BridgeServerOptions,
-): (http.Server | https.Server)[] {
+): [http.Server | https.Server, ...(http.Server | https.Server)[]] {
   const { config } = opts;
   const servers: (http.Server | https.Server)[] = [];
 
@@ -41,14 +41,20 @@ export function startBridgeServer(
         const server = startSingleServer(serverOpts);
         servers.push(server);
       });
-      return servers;
+      return servers as [
+        http.Server | https.Server,
+        ...(http.Server | https.Server)[],
+      ];
     } else {
       initAccountPool(config.configDirs);
     }
   }
 
   servers.push(startSingleServer(opts));
-  return servers;
+  return servers as [
+    http.Server | https.Server,
+    ...(http.Server | https.Server)[],
+  ];
 }
 
 /**
@@ -75,8 +81,11 @@ export function setupGracefulShutdown(
       (s) =>
         new Promise<void>((resolve) => {
           // closeAllConnections available since Node 18.2
-          if (typeof (s as any).closeAllConnections === "function") {
-            (s as any).closeAllConnections();
+          if (
+            "closeAllConnections" in s &&
+            typeof s.closeAllConnections === "function"
+          ) {
+            s.closeAllConnections();
           }
           s.close(() => resolve());
         }),
@@ -111,8 +120,12 @@ function startSingleServer(
   let server: http.Server | https.Server;
 
   if (useTls) {
-    const cert = fs.readFileSync(config.tlsCertPath!, "utf8");
-    const key = fs.readFileSync(config.tlsKeyPath!, "utf8");
+    const { tlsCertPath, tlsKeyPath } = config;
+    if (!tlsCertPath || !tlsKeyPath) {
+      throw new Error("TLS certificate and key paths are required");
+    }
+    const cert = fs.readFileSync(tlsCertPath, "utf8");
+    const key = fs.readFileSync(tlsKeyPath, "utf8");
     server = https.createServer({ cert, key }, requestListener);
   } else {
     server = http.createServer(requestListener);

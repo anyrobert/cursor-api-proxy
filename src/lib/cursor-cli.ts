@@ -6,9 +6,17 @@ export type CursorCliModel = { id: string; name: string };
 
 /** Strip CSI / OSC ANSI sequences so colored CLI output still parses. */
 export function stripAnsi(text: string): string {
+  const escapeCharacter = String.fromCharCode(0x1b);
+  const bell = String.fromCharCode(0x07);
   return text
-    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "");
+    .replace(new RegExp(`${escapeCharacter}\\[[0-9;?]*[ -/]*[@-~]`, "g"), "")
+    .replace(
+      new RegExp(
+        `${escapeCharacter}\\][^${bell}]*(?:${bell}|${escapeCharacter}\\\\)`,
+        "g",
+      ),
+      "",
+    );
 }
 
 export function parseCursorCliModels(output: string): CursorCliModel[] {
@@ -22,6 +30,7 @@ export function parseCursorCliModels(output: string): CursorCliModel[] {
     if (!match) continue;
     const id = match[1];
     const rawName = match[2];
+    if (id === undefined || rawName === undefined) continue;
     const name = rawName.replace(/\s*\([^)]*\)\s*$/g, "").trim();
     models.push({ id, name: name || id });
   }

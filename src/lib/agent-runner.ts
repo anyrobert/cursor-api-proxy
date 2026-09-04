@@ -78,7 +78,7 @@ function acpInvocation(
 ): {
   args: string[];
   env: Record<string, string | undefined>;
-  model?: string;
+  model?: string | undefined;
 } {
   const model = extractModelFromCmdArgs(cmdArgs);
   const mode = extractModeFromCmdArgs(cmdArgs);
@@ -89,7 +89,7 @@ function acpInvocation(
   if (effectiveChatOnly) {
     Object.assign(env, getChatOnlyEnvOverrides(workspaceDir, configDir));
   } else if (configDir) {
-    env.CURSOR_CONFIG_DIR = configDir;
+    env["CURSOR_CONFIG_DIR"] = configDir;
   }
   return { args, env, model };
 }
@@ -117,14 +117,16 @@ export function runAgentSync(
       cwd: workspaceDir,
       timeoutMs: config.timeoutMs,
       env: invocation.env,
-      model: invocation.model,
-      modelAliases: modelDisplayName ? [modelDisplayName] : undefined,
+      ...(invocation.model !== undefined ? { model: invocation.model } : {}),
+      ...(modelDisplayName ? { modelAliases: [modelDisplayName] } : {}),
       strictModel: config.strictModel,
       requestTimeoutMs: config.timeoutMs,
-      spawnOptions: config.acpSpawnOptions,
+      ...(config.acpSpawnOptions
+        ? { spawnOptions: config.acpSpawnOptions }
+        : {}),
       skipAuthenticate: config.acpSkipAuthenticate,
       rawDebug: config.acpRawDebug,
-      signal,
+      ...(signal ? { signal } : {}),
     }).then((out) => {
       cacheTokenForAccount(configDir);
       if (tempDir) {
@@ -191,14 +193,16 @@ export function runAgentStream(
         cwd: workspaceDir,
         timeoutMs: config.timeoutMs,
         env: invocation.env,
-        model: invocation.model,
-        modelAliases: modelDisplayName ? [modelDisplayName] : undefined,
+        ...(invocation.model !== undefined ? { model: invocation.model } : {}),
+        ...(modelDisplayName ? { modelAliases: [modelDisplayName] } : {}),
         strictModel: config.strictModel,
         requestTimeoutMs: config.timeoutMs,
-        spawnOptions: config.acpSpawnOptions,
+        ...(config.acpSpawnOptions
+          ? { spawnOptions: config.acpSpawnOptions }
+          : {}),
         skipAuthenticate: config.acpSkipAuthenticate,
         rawDebug: config.acpRawDebug,
-        signal,
+        ...(signal ? { signal } : {}),
       },
       onLine,
     ).then((result) => {

@@ -197,6 +197,11 @@ export async function detectClientCwd(
   }
 
   const clientPid = candidates[0]?.pid;
+  if (clientPid === undefined) {
+    cache.set(key, { value: null, at: Date.now() });
+    prune();
+    return undefined;
+  }
   const command = candidates[0]?.command;
 
   const cwdOut = await runLsof(
@@ -212,9 +217,11 @@ export async function detectClientCwd(
     return undefined;
   }
 
-  const info: ClientProcessInfo = command
-    ? { pid: clientPid, cwd, command }
-    : { pid: clientPid, cwd };
+  const info: ClientProcessInfo = {
+    cwd,
+    pid: clientPid,
+    ...(command ? { command } : {}),
+  };
   cache.set(key, { value: info, at: Date.now() });
   prune();
   return info;

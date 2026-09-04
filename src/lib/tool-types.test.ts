@@ -40,22 +40,29 @@ describe("tool normalization", () => {
         inputSchema: { type: "object", properties: { y: {} } },
       },
     ]);
-    expect(
-      parseOpenAiFunctionTools(undefined, [
-        {
-          name: "legacy",
-          parameters: { type: "object", properties: {} },
-        },
-      ])[0].name,
-    ).toBe("legacy");
-    expect(
-      parseAnthropicFunctionTools([
-        {
-          name: "anthropic",
-          input_schema: { type: "object", properties: {} },
-        },
-      ])[0].inputSchema,
-    ).toEqual({ type: "object", properties: {} });
+    const legacyTools = parseOpenAiFunctionTools(undefined, [
+      {
+        name: "legacy",
+        parameters: { type: "object", properties: {} },
+      },
+    ]);
+    const legacy = legacyTools[0];
+    expect(legacy).toBeDefined();
+    if (!legacy) return;
+    expect(legacy.name).toBe("legacy");
+    const anthropicTools = parseAnthropicFunctionTools([
+      {
+        name: "anthropic",
+        input_schema: { type: "object", properties: {} },
+      },
+    ]);
+    const anthropic = anthropicTools[0];
+    expect(anthropic).toBeDefined();
+    if (!anthropic) return;
+    expect(anthropic.inputSchema).toEqual({
+      type: "object",
+      properties: {},
+    });
   });
 
   it("flattens Responses namespaces and wraps custom tools", () => {
@@ -121,15 +128,19 @@ describe("tool normalization", () => {
 
   it("ignores provider-executed tools and rejects unknown/duplicate tools", () => {
     expect(
-      parseOpenAiFunctionTools([
-        { type: "web_search" },
-        {
-          type: "tool_search",
-          execution: "server",
-          description: "Search deferred tools",
-          parameters: { type: "object", properties: {} },
-        },
-      ]),
+      parseOpenAiFunctionTools(
+        [
+          { type: "web_search" },
+          {
+            type: "tool_search",
+            execution: "server",
+            description: "Search deferred tools",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+        undefined,
+        { ignoreProviderExecutedTools: true },
+      ),
     ).toEqual([]);
     expect(() => parseOpenAiFunctionTools([{ type: "computer" }])).toThrow(
       /Unsupported tool type/,

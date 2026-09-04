@@ -67,7 +67,10 @@ describe("ACP requestTimeoutMs", () => {
       "hello",
     );
     expect(runAcpSync).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(runAcpSync).mock.calls[0][3]).toMatchObject({
+    const call = vi.mocked(runAcpSync).mock.calls[0];
+    expect(call).toBeDefined();
+    if (!call) return;
+    expect(call[3]).toMatchObject({
       timeoutMs: 123_456,
       requestTimeoutMs: 123_456,
     });
@@ -84,7 +87,10 @@ describe("ACP requestTimeoutMs", () => {
       "hello",
     );
     expect(runAcpStream).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(runAcpStream).mock.calls[0][3]).toMatchObject({
+    const call = vi.mocked(runAcpStream).mock.calls[0];
+    expect(call).toBeDefined();
+    if (!call) return;
+    expect(call[3]).toMatchObject({
       timeoutMs: 123_456,
       requestTimeoutMs: 123_456,
     });

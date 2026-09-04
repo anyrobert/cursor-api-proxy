@@ -28,7 +28,10 @@ describe("parseCursorCliModels", () => {
     );
     const models = parseCursorCliModels(output);
     expect(models).toHaveLength(1);
-    expect(models[0].id).toBe("claude-3");
+    const model = models[0];
+    expect(model).toBeDefined();
+    if (!model) return;
+    expect(model.id).toBe("claude-3");
   });
 
   it("handles Windows line endings", () => {

@@ -4,14 +4,14 @@
  */
 
 export type ModelResolutionDecision = {
-  requested?: string;
-  mapped?: string;
+  requested?: string | undefined;
+  mapped?: string | undefined;
   final: string;
-  reasoningEffort?: CursorReasoningEffort;
+  reasoningEffort?: CursorReasoningEffort | undefined;
   requestedWasDefault: boolean;
   validated: boolean;
   fallbackUsed: boolean;
-  fallbackReason?: string;
+  fallbackReason?: string | undefined;
 };
 
 export type CursorReasoningEffort =
@@ -25,14 +25,15 @@ export type CursorReasoningEffort =
 
 export class UnsupportedReasoningEffortError extends Error {
   readonly code = "unsupported_reasoning_effort";
+  readonly model: string;
+  readonly effort: string;
 
-  constructor(
-    readonly model: string,
-    readonly effort: string,
-  ) {
+  constructor(model: string, effort: string) {
     super(
       `Cursor model "${model}" does not offer reasoning effort "${effort}"`,
     );
+    this.model = model;
+    this.effort = effort;
     this.name = "UnsupportedReasoningEffortError";
   }
 }

@@ -77,8 +77,8 @@ describe("loadBridgeConfig", () => {
       cwd: "/workspace",
     });
     expect(config.acpSkipAuthenticate).toBe(true);
-    expect(config.acpEnv.CURSOR_API_KEY).toBe("sk-abc");
-    expect(config.acpEnv.CURSOR_AUTH_TOKEN).toBe("sk-abc");
+    expect(config.acpEnv["CURSOR_API_KEY"]).toBe("sk-abc");
+    expect(config.acpEnv["CURSOR_AUTH_TOKEN"]).toBe("sk-abc");
   });
 
   it("allows CURSOR_BRIDGE_ACP_SKIP_AUTHENTICATE to force skip", () => {

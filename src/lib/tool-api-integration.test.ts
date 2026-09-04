@@ -81,11 +81,22 @@ async function post(
   };
 }
 
-function sseData(text: string): any[] {
+type SseEvent = {
+  choices?: Array<{
+    delta?: { tool_calls?: unknown[] };
+    finish_reason?: string;
+  }>;
+  content_block?: { type?: string };
+  delta?: { type?: string };
+  response?: Record<string, unknown>;
+  type?: string;
+};
+
+function sseData(text: string): SseEvent[] {
   return text
     .split(/\r?\n/)
     .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
-    .map((line) => JSON.parse(line.slice(6)));
+    .map((line) => JSON.parse(line.slice(6)) as SseEvent);
 }
 
 afterEach(async () => {
@@ -126,7 +137,10 @@ describe.each([false, true])("ACP tool APIs stream=%s", (stream) => {
     const call = stream
       ? chunks
           .flatMap((chunk) => chunk.choices ?? [])
-          .flatMap((choice: any) => choice.delta?.tool_calls ?? [])[0]
+          .flatMap(
+            (choice: { delta?: { tool_calls?: unknown[] } }) =>
+              choice.delta?.tool_calls ?? [],
+          )[0]
       : payload.choices[0].message.tool_calls[0];
     expect(call.function.name).toBe("weather");
     expect(
@@ -180,11 +194,17 @@ describe.each([false, true])("ACP tool APIs stream=%s", (stream) => {
     });
     expect(initial.status).toBe(200);
     const events = stream ? sseData(initial.text) : [];
+    const completedEvent = events.find(
+      (event) => event.type === "response.completed",
+    );
     const payload = stream
-      ? events.find((event) => event.type === "response.completed").response
+      ? (completedEvent?.response ??
+        (() => {
+          throw new Error("missing response event");
+        })())
       : JSON.parse(initial.text);
     const call = payload.output.find(
-      (item: any) => item.type === "function_call",
+      (item: { type?: string }) => item.type === "function_call",
     );
     expect(call.name).toBe("weather");
 
@@ -225,13 +245,19 @@ describe.each([false, true])("ACP tool APIs stream=%s", (stream) => {
     expect(initial.status).toBe(200);
     const events = stream ? sseData(initial.text) : [];
     const payload = stream ? undefined : JSON.parse(initial.text);
+    const toolEvent = events.find(
+      (event) =>
+        event.type === "content_block_start" &&
+        event.content_block?.type === "tool_use",
+    );
     const call = stream
-      ? events.find(
-          (event) =>
-            event.type === "content_block_start" &&
-            event.content_block?.type === "tool_use",
-        ).content_block
-      : payload.content.find((block: any) => block.type === "tool_use");
+      ? (toolEvent?.content_block ??
+        (() => {
+          throw new Error("missing tool event");
+        })())
+      : payload.content.find(
+          (block: { type?: string }) => block.type === "tool_use",
+        );
     expect(call.name).toBe("weather");
     if (stream) {
       expect(
@@ -411,7 +437,7 @@ describe("ACP tool session errors", () => {
     });
     const calls = JSON.parse(initial.text).choices[0].message.tool_calls;
     const replies = await Promise.all(
-      calls.map((call: any) =>
+      calls.map((call: { id: string; function: { name: string } }) =>
         post(base, "/v1/chat/completions", {
           model: "gpt-4",
           messages: [

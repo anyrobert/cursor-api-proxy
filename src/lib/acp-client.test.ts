@@ -23,6 +23,7 @@ function parseLastSetConfig(stderr: string): Record<string, unknown> | null {
     .filter((l) => l.startsWith("__FAKE_ACP_SET_CONFIG__:"));
   if (lines.length === 0) return null;
   const last = lines[lines.length - 1];
+  if (last === undefined) return null;
   return JSON.parse(last.slice("__FAKE_ACP_SET_CONFIG__:".length)) as Record<
     string,
     unknown
@@ -194,7 +195,7 @@ describe("runAcpSync", () => {
     });
     expect(result.code).toBe(0);
     const cfg = parseLastSetConfig(result.stderr);
-    expect(cfg?.value).toBe("first-id[]");
+    expect(cfg?.["value"]).toBe("first-id[]");
   });
 
   it("fails when session/set_config_option returns error", async () => {

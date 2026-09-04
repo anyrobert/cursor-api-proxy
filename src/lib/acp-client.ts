@@ -26,7 +26,7 @@ export type AcpRunOptions = {
   /** Per-request timeout in ms (default 60000). Rejects and clears pending on timeout. */
   requestTimeoutMs?: number;
   /** Spawn options (e.g. windowsVerbatimArguments for cmd.exe fallback on Windows). */
-  spawnOptions?: { windowsVerbatimArguments?: boolean };
+  spawnOptions?: { windowsVerbatimArguments?: boolean | undefined } | undefined;
   /** When true, skip authenticate step (use when pre-authenticated via --api-key or agent login). */
   skipAuthenticate?: boolean;
   /** When true, log every raw JSON-RPC line from ACP stdout (very verbose). */
@@ -150,7 +150,7 @@ export function extractAcpUpdateText(
 function handleAcpNotification(
   msg: AcpParsedMsg,
   opts: {
-    rawDebug?: boolean;
+    rawDebug?: boolean | undefined;
     stdin: NodeJS.WritableStream | null | undefined;
     onAgentTextChunk?: (text: string) => void;
     onAgentThoughtChunk?: (text: string) => void;
@@ -209,10 +209,10 @@ function handleAcpNotification(
       const params = msg.params as Record<string, unknown> | undefined;
       if (
         method === "cursor/ask_question" &&
-        params?.options &&
-        Array.isArray(params.options)
+        params?.["options"] &&
+        Array.isArray(params["options"])
       ) {
-        const options = params.options as Array<{
+        const options = params["options"] as Array<{
           id?: string;
           label?: string;
         }>;
@@ -287,7 +287,7 @@ function sendRequest(
     {
       resolve: (value: unknown) => void;
       reject: (err: Error) => void;
-      timerId?: ReturnType<typeof setTimeout>;
+      timerId?: ReturnType<typeof setTimeout> | undefined;
     }
   >,
   requestTimeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
@@ -407,11 +407,16 @@ export function runAcpSync(
       {
         resolve: (value: unknown) => void;
         reject: (err: Error) => void;
-        timerId?: ReturnType<typeof setTimeout>;
+        timerId?: ReturnType<typeof setTimeout> | undefined;
       }
     >();
 
-    const rl = readline.createInterface({ input: child.stdout! });
+    const stdout = child.stdout;
+    if (!stdout) {
+      finish(1);
+      return;
+    }
+    const rl = readline.createInterface({ input: stdout });
     rl.on("line", (line: string) => {
       try {
         if (opts.rawDebug) {
@@ -658,11 +663,16 @@ export function runAcpStream(
       {
         resolve: (value: unknown) => void;
         reject: (err: Error) => void;
-        timerId?: ReturnType<typeof setTimeout>;
+        timerId?: ReturnType<typeof setTimeout> | undefined;
       }
     >();
 
-    const rl = readline.createInterface({ input: child.stdout! });
+    const stdout = child.stdout;
+    if (!stdout) {
+      finish(1);
+      return;
+    }
+    const rl = readline.createInterface({ input: stdout });
     rl.on("line", (line: string) => {
       try {
         if (opts.rawDebug) {

@@ -123,7 +123,7 @@ describe("buildPromptFromMessages", () => {
   });
 
   it("handles undefined messages", () => {
-    const prompt = buildPromptFromMessages(undefined as unknown as any[]);
+    const prompt = buildPromptFromMessages(undefined);
     expect(prompt).toBe("\n\nAssistant:");
   });
 

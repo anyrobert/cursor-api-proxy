@@ -470,7 +470,7 @@ describe("resolveAgentCommand", () => {
 
     expect(command.command).toBe("C:\\node\\node.exe");
     expect(command.args).toEqual(["C:\\cursor\\agent.js", "--print", "hello"]);
-    expect(command.env.CURSOR_INVOKED_AS).toBe("agent.cmd");
+    expect(command.env["CURSOR_INVOKED_AS"]).toBe("agent.cmd");
     expect(command.windowsVerbatimArguments).toBeUndefined();
   });
 
@@ -497,7 +497,7 @@ describe("resolveAgentCommand", () => {
         "--print",
         "hello",
       ]);
-      expect(command.env.CURSOR_INVOKED_AS).toBe("agent.cmd");
+      expect(command.env["CURSOR_INVOKED_AS"]).toBe("agent.cmd");
       expect(command.windowsVerbatimArguments).toBeUndefined();
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -556,7 +556,7 @@ describe("resolveAgentCommand", () => {
       expect(command.command).toBe(path.join(versionDir, "node.exe"));
       expect(command.args).toEqual([path.join(versionDir, "index.js"), "acp"]);
       expect(command.windowsVerbatimArguments).toBeUndefined();
-      expect(command.env.CURSOR_INVOKED_AS).toBe("agent.cmd");
+      expect(command.env["CURSOR_INVOKED_AS"]).toBe("agent.cmd");
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

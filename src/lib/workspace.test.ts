@@ -42,15 +42,15 @@ describe("getChatOnlyEnvOverrides", () => {
   it("uses temp workspace .cursor when no auth pool dir", () => {
     const tmp = "/tmp/cursor-proxy-abc123";
     const o = getChatOnlyEnvOverrides(tmp);
-    expect(o.CURSOR_CONFIG_DIR).toBe(`${tmp}/.cursor`);
+    expect(o["CURSOR_CONFIG_DIR"]).toBe(`${tmp}/.cursor`);
   });
 
   it("uses account pool path for CURSOR_CONFIG_DIR when provided", () => {
     const tmp = "/tmp/cursor-proxy-abc123";
     const pool = "/home/u/.cursor-api-proxy/accounts/account-5765";
     const o = getChatOnlyEnvOverrides(tmp, pool);
-    expect(o.CURSOR_CONFIG_DIR).toBe(pool);
-    expect(o.HOME).toBeUndefined();
+    expect(o["CURSOR_CONFIG_DIR"]).toBe(pool);
+    expect(o["HOME"]).toBeUndefined();
   });
 });
 

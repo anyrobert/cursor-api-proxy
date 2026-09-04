@@ -20,12 +20,12 @@ export interface AccountInfo {
   name: string;
   configDir: string;
   authenticated: boolean;
-  email?: string;
-  displayName?: string;
-  authId?: string;
-  plan?: string;
-  subscriptionStatus?: string;
-  expiresAt?: string;
+  email?: string | undefined;
+  displayName?: string | undefined;
+  authId?: string | undefined;
+  plan?: string | undefined;
+  subscriptionStatus?: string | undefined;
+  expiresAt?: string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +126,7 @@ export async function handleAccountsList(): Promise<void> {
 
   for (let i = 0; i < names.length; i++) {
     const name = names[i];
+    if (!name) continue;
     const configDir = path.join(ACCOUNTS_DIR, name);
     const info = readAccountInfo(name, configDir);
 
@@ -136,9 +137,9 @@ export async function handleAccountsList(): Promise<void> {
       // sub matches this account's authId (prevents showing another account's data).
       const cachedToken = readCachedToken(configDir);
       const keychainMatchesAccount =
-        !!keychainToken &&
-        !!info.authId &&
-        tokenSub(keychainToken) === info.authId;
+        keychainToken && info.authId
+          ? tokenSub(keychainToken) === info.authId
+          : false;
       const token =
         cachedToken ?? (keychainMatchesAccount ? keychainToken : undefined);
 

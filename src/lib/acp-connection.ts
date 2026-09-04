@@ -12,39 +12,43 @@ export type AcpMcpServer =
       type: "http";
       name: string;
       url: string;
-      headers?: Array<{ name: string; value: string }>;
+      headers?: Array<{ name: string; value: string }> | undefined;
     }
   | {
-      type?: "stdio";
+      type?: "stdio" | undefined;
       name: string;
       command: string;
-      args?: string[];
-      env?: Array<{ name: string; value: string }>;
+      args?: string[] | undefined;
+      env?: Array<{ name: string; value: string }> | undefined;
     };
 
 export type AcpAvailableModel = { modelId: string; name: string };
 
 export type AcpInitializeResult = {
-  protocolVersion?: number;
+  protocolVersion?: number | undefined;
   agentCapabilities?: {
-    mcpCapabilities?: { http?: boolean; sse?: boolean };
+    mcpCapabilities?:
+      | { http?: boolean | undefined; sse?: boolean | undefined }
+      | undefined;
     [key: string]: unknown;
   };
 };
 
 export type AcpSessionResult = {
-  sessionId?: string;
-  models?: { availableModels?: AcpAvailableModel[] };
+  sessionId?: string | undefined;
+  models?: { availableModels?: AcpAvailableModel[] | undefined } | undefined;
 };
 
 export type AcpPermissionParams = {
-  sessionId?: string;
-  toolCall?: Record<string, unknown>;
-  options?: Array<{
-    optionId?: string;
-    name?: string;
-    kind?: string;
-  }>;
+  sessionId?: string | undefined;
+  toolCall?: Record<string, unknown> | undefined;
+  options?:
+    | Array<{
+        optionId?: string | undefined;
+        name?: string | undefined;
+        kind?: string | undefined;
+      }>
+    | undefined;
 };
 
 type JsonRpcMessage = {
@@ -63,17 +67,19 @@ type PendingRequest = {
 
 export type AcpConnectionOptions = {
   cwd: string;
-  env?: Record<string, string | undefined>;
-  requestTimeoutMs?: number;
-  spawnOptions?: { windowsVerbatimArguments?: boolean };
-  rawDebug?: boolean;
-  signal?: AbortSignal;
-  onAgentTextChunk?: (text: string) => void;
-  onAgentThoughtChunk?: (text: string) => void;
-  onSessionUpdate?: (update: Record<string, unknown>) => void;
-  onPermission?: (
-    params: AcpPermissionParams,
-  ) => string | undefined | Promise<string | undefined>;
+  env?: Record<string, string | undefined> | undefined;
+  requestTimeoutMs?: number | undefined;
+  spawnOptions?: { windowsVerbatimArguments?: boolean | undefined } | undefined;
+  rawDebug?: boolean | undefined;
+  signal?: AbortSignal | undefined;
+  onAgentTextChunk?: ((text: string) => void) | undefined;
+  onAgentThoughtChunk?: ((text: string) => void) | undefined;
+  onSessionUpdate?: ((update: Record<string, unknown>) => void) | undefined;
+  onPermission?:
+    | ((
+        params: AcpPermissionParams,
+      ) => string | undefined | Promise<string | undefined>)
+    | undefined;
 };
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
@@ -198,9 +204,9 @@ export class AcpConnection {
       this.#stderr += chunk;
     });
 
-    this.#lineReader = readline.createInterface({
-      input: this.child.stdout!,
-    });
+    const stdout = this.child.stdout;
+    if (!stdout) throw new Error("ACP child process has no stdout");
+    this.#lineReader = readline.createInterface({ input: stdout });
     this.#lineReader.on("line", (line) => this.#handleLine(line));
 
     this.child.once("error", (error) => {
@@ -210,7 +216,9 @@ export class AcpConnection {
     this.child.once("close", (code) => {
       this.#closed = true;
       this.#lineReader.close();
-      this.#opts.signal?.removeEventListener("abort", this.#abortHandler!);
+      if (this.#abortHandler) {
+        this.#opts.signal?.removeEventListener("abort", this.#abortHandler);
+      }
       this.#failPending(
         this.#spawnError ??
           new Error(`ACP child exited with code ${code ?? 1}`),
@@ -343,7 +351,9 @@ export class AcpConnection {
   async close(signal: NodeJS.Signals = "SIGKILL"): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
-    this.#opts.signal?.removeEventListener("abort", this.#abortHandler!);
+    if (this.#abortHandler) {
+      this.#opts.signal?.removeEventListener("abort", this.#abortHandler);
+    }
     this.#failPending(new Error("ACP connection closed"));
     try {
       this.child.stdin?.end();
@@ -382,13 +392,13 @@ export class AcpConnection {
     }
 
     if (message.method === "session/update") {
-      const update = (message.params?.update ?? message.params) as
+      const update = (message.params?.["update"] ?? message.params) as
         | Record<string, unknown>
         | undefined;
       if (!update) return;
       this.#opts.onSessionUpdate?.(update);
-      const type = update.sessionUpdate;
-      const text = extractAcpContentText(update.content);
+      const type = update["sessionUpdate"];
+      const text = extractAcpContentText(update["content"]);
       if (type === "agent_message_chunk" && text) {
         this.#opts.onAgentTextChunk?.(text);
       } else if (type === "agent_thought_chunk" && text) {
@@ -408,6 +418,7 @@ export class AcpConnection {
   }
 
   async #handlePermission(message: JsonRpcMessage): Promise<void> {
+    if (message.id == null) return;
     const params = (message.params ?? {}) as AcpPermissionParams;
     let optionId: string | undefined;
     try {
@@ -416,28 +427,29 @@ export class AcpConnection {
       optionId = undefined;
     }
     optionId ??= selectedOption(params, "reject_once", "reject-once");
-    this.#respond(message.id!, {
+    this.#respond(message.id, {
       outcome: { outcome: "selected", optionId },
     });
   }
 
   #handleCursorExtension(message: JsonRpcMessage): void {
+    if (message.id == null) return;
     const params = message.params ?? {};
     if (message.method === "cursor/ask_question") {
-      const questions = Array.isArray(params.questions)
-        ? (params.questions as Array<Record<string, unknown>>)
+      const questions = Array.isArray(params["questions"])
+        ? (params["questions"] as Array<Record<string, unknown>>)
         : [];
-      this.#respond(message.id!, {
+      this.#respond(message.id, {
         outcome: {
           outcome: "answered",
           answers: questions.map((question) => {
-            const options = Array.isArray(question.options)
-              ? (question.options as Array<Record<string, unknown>>)
+            const options = Array.isArray(question["options"])
+              ? (question["options"] as Array<Record<string, unknown>>)
               : [];
             return {
-              questionId: String(question.id ?? ""),
+              questionId: String(question["id"] ?? ""),
               selectedOptionIds:
-                options.length > 0 ? [String(options[0]?.id ?? "")] : [],
+                options.length > 0 ? [String(options[0]?.["id"] ?? "")] : [],
             };
           }),
         },
@@ -445,10 +457,10 @@ export class AcpConnection {
       return;
     }
     if (message.method === "cursor/create_plan") {
-      this.#respond(message.id!, { outcome: { outcome: "accepted" } });
+      this.#respond(message.id, { outcome: { outcome: "accepted" } });
       return;
     }
-    this.#respond(message.id!, {});
+    this.#respond(message.id, {});
   }
 
   #respond(id: number | string, result: Record<string, unknown>): void {

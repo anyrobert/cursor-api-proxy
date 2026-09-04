@@ -85,7 +85,7 @@ function createTestConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
 }
 
 async function fetchServer(
-  server: http.Server,
+  server: http.Server | https.Server,
   path: string,
   options: {
     method?: string;
@@ -121,13 +121,19 @@ async function fetchServer(
 }
 
 describe("startBridgeServer", () => {
-  let servers: (http.Server | https.Server)[] = [];
+  let servers: ReturnType<typeof startBridgeServer> = [http.createServer()];
+
+  function firstRunCall<T>(calls: readonly T[]): T {
+    const call = calls[0];
+    if (!call) throw new Error("Expected the agent to be called");
+    return call;
+  }
 
   afterEach(async () => {
     for (const s of servers) {
       await new Promise((r) => s.close(r));
     }
-    servers = [];
+    servers.length = 0;
   });
 
   it("responds 200 on GET /health", async () => {
@@ -391,7 +397,7 @@ describe("startBridgeServer", () => {
       }),
     });
     expect(status).toBe(200);
-    const [, args] = runMock.mock.calls[0];
+    const [, args] = firstRunCall(runMock.mock.calls);
     expect(args).toContain("gpt-5.6-sol-high");
   });
 
@@ -415,7 +421,7 @@ describe("startBridgeServer", () => {
       }),
     });
     expect(status).toBe(200);
-    const [, args] = runMock.mock.calls[0];
+    const [, args] = firstRunCall(runMock.mock.calls);
     expect(args).toContain("gpt-5.6-sol-low");
   });
 
@@ -490,7 +496,7 @@ describe("startBridgeServer", () => {
     });
     expect(status).toBe(200);
     expect(runMock).toHaveBeenCalledTimes(1);
-    const [, args, opts] = runMock.mock.calls[0];
+    const [, args, opts] = firstRunCall(runMock.mock.calls);
     // Prompt must NOT be in argv (would blow ARG_MAX / spawn E2BIG on long prompts).
     expect(args.some((a: string) => a.includes(marker))).toBe(false);
     // Prompt must be delivered via stdin instead.
@@ -518,7 +524,7 @@ describe("startBridgeServer", () => {
     });
     expect(status).toBe(200);
     expect(runMock).toHaveBeenCalledTimes(1);
-    const [, args, opts] = runMock.mock.calls[0];
+    const [, args, opts] = firstRunCall(runMock.mock.calls);
     expect(args.some((a: string) => a.includes(marker))).toBe(true);
     expect(opts?.stdinContent).toBeUndefined();
   });
@@ -625,7 +631,7 @@ describe("startBridgeServer", () => {
       }),
     });
     expect(status).toBe(200);
-    const [, args] = runMock.mock.calls[0];
+    const [, args] = firstRunCall(runMock.mock.calls);
     expect(args).toContain("--mode");
     expect(args).toContain("plan");
   });
@@ -655,7 +661,7 @@ describe("startBridgeServer", () => {
       }),
     });
     expect(status).toBe(200);
-    const [, args] = runMock.mock.calls[0];
+    const [, args] = firstRunCall(runMock.mock.calls);
     expect(args).not.toContain("--mode");
   });
 
@@ -680,7 +686,7 @@ describe("startBridgeServer", () => {
       }),
     });
     expect(status).toBe(200);
-    const [, args] = runMock.mock.calls[0];
+    const [, args] = firstRunCall(runMock.mock.calls);
     expect(args).toContain("--mode");
     expect(args).toContain("plan");
   });
@@ -696,6 +702,8 @@ describe("startBridgeServer", () => {
     });
 
     expect(servers.length).toBe(2);
+    const [server1, server2] = servers;
+    if (!server1 || !server2) throw new Error("Expected two servers");
 
     await Promise.all(
       servers.map(
@@ -703,8 +711,8 @@ describe("startBridgeServer", () => {
       ),
     );
 
-    const res1 = await fetchServer(servers[0], "/health");
-    const res2 = await fetchServer(servers[1], "/health");
+    const res1 = await fetchServer(server1, "/health");
+    const res2 = await fetchServer(server2, "/health");
 
     expect(res1.status).toBe(200);
     expect(res2.status).toBe(200);

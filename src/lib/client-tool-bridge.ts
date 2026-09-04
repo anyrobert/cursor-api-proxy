@@ -1,8 +1,9 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import * as http from "node:http";
+import { createRequire } from "node:module";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   CallToolRequestSchema,
   ErrorCode,
@@ -15,6 +16,24 @@ import type {
   ClientToolOutput,
   PendingClientToolCall,
 } from "./tool-types.js";
+
+type StreamableHttpTransport = Transport & {
+  handleRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void>;
+};
+
+type StreamableHttpTransportModule = {
+  StreamableHTTPServerTransport: new (options: {
+    sessionIdGenerator: () => string;
+    enableJsonResponse: boolean;
+  }) => StreamableHttpTransport;
+};
+
+const require = createRequire(import.meta.url);
+const { StreamableHTTPServerTransport } =
+  require("@modelcontextprotocol/sdk/server/streamableHttp.js") as StreamableHttpTransportModule;
 
 type ToolCallResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -55,7 +74,7 @@ export class ClientToolBridge {
   readonly #token = randomBytes(32).toString("base64url");
   readonly #path = `/mcp/${randomUUID()}`;
   readonly #mcp: Server;
-  readonly #transport: StreamableHTTPServerTransport;
+  readonly #transport: StreamableHttpTransport;
   readonly #httpServer: http.Server;
   readonly #pending = new Map<string, ParkedCall>();
   readonly #callListeners = new Set<() => void>();
@@ -106,7 +125,7 @@ export class ClientToolBridge {
       const itemId = `${responseType === "custom" ? "ctc" : "fc"}_${randomUUID().replace(/-/g, "")}`;
       let argumentsText = "{}";
       if (responseType === "custom") {
-        const input = args?.input;
+        const input = args?.["input"];
         if (typeof input !== "string") {
           throw new McpError(
             ErrorCode.InvalidParams,

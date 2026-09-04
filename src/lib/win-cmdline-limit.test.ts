@@ -71,7 +71,8 @@ describe("fitPromptToWinCmdline", () => {
     expect(fit.ok).toBe(true);
     if (!fit.ok) throw new Error("expected ok");
     expect(fit.truncated).toBe(true);
-    const last = fit.args[fit.args.length - 1]!;
+    const last = fit.args.at(-1);
+    if (last === undefined) throw new Error("expected prompt argument");
     expect(last.length).toBeLessThan(prompt.length);
     expect(last.startsWith(WIN_PROMPT_OMISSION_PREFIX)).toBe(true);
     expect(last.endsWith("y")).toBe(true);
@@ -90,7 +91,8 @@ describe("fitPromptToWinCmdline", () => {
     expect(fit.ok).toBe(true);
     if (!fit.ok) throw new Error("expected ok");
     expect(fit.truncated).toBe(true);
-    const last = fit.args[fit.args.length - 1]!;
+    const last = fit.args.at(-1);
+    if (last === undefined) throw new Error("expected prompt argument");
     expect(last.startsWith(preamble + BRIDGE_AGENT_PROMPT_SEPARATOR)).toBe(
       true,
     );

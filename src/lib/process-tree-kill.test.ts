@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { killProcessTree } from "./process-tree-kill.js";
 
 type FakeChild = {
-  pid?: number;
+  pid?: number | undefined;
   kill: (signal?: NodeJS.Signals) => boolean;
 };
 

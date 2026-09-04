@@ -21,6 +21,16 @@ export type AnthropicMessageParam = {
       }>;
 };
 
+type JsonRecord = {
+  [key: string]: unknown;
+  media_type?: unknown;
+  source?: unknown;
+  text?: unknown;
+  title?: unknown;
+  type?: unknown;
+  url?: unknown;
+};
+
 export type AnthropicMessagesRequest = {
   model?: string;
   /** Cursor CLI mode override: agent | ask | plan */
@@ -52,19 +62,30 @@ function systemToText(system: AnthropicMessagesRequest["system"]): string {
     .join("\n");
 }
 
-function anthropicBlockToText(p: any): string {
+function anthropicBlockToText(p: unknown): string {
   if (!p) return "";
   if (typeof p === "string") return p;
-  if (p.type === "text" && typeof p.text === "string") return p.text;
-  if (p.type === "image") {
-    const src = p.source;
-    if (src?.type === "base64")
-      return `[Image: base64 ${src.media_type ?? "image"}]`;
-    if (src?.type === "url") return `[Image: ${src.url}]`;
+  if (typeof p !== "object" || Array.isArray(p)) return "";
+  const block = p as JsonRecord;
+  if (block.type === "text" && typeof block.text === "string")
+    return block.text;
+  if (block.type === "image") {
+    const src = block.source;
+    if (!src || typeof src !== "object" || Array.isArray(src)) return "[Image]";
+    const source = src as JsonRecord;
+    if (source.type === "base64")
+      return `[Image: base64 ${String(source.media_type ?? "image")}]`;
+    if (source.type === "url" && typeof source.url === "string")
+      return `[Image: ${source.url}]`;
     return "[Image]";
   }
-  if (p.type === "document") {
-    const title = p.title ?? p.source?.url ?? "";
+  if (block.type === "document") {
+    const source = block.source;
+    const sourceUrl =
+      source && typeof source === "object" && !Array.isArray(source)
+        ? (source as JsonRecord).url
+        : undefined;
+    const title = block.title ?? sourceUrl ?? "";
     return title ? `[Document: ${title}]` : "[Document]";
   }
   return "";
@@ -75,7 +96,7 @@ function anthropicContentToText(
 ): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
-  return (content as any[]).map(anthropicBlockToText).filter(Boolean).join(" ");
+  return content.map(anthropicBlockToText).filter(Boolean).join(" ");
 }
 
 /**

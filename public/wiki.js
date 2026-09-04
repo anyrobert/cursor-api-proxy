@@ -39,15 +39,17 @@
       (entries) => {
         for (const e of entries) {
           if (e.isIntersecting) {
-            links.forEach((l) =>
-              l.classList.toggle("active", l.dataset.target === e.target.id),
-            );
+            links.forEach((l) => {
+              l.classList.toggle("active", l.dataset.target === e.target.id);
+            });
           }
         }
       },
       { rootMargin: "-80px 0px -70% 0px" },
     );
-    headings.forEach((h) => observer.observe(h));
+    headings.forEach((h) => {
+      observer.observe(h);
+    });
   }
 
   function applyRenderer() {

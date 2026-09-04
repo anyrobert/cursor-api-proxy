@@ -21,8 +21,8 @@ function getCandidates(
 
   const result: string[] = [];
 
-  if (process.env.CURSOR_CONFIG_DIR) {
-    result.push(path.join(process.env.CURSOR_CONFIG_DIR, "cli-config.json"));
+  if (process.env["CURSOR_CONFIG_DIR"]) {
+    result.push(path.join(process.env["CURSOR_CONFIG_DIR"], "cli-config.json"));
   }
 
   if (agentScriptPath) {
@@ -30,11 +30,11 @@ function getCandidates(
     result.push(path.join(agentDir, "..", "data", "config", "cli-config.json"));
   }
 
-  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  const home = process.env["HOME"] ?? process.env["USERPROFILE"] ?? "";
 
   if (process.platform === "win32") {
     const local =
-      process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
+      process.env["LOCALAPPDATA"] ?? path.join(home, "AppData", "Local");
     result.push(path.join(local, "cursor-agent", "cli-config.json"));
   } else if (process.platform === "darwin") {
     result.push(
@@ -47,7 +47,7 @@ function getCandidates(
       ),
     );
   } else {
-    const xdg = process.env.XDG_CONFIG_HOME ?? path.join(home, ".config");
+    const xdg = process.env["XDG_CONFIG_HOME"] ?? path.join(home, ".config");
     result.push(path.join(xdg, "cursor-agent", "cli-config.json"));
   }
 
@@ -72,9 +72,13 @@ export function runMaxModePreflight(
       if (!raw || typeof raw !== "object" || Object.keys(raw).length <= 1)
         continue;
 
-      raw.maxMode = true;
-      if (typeof raw.model === "object" && raw.model && raw.model !== null) {
-        (raw.model as Record<string, unknown>).maxMode = true;
+      raw["maxMode"] = true;
+      if (
+        typeof raw["model"] === "object" &&
+        raw["model"] &&
+        raw["model"] !== null
+      ) {
+        (raw["model"] as Record<string, unknown>)["maxMode"] = true;
       }
       fs.writeFileSync(candidate, JSON.stringify(raw, null, 2), "utf-8");
       return;

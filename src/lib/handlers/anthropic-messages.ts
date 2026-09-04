@@ -49,6 +49,8 @@ import {
 } from "../tool-session-registry.js";
 import {
   anthropicToolOutputs,
+  type ClientToolDefinition,
+  type ClientToolOutput,
   type PendingClientToolCall,
   parseAnthropicFunctionTools,
   resolveToolChoice,
@@ -239,11 +241,11 @@ export async function handleAnthropicMessages(
 ): Promise<void> {
   const { config, lastRequestedModelRef, modelCacheRef } = ctx;
   const body = JSON.parse(rawBody || "{}") as AnthropicMessagesRequest;
-  let selectedTools;
+  let selectedTools: ClientToolDefinition[] = [];
   let toolInstruction: string | undefined;
   let requireToolCall = false;
   let maxParallelToolCalls: number | undefined;
-  let submittedToolOutputs;
+  let submittedToolOutputs: ClientToolOutput[] = [];
   try {
     const parsedTools = parseAnthropicFunctionTools(body.tools);
     const choice = resolveToolChoice(parsedTools, body.tool_choice, {
@@ -319,7 +321,7 @@ export async function handleAnthropicMessages(
   const cleanSystemText =
     typeof cleanSystem === "string"
       ? cleanSystem
-      : (cleanSystem ?? [])
+      : (Array.isArray(cleanSystem) ? cleanSystem : [])
           .filter(
             (part: { type?: string; text?: string }) => part?.type === "text",
           )
@@ -542,20 +544,21 @@ export async function handleAnthropicMessages(
         cmdArgs,
         prompt: agentPrompt,
         tools: selectedTools,
-        tempDir,
-        configDir,
+        ...(tempDir ? { tempDir } : {}),
+        ...(configDir ? { configDir } : {}),
         signal: abortController.signal,
-        modelDisplayName: modelCatalogName,
-        requireToolCall,
-        maxParallelToolCalls,
+        ...(modelCatalogName ? { modelDisplayName: modelCatalogName } : {}),
+        ...(requireToolCall !== undefined ? { requireToolCall } : {}),
+        ...(maxParallelToolCalls !== undefined ? { maxParallelToolCalls } : {}),
       });
-      record = ctx.toolSessions.createRecord({
+      const sessionRecord = ctx.toolSessions.createRecord({
         api: "anthropic",
         ownerKey,
         model: displayModel ?? cursorModel,
         configDir,
         session,
       });
+      record = sessionRecord;
       abortController.signal.addEventListener(
         "abort",
         () => void session.close(),
@@ -568,7 +571,7 @@ export async function handleAnthropicMessages(
         id: msgId,
         model: displayModel,
         promptLength: agentPrompt.length,
-        run: (listener) => ctx.toolSessions.collect(record!, listener),
+        run: (listener) => ctx.toolSessions.collect(sessionRecord, listener),
       });
       reportRequestSuccess(configDir, Date.now() - startedAt);
       if (

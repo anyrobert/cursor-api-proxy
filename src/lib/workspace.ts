@@ -34,15 +34,15 @@ export function getChatOnlyEnvOverrides(
     return overrides;
   }
 
-  overrides.HOME = workspaceDir;
-  overrides.USERPROFILE = workspaceDir;
+  overrides["HOME"] = workspaceDir;
+  overrides["USERPROFILE"] = workspaceDir;
   if (process.platform === "win32") {
     const appDataRoaming = path.join(workspaceDir, "AppData", "Roaming");
     const appDataLocal = path.join(workspaceDir, "AppData", "Local");
-    overrides.APPDATA = appDataRoaming;
-    overrides.LOCALAPPDATA = appDataLocal;
+    overrides["APPDATA"] = appDataRoaming;
+    overrides["LOCALAPPDATA"] = appDataLocal;
   } else {
-    overrides.XDG_CONFIG_HOME = path.join(workspaceDir, ".config");
+    overrides["XDG_CONFIG_HOME"] = path.join(workspaceDir, ".config");
   }
   return overrides;
 }

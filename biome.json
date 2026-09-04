@@ -12,7 +12,10 @@
       "!!**/.agents",
       "!!**/node_modules",
       "!!**/dist",
-      "!!**/*.generated.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"
+      "!!**/*.generated.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",
+      "!!**/*.min.js",
+      "!!public/vendor",
+      "!!**/*.tsbuildinfo"
     ],
     "ignoreUnknown": true
   },

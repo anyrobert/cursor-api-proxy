@@ -18,8 +18,14 @@ export type ParsedArgs = {
   deepClean: boolean;
   dryRun: boolean;
   /** Set via `--mode`; default applied in config when omitted. */
-  mode?: CursorExecutionMode;
+  mode?: CursorExecutionMode | undefined;
 };
+
+function requiredArg(argv: string[], index: number, option: string): string {
+  const value = argv[index];
+  if (value === undefined) throw new Error(`${option} requires a value`);
+  return value;
+}
 
 export function parseArgs(argv: string[]): ParsedArgs {
   let tailscale = false;
@@ -41,7 +47,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let mode: CursorExecutionMode | undefined;
 
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+    const arg = requiredArg(argv, i, "argument");
 
     if (arg === "requests") {
       requests = true;
@@ -50,7 +56,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
     if (arg === "--limit" || arg.startsWith("--limit=")) {
       const value =
-        arg === "--limit" ? argv[++i] : arg.slice("--limit=".length);
+        arg === "--limit"
+          ? requiredArg(argv, ++i, "--limit")
+          : arg.slice("--limit=".length);
       if (!value || value.startsWith("-")) {
         throw new Error("--limit requires a positive integer");
       }
@@ -74,7 +82,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
     if (arg === "--interval" || arg.startsWith("--interval=")) {
       const value =
-        arg === "--interval" ? argv[++i] : arg.slice("--interval=".length);
+        arg === "--interval"
+          ? requiredArg(argv, ++i, "--interval")
+          : arg.slice("--interval=".length);
       if (!value || value.startsWith("-")) {
         throw new Error(
           "--interval requires a positive number between 0.001 and 86400 seconds",
@@ -93,16 +103,18 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
     if (arg === "login" || arg === "add-account") {
       login = true;
-      if (i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
-        accountName = argv[++i];
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("-")) {
+        accountName = requiredArg(argv, ++i, "login");
       }
       continue;
     }
 
     if (arg === "logout" || arg === "remove-account") {
       logout = true;
-      if (i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
-        accountName = argv[++i];
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("-")) {
+        accountName = requiredArg(argv, ++i, "logout");
       }
       continue;
     }
@@ -138,10 +150,14 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
 
     if (arg === "--mode") {
-      if (i + 1 >= argv.length || argv[i + 1]?.startsWith("-")) {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith("-")) {
         throw new Error("--mode requires a value (agent, ask, or plan)");
       }
-      mode = parseExecutionModeFromRequest(argv[++i]!, "--mode");
+      mode = parseExecutionModeFromRequest(
+        requiredArg(argv, ++i, "--mode"),
+        "--mode",
+      );
       continue;
     }
 
@@ -192,7 +208,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     resetHwid,
     deepClean,
     dryRun,
-    mode,
+    ...(mode !== undefined ? { mode } : {}),
   };
 }
 

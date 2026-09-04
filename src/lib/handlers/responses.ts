@@ -55,6 +55,8 @@ import {
   toolSessionOwnerKey,
 } from "../tool-session-registry.js";
 import {
+  type ClientToolDefinition,
+  type ClientToolOutput,
   type PendingClientToolCall,
   parseOpenAiFunctionTools,
   resolveToolChoice,
@@ -97,7 +99,7 @@ function structuredResponseObject(opts: {
   createdAt: number;
   model: string | undefined;
   result: ToolTurnResult;
-  previousResponseId?: string | null;
+  previousResponseId?: string | null | undefined;
   promptLength: number;
   messageId?: string;
 }) {
@@ -166,7 +168,7 @@ async function writeStructuredResponseTurn(opts: {
   id: string;
   createdAt: number;
   model: string | undefined;
-  previousResponseId?: string | null;
+  previousResponseId?: string | null | undefined;
   promptLength: number;
   run: (listener?: (event: ToolTurnEvent) => void) => Promise<ToolTurnResult>;
 }): Promise<ToolTurnResult> {
@@ -415,8 +417,10 @@ function writeResponseEvent(
   res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
 }
 
-function responseContentText(message: any): string {
-  const content = message?.content;
+function responseContentText(message: unknown): string {
+  if (!message || typeof message !== "object" || Array.isArray(message))
+    return "";
+  const content = (message as Record<string, unknown>)["content"];
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content
@@ -443,13 +447,15 @@ export async function handleResponses(
 ): Promise<void> {
   const { config, lastRequestedModelRef, modelCacheRef } = ctx;
   const body = JSON.parse(rawBody || "{}") as OpenAiResponsesRequest;
-  let selectedTools;
+  let selectedTools: ClientToolDefinition[] = [];
   let toolInstruction: string | undefined;
   let requireToolCall = false;
   let maxParallelToolCalls: number | undefined;
-  let submittedToolOutputs;
+  let submittedToolOutputs: ClientToolOutput[] = [];
   try {
-    const parsedTools = parseOpenAiFunctionTools(body.tools);
+    const parsedTools = parseOpenAiFunctionTools(body.tools, undefined, {
+      ignoreProviderExecutedTools: true,
+    });
     const choice = resolveToolChoice(parsedTools, body.tool_choice, {
       parallelToolCalls: body.parallel_tool_calls,
     });
@@ -504,16 +510,18 @@ export async function handleResponses(
   const requested = normalizeModelId(body.model);
   const model = resolveModel(requested, lastRequestedModelRef, config);
   const models = await getCachedCursorModels(config, modelCacheRef);
-  let decision;
+  let decision: ReturnType<typeof resolveModelForExecution>;
   try {
     decision = resolveModelForExecution({
       requested: model,
       defaultModel: config.defaultModel,
       availableCursorIds: models.map((m) => m.id),
-      reasoningEffort:
-        typeof body.reasoning?.effort === "string"
-          ? body.reasoning.effort
-          : undefined,
+      ...(typeof (body.reasoning as { effort?: unknown } | undefined)
+        ?.effort === "string"
+        ? {
+            reasoningEffort: (body.reasoning as { effort: string }).effort,
+          }
+        : {}),
     });
   } catch (error) {
     if (!(error instanceof UnsupportedReasoningEffortError)) throw error;
@@ -567,8 +575,8 @@ export async function handleResponses(
   ];
   const prompt = buildPromptFromMessages(messagesWithTools);
 
-  const trafficMessages: TrafficMessage[] = cleanMessages.map((m: any) => ({
-    role: String(m?.role ?? "user"),
+  const trafficMessages: TrafficMessage[] = cleanMessages.map((m) => ({
+    role: String(m["role"] ?? "user"),
     content: responseContentText(m),
   }));
   logTrafficRequest(
@@ -770,20 +778,21 @@ export async function handleResponses(
         cmdArgs,
         prompt: agentPrompt,
         tools: selectedTools,
-        tempDir,
-        configDir,
+        ...(tempDir ? { tempDir } : {}),
+        ...(configDir ? { configDir } : {}),
         signal: abortController.signal,
-        modelDisplayName: modelCatalogName,
-        requireToolCall,
-        maxParallelToolCalls,
+        ...(modelCatalogName ? { modelDisplayName: modelCatalogName } : {}),
+        ...(requireToolCall !== undefined ? { requireToolCall } : {}),
+        ...(maxParallelToolCalls !== undefined ? { maxParallelToolCalls } : {}),
       });
-      record = ctx.toolSessions.createRecord({
+      const sessionRecord = ctx.toolSessions.createRecord({
         api: "responses",
         ownerKey,
         model: displayModel ?? cursorModel,
         configDir,
         session,
       });
+      record = sessionRecord;
       abortController.signal.addEventListener(
         "abort",
         () => void session.close(),
@@ -799,9 +808,9 @@ export async function handleResponses(
         previousResponseId: body.previous_response_id,
         promptLength: agentPrompt.length,
         run: async (listener) => {
-          const turn = await ctx.toolSessions.collect(record!, listener);
+          const turn = await ctx.toolSessions.collect(sessionRecord, listener);
           if (turn.status === "tool_calls") {
-            ctx.toolSessions.aliasResponse(record!, id);
+            ctx.toolSessions.aliasResponse(sessionRecord, id);
           }
           return turn;
         },
