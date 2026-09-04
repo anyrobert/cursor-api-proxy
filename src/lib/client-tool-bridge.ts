@@ -55,7 +55,7 @@ export class ClientToolBridge {
   readonly serverName: string;
 
   readonly #definitions: ClientToolDefinition[];
-  readonly #definitionNames: Set<string>;
+  readonly #definitionsByName: Map<string, ClientToolDefinition>;
   readonly #token = randomBytes(32).toString("base64url");
   readonly #path = `/mcp/${randomUUID()}`;
   readonly #mcp: Server;
@@ -70,7 +70,9 @@ export class ClientToolBridge {
 
   constructor(definitions: readonly ClientToolDefinition[]) {
     this.#definitions = [...definitions];
-    this.#definitionNames = new Set(definitions.map((tool) => tool.name));
+    this.#definitionsByName = new Map(
+      definitions.map((tool) => [tool.name, tool]),
+    );
     this.serverName = `cursor-api-proxy-${randomUUID().slice(0, 8)}`;
 
     this.#mcp = new Server(
@@ -95,7 +97,8 @@ export class ClientToolBridge {
 
     this.#mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
-      if (!this.#definitionNames.has(name)) {
+      const definition = this.#definitionsByName.get(name);
+      if (!definition) {
         throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${name}`);
       }
       if (this.#closed) {
@@ -103,15 +106,27 @@ export class ClientToolBridge {
       }
 
       const callId = `call_${randomUUID().replace(/-/g, "")}`;
-      const itemId = `fc_${randomUUID().replace(/-/g, "")}`;
-      let argumentsJson = "{}";
-      try {
-        argumentsJson = JSON.stringify(args ?? {});
-      } catch {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Arguments for ${name} are not JSON serializable`,
-        );
+      const responseType = definition.responseType ?? "function";
+      const itemId = `${responseType === "custom" ? "ctc" : "fc"}_${randomUUID().replace(/-/g, "")}`;
+      let argumentsText = "{}";
+      if (responseType === "custom") {
+        const input = args?.input;
+        if (typeof input !== "string") {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            `Custom tool ${name} requires a string input`,
+          );
+        }
+        argumentsText = input;
+      } else {
+        try {
+          argumentsText = JSON.stringify(args ?? {});
+        } catch {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            `Arguments for ${name} are not JSON serializable`,
+          );
+        }
       }
 
       return new Promise<ToolCallResult>((resolve, reject) => {
@@ -119,8 +134,12 @@ export class ClientToolBridge {
         this.#pending.set(callId, {
           callId,
           itemId,
-          name,
-          arguments: argumentsJson,
+          name: definition.responseName ?? name,
+          ...(definition.responseNamespace
+            ? { namespace: definition.responseNamespace }
+            : {}),
+          type: responseType,
+          arguments: argumentsText,
           exposed: false,
           resolve,
           reject,
@@ -208,10 +227,12 @@ export class ClientToolBridge {
 
   pendingCalls(): PendingClientToolCall[] {
     return [...this.#pending.values()].map(
-      ({ callId, itemId, name, arguments: args }) => ({
+      ({ callId, itemId, name, namespace, type, arguments: args }) => ({
         callId,
         itemId,
         name,
+        ...(namespace ? { namespace } : {}),
+        ...(type ? { type } : {}),
         arguments: args,
       }),
     );
@@ -220,10 +241,12 @@ export class ClientToolBridge {
   unexposedCalls(): PendingClientToolCall[] {
     return [...this.#pending.values()]
       .filter((call) => !call.exposed)
-      .map(({ callId, itemId, name, arguments: args }) => ({
+      .map(({ callId, itemId, name, namespace, type, arguments: args }) => ({
         callId,
         itemId,
         name,
+        ...(namespace ? { namespace } : {}),
+        ...(type ? { type } : {}),
         arguments: args,
       }));
   }
