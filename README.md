@@ -272,7 +272,7 @@ One module resolves aliases, defaults, path resolution, platform fallbacks, and 
 | `CURSOR_BRIDGE_STRICT_MODEL` | `true` | Reject a requested model when Cursor's CLI/ACP catalogs cannot match it instead of silently selecting the ACP session default. |
 | `CURSOR_BRIDGE_FORCE` | `false` | Pass `--force` to Cursor CLI |
 | `CURSOR_BRIDGE_APPROVE_MCPS` | `false` | Pass `--approve-mcps` to Cursor CLI |
-| `CURSOR_BRIDGE_TIMEOUT_MS` | `300000` | Timeout per completion and idle TTL for a parked client-tool turn (ms). |
+| `CURSOR_BRIDGE_TIMEOUT_MS` | `300000` | Timeout per completion and idle TTL for a parked client-tool turn (ms). Raise above wall-clock for long Codex/agent turns, otherwise `cursor-agent` is SIGKILLed mid-stream. |
 | `CURSOR_BRIDGE_TLS_CERT` | — | Path to TLS certificate file (e.g. Tailscale cert). Use with `CURSOR_BRIDGE_TLS_KEY` for HTTPS. |
 | `CURSOR_BRIDGE_TLS_KEY` | — | Path to TLS private key file. Use with `CURSOR_BRIDGE_TLS_CERT` for HTTPS. |
 | `CURSOR_BRIDGE_SESSIONS_LOG` | `~/.cursor-api-proxy/sessions.log` | Path to log file; each request is appended as a line (timestamp, method, path, IP, status). |
@@ -386,6 +386,8 @@ account1 on 8765, account2 on 8766, and so on.
 ## Streaming
 
 The proxy supports `stream: true` on `POST /v1/chat/completions`, `POST /v1/responses`, and `POST /v1/messages`. Chat Completions and Messages return Server-Sent Events (SSE) in OpenAI/Anthropic streaming formats. Responses uses OpenAI Responses semantic SSE events (`response.created`, `response.output_text.delta`, …). Cursor CLI emits incremental deltas plus a final full message; the proxy deduplicates output so clients receive each chunk only once.
+
+While the agent is silent (thinking / tools, no tokens yet), the proxy writes SSE comment heartbeats (`: keepalive`) every 15s so clients with idle timeouts — notably Codex CLI — do not drop the stream. Codex `stream_idle_timeout_ms` is usually unnecessary. Long turns still need `CURSOR_BRIDGE_TIMEOUT_MS` above the run wall-clock.
 
 Test streaming from repo root, with the proxy running:
 

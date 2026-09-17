@@ -13,7 +13,7 @@ import {
 } from "../agent-runner.js";
 import type { ToolTurnEvent, ToolTurnResult } from "../acp-tool-session.js";
 import { createStreamParser } from "../cli-stream-parser.js";
-import { json, writeSseHeaders } from "../http.js";
+import { json, startSseKeepalive, writeSseHeaders } from "../http.js";
 import {
   resolveModelForExecution,
   UnsupportedReasoningEffortError,
@@ -156,70 +156,75 @@ async function writeStructuredChatTurn(opts: {
   }
 
   writeSseHeaders(opts.res);
-  const writeChunk = (
-    delta: Record<string, unknown>,
-    finishReason: string | null = null,
-    usage?: Record<string, number>,
-  ) => {
-    opts.res.write(
-      `data: ${JSON.stringify({
-        id: opts.id,
-        object: "chat.completion.chunk",
-        created: opts.created,
-        model: opts.model,
-        choices: [{ index: 0, delta, finish_reason: finishReason }],
-        ...(usage ? { usage } : {}),
-      })}\n\n`,
-    );
-  };
-  writeChunk({ role: "assistant" });
-  let emittedText = "";
-  let emittedReasoning = "";
-  const result = await opts.run((event) => {
-    if (event.type === "text") {
-      emittedText += event.text;
-      writeChunk({ content: event.text });
-    } else {
-      emittedReasoning += event.text;
-      writeChunk({ reasoning_content: event.text });
-    }
-  });
-  if (result.reasoning.length > emittedReasoning.length) {
-    writeChunk({
-      reasoning_content: result.reasoning.slice(emittedReasoning.length),
+  const stopKeepalive = startSseKeepalive(opts.res);
+  try {
+    const writeChunk = (
+      delta: Record<string, unknown>,
+      finishReason: string | null = null,
+      usage?: Record<string, number>,
+    ) => {
+      opts.res.write(
+        `data: ${JSON.stringify({
+          id: opts.id,
+          object: "chat.completion.chunk",
+          created: opts.created,
+          model: opts.model,
+          choices: [{ index: 0, delta, finish_reason: finishReason }],
+          ...(usage ? { usage } : {}),
+        })}\n\n`,
+      );
+    };
+    writeChunk({ role: "assistant" });
+    let emittedText = "";
+    let emittedReasoning = "";
+    const result = await opts.run((event) => {
+      if (event.type === "text") {
+        emittedText += event.text;
+        writeChunk({ content: event.text });
+      } else {
+        emittedReasoning += event.text;
+        writeChunk({ reasoning_content: event.text });
+      }
     });
-  }
-  if (result.text.length > emittedText.length) {
-    writeChunk({ content: result.text.slice(emittedText.length) });
-  }
-  if (result.status === "tool_calls") {
-    result.toolCalls.forEach((call, index) => {
+    if (result.reasoning.length > emittedReasoning.length) {
       writeChunk({
-        tool_calls: [
-          {
-            index,
-            id: call.callId,
-            type: "function",
-            function: { name: call.name, arguments: call.arguments },
-          },
-        ],
+        reasoning_content: result.reasoning.slice(emittedReasoning.length),
       });
-    });
+    }
+    if (result.text.length > emittedText.length) {
+      writeChunk({ content: result.text.slice(emittedText.length) });
+    }
+    if (result.status === "tool_calls") {
+      result.toolCalls.forEach((call, index) => {
+        writeChunk({
+          tool_calls: [
+            {
+              index,
+              id: call.callId,
+              type: "function",
+              function: { name: call.name, arguments: call.arguments },
+            },
+          ],
+        });
+      });
+    }
+    const promptTokens = Math.max(1, Math.round(opts.promptLength / 4));
+    const completionTokens = Math.max(1, Math.round(result.text.length / 4));
+    writeChunk(
+      {},
+      result.status === "tool_calls" ? "tool_calls" : "stop",
+      {
+        prompt_tokens: promptTokens,
+        completion_tokens: completionTokens,
+        total_tokens: promptTokens + completionTokens,
+      },
+    );
+    opts.res.write("data: [DONE]\n\n");
+    opts.res.end();
+    return result;
+  } finally {
+    stopKeepalive();
   }
-  const promptTokens = Math.max(1, Math.round(opts.promptLength / 4));
-  const completionTokens = Math.max(1, Math.round(result.text.length / 4));
-  writeChunk(
-    {},
-    result.status === "tool_calls" ? "tool_calls" : "stop",
-    {
-      prompt_tokens: promptTokens,
-      completion_tokens: completionTokens,
-      total_tokens: promptTokens + completionTokens,
-    },
-  );
-  opts.res.write("data: [DONE]\n\n");
-  opts.res.end();
-  return result;
 }
 
 export async function handleChatCompletions(
@@ -598,6 +603,7 @@ export async function handleChatCompletions(
     abortOnClientDisconnect(res, abortController);
 
     writeSseHeaders(res, truncatedHeaders);
+    const stopKeepalive = startSseKeepalive(res);
     res.on("error", () => {
       /* client disconnected mid-stream */
     });
@@ -630,6 +636,7 @@ export async function handleChatCompletions(
         modelCatalogName,
       )
         .then(({ code, stderr: stderrOut }) => {
+          stopKeepalive();
           const latencyMs = Date.now() - streamStart;
           reportRequestEnd(configDir);
 
@@ -691,6 +698,7 @@ export async function handleChatCompletions(
           res.end();
         })
         .catch((err) => {
+          stopKeepalive();
           reportRequestEnd(configDir);
           if (!abortController.signal.aborted) {
             reportRequestError(configDir, Date.now() - streamStart);
@@ -773,6 +781,7 @@ export async function handleChatCompletions(
       modelCatalogName,
     )
       .then(({ code, stderr: stderrOut }) => {
+        stopKeepalive();
         const latencyMs = Date.now() - streamStart;
         reportRequestEnd(configDir);
 
@@ -799,6 +808,7 @@ export async function handleChatCompletions(
         res.end();
       })
       .catch((err) => {
+        stopKeepalive();
         reportRequestEnd(configDir);
         if (!abortController.signal.aborted) {
           reportRequestError(configDir, Date.now() - streamStart);

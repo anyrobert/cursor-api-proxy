@@ -305,11 +305,14 @@ rl.on("line", (line) => {
       ? runToolPrompt()
       : scenario === "builtin_permission"
         ? runBuiltinPermissionPrompt()
-        : Promise.resolve().then(() => {
+        : Promise.resolve().then(async () => {
             if (scenario === "with_thought") {
               update("agent_thought_chunk", {
                 content: { text: "SECRET_THOUGHT" },
               });
+            }
+            if (scenario === "slow_text") {
+              await new Promise((resolve) => setTimeout(resolve, 120));
             }
             update("agent_message_chunk", {
               content: { text: "Hello from fake ACP" },
