@@ -1,7 +1,13 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Readable } from "node:stream";
 import { IncomingMessage, ServerResponse } from "node:http";
-import { extractBearerToken, json, readBody } from "./http.js";
+import {
+  extractBearerToken,
+  json,
+  readBody,
+  setDefaultSseKeepaliveIntervalMsForTests,
+  startSseKeepalive,
+} from "./http.js";
 
 function mockRequest(headers: Record<string, string | string[] | undefined> = {}): IncomingMessage {
   return {
@@ -87,5 +93,98 @@ describe("readBody", () => {
     const req = mockRequestBody(payload);
     const body = await readBody(req);
     expect(body).toBe(payload);
+  });
+});
+
+describe("startSseKeepalive", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    setDefaultSseKeepaliveIntervalMsForTests();
+    vi.useRealTimers();
+  });
+
+  function mockSseResponse() {
+    const listeners = new Map<string, Array<() => void>>();
+    const write = vi.fn();
+    const res = {
+      write,
+      writableEnded: false,
+      destroyed: false,
+      on(event: string, cb: () => void) {
+        const list = listeners.get(event) ?? [];
+        list.push(cb);
+        listeners.set(event, list);
+        return res;
+      },
+      off(event: string, cb: () => void) {
+        const list = listeners.get(event) ?? [];
+        listeners.set(
+          event,
+          list.filter((listener) => listener !== cb),
+        );
+        return res;
+      },
+    };
+    return {
+      res: res as unknown as ServerResponse,
+      write,
+      emit(event: string) {
+        for (const cb of listeners.get(event) ?? []) cb();
+      },
+    };
+  }
+
+  it("writes SSE comment heartbeats on the interval", () => {
+    const { res, write } = mockSseResponse();
+
+    const stop = startSseKeepalive(res, 1000);
+    expect(write).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledWith(": keepalive\n\n");
+
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(2);
+
+    stop();
+    vi.advanceTimersByTime(2000);
+    expect(write).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips writes after the response ends", () => {
+    const { res, write } = mockSseResponse();
+
+    const stop = startSseKeepalive(res, 500);
+    (res as { writableEnded: boolean }).writableEnded = true;
+    vi.advanceTimersByTime(500);
+    expect(write).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("uses the test default interval when no interval is passed", () => {
+    setDefaultSseKeepaliveIntervalMsForTests(250);
+    const { res, write } = mockSseResponse();
+
+    const stop = startSseKeepalive(res);
+    vi.advanceTimersByTime(249);
+    expect(write).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(write).toHaveBeenCalledWith(": keepalive\n\n");
+    stop();
+  });
+
+  it("stops automatically when the response closes", () => {
+    const { res, write, emit } = mockSseResponse();
+
+    startSseKeepalive(res, 100);
+    vi.advanceTimersByTime(100);
+    expect(write).toHaveBeenCalledTimes(1);
+
+    emit("close");
+    vi.advanceTimersByTime(500);
+    expect(write).toHaveBeenCalledTimes(1);
   });
 });
