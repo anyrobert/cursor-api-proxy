@@ -9,6 +9,27 @@ const waiting = new Map();
 let mcpServers = [];
 let nextMcpId = 1;
 let nextClientRequestId = 10_000;
+let selectedModel = "default";
+const parameterValues = {};
+
+const PARAMETERIZED_MODELS = ["default", "glm-5.2", "claude-opus-5", "gpt-5.6-sol", "composer-2.5"];
+const PARAMETER_DEFAULTS = {
+  "glm-5.2": {
+    reasoning: { current: "high", values: ["high", "max"] },
+  },
+  "claude-opus-5": {
+    thinking: { current: "true", values: ["false", "true"] },
+    effort: { current: "high", values: ["low", "medium", "high", "xhigh", "max"] },
+    fast: { current: "true", values: ["false", "true"] },
+  },
+  "gpt-5.6-sol": {
+    reasoning: { current: "medium", values: ["none", "low", "medium", "high", "xhigh", "max"] },
+    fast: { current: "false", values: ["false", "true"] },
+  },
+  "composer-2.5": {
+    fast: { current: "true", values: ["false", "true"] },
+  },
+};
 
 function send(message) {
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
@@ -38,6 +59,20 @@ function sessionNewResult() {
             modelId: "gpt-5.6-sol[reasoning=high]",
             name: "GPT-5.6 Sol High",
           },
+        ],
+      },
+    };
+  }
+  if (scenario === "parameterized_models") {
+    return {
+      sessionId: "sess-1",
+      models: {
+        availableModels: [
+          { modelId: "default", name: "Auto" },
+          { modelId: "glm-5.2", name: "GLM 5.2" },
+          { modelId: "claude-opus-5", name: "Claude Opus 5" },
+          { modelId: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+          { modelId: "composer-2.5", name: "Composer 2.5" },
         ],
       },
     };
@@ -225,6 +260,48 @@ async function runBuiltinPermissionPrompt() {
   update("agent_message_chunk", { content: { text: "Builtin handled" } });
 }
 
+function parameterizedConfigResult(params) {
+  if (params?.configId === "model") {
+    if (!PARAMETERIZED_MODELS.includes(params.value)) {
+      return {
+        error: {
+          code: -32602,
+          message: "Invalid params",
+          data: { message: `Invalid model value: ${params.value}` },
+        },
+      };
+    }
+    selectedModel = params.value;
+    for (const key of Object.keys(parameterValues)) delete parameterValues[key];
+  } else if (params?.configId) {
+    const spec = PARAMETER_DEFAULTS[selectedModel]?.[params.configId];
+    if (!spec || !spec.values.includes(params.value)) {
+      return {
+        error: {
+          code: -32602,
+          message: "Invalid params",
+          data: { message: `Invalid value for ${params.configId}: ${params.value}` },
+        },
+      };
+    }
+    parameterValues[params.configId] = params.value;
+  }
+  const specs = PARAMETER_DEFAULTS[selectedModel] ?? {};
+  const configOptions = [
+    {
+      id: "model",
+      currentValue: selectedModel,
+      options: PARAMETERIZED_MODELS.map((value) => ({ value })),
+    },
+    ...Object.entries(specs).map(([id, spec]) => ({
+      id,
+      currentValue: parameterValues[id] ?? spec.current,
+      options: spec.values.map((value) => ({ value })),
+    })),
+  ];
+  return { result: { configOptions } };
+}
+
 function isToolScenario() {
   return scenario.startsWith("tool_");
 }
@@ -293,6 +370,11 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "session/set_config_option") {
+    if (scenario === "parameterized_models") {
+      const outcome = parameterizedConfigResult(msg.params);
+      send({ id: msg.id, ...outcome });
+      return;
+    }
     send({ id: msg.id, result: {} });
     return;
   }
