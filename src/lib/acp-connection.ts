@@ -2,6 +2,12 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
 import { debuglog } from "node:util";
 
+import {
+  ACP_CLIENT_CAPABILITIES,
+  applyAcpModelPlan,
+  formatAcpRpcError,
+  type AcpModelPlan,
+} from "./acp-model.js";
 import { trackChildProcess } from "./process.js";
 import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
 
@@ -52,7 +58,11 @@ type JsonRpcMessage = {
   method?: string;
   params?: Record<string, unknown>;
   result?: unknown;
-  error?: { code?: number; message?: string };
+  error?: {
+    code?: number;
+    message?: string;
+    data?: { message?: string } | string;
+  };
 };
 
 type PendingRequest = {
@@ -242,10 +252,7 @@ export class AcpConnection {
     debugAcp("ACP step: initialize");
     return (await this.request("initialize", {
       protocolVersion: 1,
-      clientCapabilities: {
-        fs: { readTextFile: false, writeTextFile: false },
-        terminal: false,
-      },
+      clientCapabilities: ACP_CLIENT_CAPABILITIES,
       clientInfo: { name: "cursor-api-proxy", version: "1.0.0" },
     })) as AcpInitializeResult;
   }
@@ -267,11 +274,17 @@ export class AcpConnection {
   }
 
   async setSessionModel(sessionId: string, value: string): Promise<void> {
-    debugAcp("ACP step: session/set_config_option (model)");
-    await this.request("session/set_config_option", {
-      sessionId,
-      configId: "model",
-      value,
+    await this.configureSessionModel(sessionId, { action: "set", modelId: value });
+  }
+
+  async configureSessionModel(sessionId: string, plan: AcpModelPlan): Promise<void> {
+    await applyAcpModelPlan(plan, async (configId, value) => {
+      debugAcp("ACP step: session/set_config_option (%s)", configId);
+      return this.request("session/set_config_option", {
+        sessionId,
+        configId,
+        value,
+      });
     });
   }
 
@@ -373,7 +386,7 @@ export class AcpConnection {
       this.#pending.delete(id);
       if (waiter.timer) clearTimeout(waiter.timer);
       if (message.error) {
-        waiter.reject(new Error(message.error.message ?? "ACP error"));
+        waiter.reject(new Error(formatAcpRpcError(message.error)));
       } else {
         waiter.resolve(message.result);
       }
