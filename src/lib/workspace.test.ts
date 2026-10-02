@@ -2,7 +2,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { getChatOnlyEnvOverrides, resolveWorkspace } from "./workspace.js";
+import {
+  CLIENT_TOOL_BUILTIN_DENY,
+  getChatOnlyEnvOverrides,
+  resolveWorkspace,
+} from "./workspace.js";
 import type { BridgeConfig } from "./config.js";
 
 function baseConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
@@ -60,6 +64,26 @@ describe("resolveWorkspace", () => {
     const { workspaceDir, tempDir } = resolveWorkspace(cfg, undefined);
     expect(tempDir).toBeDefined();
     expect(workspaceDir).toContain("cursor-proxy-");
+  });
+
+  it("leaves built-in tools allowed in the temp cli-config by default", () => {
+    const cfg = baseConfig({ chatOnlyWorkspace: true });
+    const { workspaceDir } = resolveWorkspace(cfg, undefined);
+    const cliConfig = JSON.parse(
+      fs.readFileSync(path.join(workspaceDir, ".cursor", "cli-config.json"), "utf8"),
+    );
+    expect(cliConfig.permissions.deny).toEqual([]);
+  });
+
+  it("denies built-in tools in the temp cli-config when client tools are present", () => {
+    const cfg = baseConfig({ chatOnlyWorkspace: true });
+    const { workspaceDir } = resolveWorkspace(cfg, undefined, undefined, {
+      denyBuiltinTools: true,
+    });
+    const cliConfig = JSON.parse(
+      fs.readFileSync(path.join(workspaceDir, ".cursor", "cli-config.json"), "utf8"),
+    );
+    expect(cliConfig.permissions.deny).toEqual(CLIENT_TOOL_BUILTIN_DENY);
   });
 
   it("uses real workspace when effectiveChatOnly is false despite config.chatOnlyWorkspace", () => {

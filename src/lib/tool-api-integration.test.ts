@@ -1,9 +1,12 @@
+import { mkdtempSync, readFileSync } from "node:fs";
 import * as http from "node:http";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BridgeConfig } from "./config.js";
 import { startBridgeServer } from "./server.js";
+import { CLIENT_TOOL_BUILTIN_DENY } from "./workspace.js";
 
 vi.mock("./cursor-cli.js", () => ({
   listCursorCliModels: vi.fn().mockResolvedValue([
@@ -20,12 +23,15 @@ const fakeServerPath = join(
 );
 const servers: http.Server[] = [];
 
-function config(scenario = "tool_call"): BridgeConfig {
+function config(
+  scenario = "tool_call",
+  extraEnv: Record<string, string> = {},
+): BridgeConfig {
   return {
     agentBin: "agent",
     acpCommand: process.execPath,
     acpArgs: [fakeServerPath],
-    acpEnv: { FAKE_ACP_SCENARIO: scenario },
+    acpEnv: { FAKE_ACP_SCENARIO: scenario, ...extraEnv },
     host: "127.0.0.1",
     port: 0,
     defaultModel: "gpt-4",
@@ -52,10 +58,13 @@ function config(scenario = "tool_call"): BridgeConfig {
   };
 }
 
-async function start(scenario = "tool_call") {
+async function start(
+  scenario = "tool_call",
+  extraEnv: Record<string, string> = {},
+) {
   const [server] = startBridgeServer({
     version: "test",
-    config: config(scenario),
+    config: config(scenario, extraEnv),
   });
   servers.push(server as http.Server);
   await new Promise<void>((resolve) => server.once("listening", resolve));
@@ -457,5 +466,39 @@ describe("ACP tool session errors", () => {
     });
     expect(noStore.status).toBe(400);
     expect(JSON.parse(noStore.text).error.code).toBe("invalid_store");
+  });
+});
+
+describe("client tool workspace isolation", () => {
+  it("denies built-in tools and points the agent at the client workspace", async () => {
+    const captureFile = join(
+      mkdtempSync(join(tmpdir(), "acp-capture-")),
+      "capture.json",
+    );
+    const base = await start("tool_call", {
+      FAKE_ACP_CAPTURE_FILE: captureFile,
+    });
+    const initial = await post(base, "/v1/chat/completions", {
+      model: "gpt-4",
+      messages: [{ role: "user", content: "Weather?" }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "weather",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+    });
+    expect(initial.status).toBe(200);
+
+    const captured = JSON.parse(readFileSync(captureFile, "utf8"));
+    expect(captured.cliConfig.permissions.deny).toEqual(
+      CLIENT_TOOL_BUILTIN_DENY,
+    );
+    expect(JSON.stringify(captured.prompt)).toContain(
+      "The user's project lives in the client's workspace",
+    );
   });
 });
