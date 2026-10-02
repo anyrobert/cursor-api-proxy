@@ -55,6 +55,7 @@ import {
 } from "../win-cmdline-limit.js";
 import { abortOnClientDisconnect } from "../client-disconnect.js";
 import {
+  CLIENT_WORKSPACE_INSTRUCTION,
   parseOpenAiFunctionTools,
   resolveToolChoice,
   responsesToolOutputs,
@@ -575,6 +576,9 @@ export async function handleResponses(
       ? undefined
       : toolsToSystemText(body.tools);
   const messagesWithTools = [
+    ...(structuredToolStart
+      ? [{ role: "system", content: CLIENT_WORKSPACE_INSTRUCTION }]
+      : []),
     ...(toolInstruction && structuredToolStart
       ? [{ role: "system", content: toolInstruction }]
       : []),
@@ -713,7 +717,9 @@ export async function handleResponses(
   let workspaceDir: string;
   let tempDir: string | undefined;
   try {
-    const ws = resolveWorkspace(config, headerWs, effectiveChatOnly);
+    const ws = resolveWorkspace(config, headerWs, effectiveChatOnly, {
+      denyBuiltinTools: structuredToolStart,
+    });
     workspaceDir = ws.workspaceDir;
     tempDir = ws.tempDir;
   } catch (e) {

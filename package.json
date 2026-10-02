@@ -52,6 +52,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "chrome-launcher": "^1.2.1"
+    "chrome-launcher": "^1.2.1",
+    "dotenv": "^18.0.5"
   }
 }

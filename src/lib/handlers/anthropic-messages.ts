@@ -52,6 +52,7 @@ import {
 import { abortOnClientDisconnect } from "../client-disconnect.js";
 import {
   anthropicToolOutputs,
+  CLIENT_WORKSPACE_INSTRUCTION,
   parseAnthropicFunctionTools,
   resolveToolChoice,
   type PendingClientToolCall,
@@ -336,7 +337,12 @@ export async function handleAnthropicMessages(
           )
           .map((part: { type?: string; text?: string }) => part.text ?? "")
           .join("\n");
-  const systemWithTools = [cleanSystemText, toolsText, toolInstruction]
+  const systemWithTools = [
+    cleanSystemText,
+    toolsText,
+    structuredToolStart ? CLIENT_WORKSPACE_INSTRUCTION : undefined,
+    toolInstruction,
+  ]
     .filter(Boolean)
     .join("\n\n");
   const prompt = buildPromptFromAnthropicMessages(
@@ -481,7 +487,9 @@ export async function handleAnthropicMessages(
   let workspaceDir: string;
   let tempDir: string | undefined;
   try {
-    const ws = resolveWorkspace(config, headerWs, effectiveChatOnly);
+    const ws = resolveWorkspace(config, headerWs, effectiveChatOnly, {
+      denyBuiltinTools: structuredToolStart,
+    });
     workspaceDir = ws.workspaceDir;
     tempDir = ws.tempDir;
   } catch (e) {

@@ -54,6 +54,7 @@ import {
 } from "../win-cmdline-limit.js";
 import {
   chatToolOutputs,
+  CLIENT_WORKSPACE_INSTRUCTION,
   parseOpenAiFunctionTools,
   resolveToolChoice,
   type PendingClientToolCall,
@@ -316,6 +317,9 @@ export async function handleChatCompletions(
       ? undefined
       : toolsToSystemText(body.tools, body.functions);
   const messagesWithTools = [
+    ...(structuredToolStart
+      ? [{ role: "system", content: CLIENT_WORKSPACE_INSTRUCTION }]
+      : []),
     ...(toolInstruction && structuredToolStart
       ? [{ role: "system", content: toolInstruction }]
       : []),
@@ -443,7 +447,9 @@ export async function handleChatCompletions(
   let workspaceDir: string;
   let tempDir: string | undefined;
   try {
-    const ws = resolveWorkspace(config, headerWs, effectiveChatOnly);
+    const ws = resolveWorkspace(config, headerWs, effectiveChatOnly, {
+      denyBuiltinTools: structuredToolStart,
+    });
     workspaceDir = ws.workspaceDir;
     tempDir = ws.tempDir;
   } catch (e) {

@@ -47,10 +47,18 @@ export function getChatOnlyEnvOverrides(
   return overrides;
 }
 
+/**
+ * Built-in Cursor CLI tools denied when the caller supplies its own tools, so the
+ * agent must act through the client's tools (which run in the client's real
+ * workspace) instead of exploring the empty temp directory.
+ */
+export const CLIENT_TOOL_BUILTIN_DENY = ["Read(**)", "Write(**)", "Shell(*)"];
+
 export function resolveWorkspace(
   config: BridgeConfig,
   workspaceHeader?: string | string[] | null,
   effectiveChatOnly?: boolean,
+  opts: { denyBuiltinTools?: boolean } = {},
 ): WorkspaceResult {
   const useChatOnly =
     effectiveChatOnly !== undefined
@@ -64,7 +72,10 @@ export function resolveWorkspace(
     const minimalConfig = {
       version: 1,
       editor: { vimMode: false },
-      permissions: { allow: [], deny: [] },
+      permissions: {
+        allow: [],
+        deny: opts.denyBuiltinTools ? CLIENT_TOOL_BUILTIN_DENY : [],
+      },
     };
     fs.writeFileSync(
       path.join(cursorDir, "cli-config.json"),

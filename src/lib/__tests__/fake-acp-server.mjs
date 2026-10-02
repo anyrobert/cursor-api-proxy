@@ -2,9 +2,26 @@
  * Fake ACP server. Tool scenarios act as an MCP HTTP client so tests exercise
  * the real proxy-owned MCP transport and parked tools/call lifecycle.
  */
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { createInterface } from "node:readline";
 
 const scenario = process.env.FAKE_ACP_SCENARIO || "";
+const captureFile = process.env.FAKE_ACP_CAPTURE_FILE || "";
+
+function capturePrompt(params) {
+  if (!captureFile) return;
+  const cliConfigPath = path.join(process.cwd(), ".cursor", "cli-config.json");
+  fs.writeFileSync(
+    captureFile,
+    JSON.stringify({
+      prompt: params?.prompt ?? null,
+      cliConfig: fs.existsSync(cliConfigPath)
+        ? JSON.parse(fs.readFileSync(cliConfigPath, "utf8"))
+        : null,
+    }),
+  );
+}
 const waiting = new Map();
 let mcpServers = [];
 let nextMcpId = 1;
@@ -379,6 +396,7 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "session/prompt") {
+    capturePrompt(msg.params);
     if (scenario === "process_exit") {
       setTimeout(() => process.exit(7), 10);
       return;
