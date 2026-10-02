@@ -55,9 +55,29 @@ function pushUnique(
   out.push(definition);
 }
 
+function functionDefinition(
+  tool: Record<string, unknown>,
+): ClientToolDefinition {
+  const wrapped = asRecord(tool.function);
+  const fn = wrapped ?? tool;
+  if (typeof fn.name !== "string") {
+    throw new Error("Function tool is missing name");
+  }
+  return {
+    name: fn.name,
+    description:
+      typeof fn.description === "string" ? fn.description : undefined,
+    inputSchema: schemaOrDefault(fn.parameters),
+  };
+}
+
 /**
  * Parse OpenAI Chat Completions (`function` wrapper), Responses (flat
  * function), and legacy Chat `functions` definitions.
+ *
+ * `namespace` groups are flattened into their member functions, with a
+ * namespace prefix when the bare name collides. Host-side builtin types
+ * (`web_search`) are dropped; the Cursor CLI cannot execute them.
  */
 export function parseOpenAiFunctionTools(
   tools?: readonly unknown[],
@@ -69,24 +89,24 @@ export function parseOpenAiFunctionTools(
   for (const value of tools ?? []) {
     const tool = asRecord(value);
     if (!tool) throw new Error("Invalid tool definition");
+    if (tool.type === "namespace") {
+      const namespace = typeof tool.name === "string" ? tool.name : "";
+      const members = Array.isArray(tool.tools) ? tool.tools : [];
+      for (const member of members) {
+        const nested = asRecord(member);
+        if (!nested || nested.type !== "function") continue;
+        const definition = functionDefinition(nested);
+        if (seen.has(definition.name) && namespace) {
+          definition.name = `${namespace}__${definition.name}`;
+        }
+        pushUnique(out, seen, definition);
+      }
+      continue;
+    }
     if (tool.type !== "function") {
-      throw new Error(
-        `Unsupported tool type: ${
-          typeof tool.type === "string" ? tool.type : "unknown"
-        }`,
-      );
+      continue;
     }
-    const wrapped = asRecord(tool.function);
-    const fn = wrapped ?? tool;
-    if (typeof fn.name !== "string") {
-      throw new Error("Function tool is missing name");
-    }
-    pushUnique(out, seen, {
-      name: fn.name,
-      description:
-        typeof fn.description === "string" ? fn.description : undefined,
-      inputSchema: schemaOrDefault(fn.parameters),
-    });
+    pushUnique(out, seen, functionDefinition(tool));
   }
 
   for (const value of functions ?? []) {

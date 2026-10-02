@@ -434,15 +434,31 @@ describe("ACP tool session errors", () => {
     ).toBe(true);
   });
 
-  it("rejects unsupported tool types and store=false tool loops", async () => {
+  it("ignores host builtin tool types and rejects store=false tool loops", async () => {
     const base = await start();
     const unsupported = await post(base, "/v1/chat/completions", {
       model: "gpt-4",
       messages: [{ role: "user", content: "Search" }],
-      tools: [{ type: "web_search" }],
+      tools: [
+        { type: "web_search" },
+        {
+          type: "namespace",
+          name: "mcp__weather",
+          tools: [
+            {
+              type: "function",
+              name: "weather",
+              parameters: { type: "object", properties: {} },
+            },
+          ],
+        },
+      ],
     });
-    expect(unsupported.status).toBe(400);
-    expect(JSON.parse(unsupported.text).error.code).toBe("invalid_tools");
+    expect(unsupported.status).toBe(200);
+    expect(
+      JSON.parse(unsupported.text).choices[0].message.tool_calls[0].function
+        .name,
+    ).toBe("weather");
 
     const noStore = await post(base, "/v1/responses", {
       model: "gpt-4",

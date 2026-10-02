@@ -56,16 +56,70 @@ describe("tool normalization", () => {
     ).toEqual({ type: "object", properties: {} });
   });
 
-  it("rejects unsupported and duplicate tools", () => {
-    expect(() =>
-      parseOpenAiFunctionTools([{ type: "web_search" }]),
-    ).toThrow(/Unsupported tool type/);
+  it("ignores host-side builtin tools and rejects duplicates", () => {
+    expect(parseOpenAiFunctionTools([{ type: "web_search" }])).toEqual([]);
     expect(() =>
       parseOpenAiFunctionTools([
         { type: "function", name: "same" },
         { type: "function", function: { name: "same" } },
       ]),
     ).toThrow(/Duplicate/);
+  });
+
+  it("flattens namespace tool groups", () => {
+    expect(
+      parseOpenAiFunctionTools([
+        {
+          type: "namespace",
+          name: "multi_agent_v1",
+          description: "Tools for spawning and managing sub-agents.",
+          tools: [
+            {
+              type: "function",
+              name: "close_agent",
+              description: "Close an agent.",
+              parameters: { type: "object", properties: { id: {} } },
+            },
+          ],
+        },
+      ]),
+    ).toEqual([
+      {
+        name: "close_agent",
+        description: "Close an agent.",
+        inputSchema: { type: "object", properties: { id: {} } },
+      },
+    ]);
+  });
+
+  it("prefixes namespaced tools whose bare name already exists", () => {
+    const tools = parseOpenAiFunctionTools([
+      { type: "function", name: "search" },
+      {
+        type: "namespace",
+        name: "mcp__docs",
+        tools: [{ type: "function", name: "search" }],
+      },
+      {
+        type: "namespace",
+        name: "mcp__wiki",
+        tools: [{ type: "function", name: "search" }],
+      },
+    ]);
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "search",
+      "mcp__docs__search",
+      "mcp__wiki__search",
+    ]);
+  });
+
+  it("ignores empty or malformed namespace groups", () => {
+    expect(
+      parseOpenAiFunctionTools([
+        { type: "namespace", name: "empty", tools: [] },
+        { type: "namespace", name: "no-tools-field" },
+      ]),
+    ).toEqual([]);
   });
 
   it("implements none, required, named, and no-parallel choices", () => {
