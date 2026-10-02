@@ -74,6 +74,10 @@ export type AnthropicMessagesCtx = {
   toolSessions: ToolSessionRegistry;
 };
 
+// Current Anthropic SDKs model `caller` as required on tool_use blocks; the official
+// C# SDK silently drops a block that omits it.
+const DIRECT_CALLER = { type: "direct" } as const;
+
 function anthropicToolUse(call: PendingClientToolCall) {
   let input: unknown = {};
   try {
@@ -86,6 +90,7 @@ function anthropicToolUse(call: PendingClientToolCall) {
     id: call.callId,
     name: call.name,
     input,
+    caller: DIRECT_CALLER,
   };
 }
 
@@ -210,6 +215,7 @@ async function writeStructuredAnthropicTurn(opts: {
             id: call.callId,
             name: call.name,
             input: {},
+            caller: DIRECT_CALLER,
           },
         });
         writeAnthropicEvent(opts.res, "content_block_delta", {
