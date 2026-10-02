@@ -481,7 +481,9 @@ export async function handleAnthropicMessages(
   let workspaceDir: string;
   let tempDir: string | undefined;
   try {
-    const ws = resolveWorkspace(config, headerWs, effectiveChatOnly);
+    const ws = resolveWorkspace(config, headerWs, effectiveChatOnly, {
+      denyBuiltinTools: structuredToolStart,
+    });
     workspaceDir = ws.workspaceDir;
     tempDir = ws.tempDir;
   } catch (e) {
