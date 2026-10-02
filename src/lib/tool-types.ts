@@ -134,6 +134,14 @@ function namedChoice(choice: unknown): string | undefined {
   return undefined;
 }
 
+export const CLIENT_WORKSPACE_INSTRUCTION =
+  "The user's project lives in the client's workspace (the folder open in their editor), not in your current working directory. " +
+  "Your own working directory is an empty scratch folder: never describe it, list it, or treat it as the project. " +
+  "Your built-in file and shell tools are disabled; use only the provided client tools to inspect or change files and to run commands. " +
+  "When asked where you are or what files exist, call a client tool (for example a list-directory or file-search tool) and answer from its result. " +
+  "Never state an absolute path you have not seen in a client tool result; any other path you know of belongs to the proxy host, not the user's project. " +
+  "If the absolute path of the workspace is needed and no tool result shows it, run a client terminal tool with `pwd` (or `cd` on Windows cmd) to get it; if no such tool exists, say the path is unknown and refer to it as the workspace root.";
+
 export function resolveToolChoice(
   tools: readonly ClientToolDefinition[],
   choice: unknown,

@@ -55,6 +55,7 @@ import {
 } from "../win-cmdline-limit.js";
 import { abortOnClientDisconnect } from "../client-disconnect.js";
 import {
+  CLIENT_WORKSPACE_INSTRUCTION,
   parseOpenAiFunctionTools,
   resolveToolChoice,
   responsesToolOutputs,
@@ -575,6 +576,9 @@ export async function handleResponses(
       ? undefined
       : toolsToSystemText(body.tools);
   const messagesWithTools = [
+    ...(structuredToolStart
+      ? [{ role: "system", content: CLIENT_WORKSPACE_INSTRUCTION }]
+      : []),
     ...(toolInstruction && structuredToolStart
       ? [{ role: "system", content: toolInstruction }]
       : []),
