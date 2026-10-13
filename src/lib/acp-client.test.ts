@@ -334,6 +334,18 @@ describe("runAcpSync", () => {
     ]);
   });
 
+  it("reports why the child exited before answering", async () => {
+    const result = await runAcpSync(
+      node,
+      ["-e", "console.log('Error: Authentication required.'); process.exit(1)"],
+      "hi",
+      { cwd, timeoutMs: 5000, skipAuthenticate: true },
+    );
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Error: Authentication required.");
+    expect(result.stderr).toContain("ACP child exited with code 1");
+  });
+
   it("surfaces an unavailable reasoning level", async () => {
     const result = await runAcpSync(node, [fakeServerPath], "hi", {
       cwd,
@@ -414,5 +426,18 @@ describe("runAcpStream", () => {
     }, (t) => chunks.push(t));
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("Internal error");
+  });
+
+  it("reports why the child exited before answering (stream)", async () => {
+    const result = await runAcpStream(
+      node,
+      ["-e", "console.log('Error: Authentication required.'); process.exit(1)"],
+      "x",
+      { cwd, timeoutMs: 5000, skipAuthenticate: true },
+      () => {},
+    );
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Error: Authentication required.");
+    expect(result.stderr).toContain("ACP child exited with code 1");
   });
 });
