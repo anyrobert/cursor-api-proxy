@@ -248,6 +248,32 @@ function appendAcpFailure(stderr: string, error: unknown): string {
   return stderr.trim() ? `${stderr.trim()}\n${message}` : message;
 }
 
+const MAX_STDOUT_NOISE = 4000;
+
+/** The CLI prints startup failures (auth, keychain) as plain text on stdout, not JSON-RPC. */
+function appendStdoutNoise(noise: string, line: string): string {
+  const t = line.replace(/\r$/, "").trim();
+  if (!t) return noise;
+  const next = noise ? `${noise}\n${t}` : t;
+  return next.length > MAX_STDOUT_NOISE ? next.slice(-MAX_STDOUT_NOISE) : next;
+}
+
+function describeAcpExit(
+  stderr: string,
+  stdoutNoise: string,
+  code: number,
+  awaitingResponse: boolean,
+): string {
+  let out = stderr;
+  if (stdoutNoise && !out.includes(stdoutNoise)) {
+    out = appendAcpFailure(out, stdoutNoise);
+  }
+  if (awaitingResponse) {
+    out = appendAcpFailure(out, `ACP child exited with code ${code} before responding`);
+  }
+  return out;
+}
+
 async function configureAcpModel(
   stdin: NodeJS.WritableStream,
   nextId: { current: number },
@@ -365,6 +391,7 @@ export function runAcpSync(
     trackChildProcess(child);
 
     let stderr = "";
+    let stdoutNoise = "";
     let accumulated = "";
     let accumulatedThought = "";
     let resolved = false;
@@ -425,7 +452,10 @@ export function runAcpSync(
           debugAcp("ACP raw: %s", line);
         }
         const msg = parseAcpStdoutLine(line);
-        if (!msg) return;
+        if (!msg) {
+          stdoutNoise = appendStdoutNoise(stdoutNoise, line);
+          return;
+        }
 
         if (msg.id != null && (msg.result !== undefined || msg.error !== undefined)) {
           const reqId = typeof msg.id === "number" ? msg.id : Number(msg.id);
@@ -467,7 +497,11 @@ export function runAcpSync(
 
     child.on("close", (code) => {
       if (timeout) clearTimeout(timeout);
-      finish(code ?? 1);
+      const exitCode = code ?? 1;
+      if (!resolved && exitCode !== 0) {
+        stderr = describeAcpExit(stderr, stdoutNoise, exitCode, pending.size > 0);
+      }
+      finish(exitCode);
     });
 
     const run = async () => {
@@ -506,6 +540,7 @@ export function runAcpSync(
         };
         const sessionId = sessionResult?.sessionId;
         if (!sessionId) {
+          stderr = appendAcpFailure(stderr, "ACP session/new returned no sessionId");
           finish(1);
           return;
         }
@@ -568,6 +603,7 @@ export function runAcpStream(
     trackChildProcess(child);
 
     let stderr = "";
+    let stdoutNoise = "";
     let resolved = false;
 
     const onAbort = () => {
@@ -618,7 +654,10 @@ export function runAcpStream(
           debugAcp("ACP raw: %s", line);
         }
         const msg = parseAcpStdoutLine(line);
-        if (!msg) return;
+        if (!msg) {
+          stdoutNoise = appendStdoutNoise(stdoutNoise, line);
+          return;
+        }
 
         if (msg.id != null && (msg.result !== undefined || msg.error !== undefined)) {
           const reqId = typeof msg.id === "number" ? msg.id : Number(msg.id);
@@ -655,7 +694,11 @@ export function runAcpStream(
 
     child.on("close", (code) => {
       if (timeout) clearTimeout(timeout);
-      finish(code ?? 1);
+      const exitCode = code ?? 1;
+      if (!resolved && exitCode !== 0) {
+        stderr = describeAcpExit(stderr, stdoutNoise, exitCode, pending.size > 0);
+      }
+      finish(exitCode);
     });
 
     const run = async () => {
@@ -694,6 +737,7 @@ export function runAcpStream(
         };
         const sessionId = sessionResult?.sessionId;
         if (!sessionId) {
+          stderr = appendAcpFailure(stderr, "ACP session/new returned no sessionId");
           finish(1);
           return;
         }
