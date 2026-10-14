@@ -314,6 +314,59 @@ export function responsesToolOutputs(input: unknown): ClientToolOutput[] {
   return outputs;
 }
 
+const TURN_OPENING_ROLES = new Set(["user", "developer", "system"]);
+
+/**
+ * Index of the first `input` item of the model's current turn: everything
+ * after the last user, developer or system message (a bare string is a user
+ * message). What follows it is model output (`function_call`, assistant
+ * `message`, `reasoning`) and the caller's `function_call_output` replies.
+ */
+function responsesTurnStart(input: readonly unknown[]): number {
+  for (let i = input.length - 1; i >= 0; i -= 1) {
+    const value = input[i];
+    if (typeof value === "string") return i + 1;
+    const item = asRecord(value);
+    if (!item || (item.type != null && item.type !== "message")) continue;
+    if (typeof item.role === "string" && TURN_OPENING_ROLES.has(item.role)) {
+      return i + 1;
+    }
+  }
+  return 0;
+}
+
+/**
+ * The `function_call_output` items that answer the model's current turn.
+ *
+ * A client that resends its whole history instead of a
+ * `previous_response_id` (Codex sends `store: false` and never chains) also
+ * carries the outputs of turns that already finished. Those sit before the
+ * latest user, developer or system message and must not resume anything, so
+ * only outputs after it count.
+ */
+export function responsesTurnToolOutputs(input: unknown): ClientToolOutput[] {
+  if (!Array.isArray(input)) return [];
+  return responsesToolOutputs(input.slice(responsesTurnStart(input)));
+}
+
+/** Every `call_id` an input names, on `function_call` or its output. */
+export function responsesCallIds(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const ids = new Set<string>();
+  for (const value of input) {
+    const item = asRecord(value);
+    if (
+      (item?.type === "function_call" ||
+        item?.type === "function_call_output") &&
+      typeof item.call_id === "string" &&
+      item.call_id
+    ) {
+      ids.add(item.call_id);
+    }
+  }
+  return [...ids];
+}
+
 export function anthropicToolOutputs(
   messages: readonly unknown[],
 ): ClientToolOutput[] {

@@ -6,7 +6,9 @@ import {
   parseAnthropicFunctionTools,
   parseOpenAiFunctionTools,
   resolveToolChoice,
+  responsesCallIds,
   responsesToolOutputs,
+  responsesTurnToolOutputs,
 } from "./tool-types.js";
 
 describe("tool normalization", () => {
@@ -223,6 +225,74 @@ describe("tool output correlation", () => {
         },
       ]),
     ).toEqual([{ callId: "call_2", output: "done" }]);
+  });
+
+  describe("full-history Responses input", () => {
+    const call = (id: string) => ({
+      type: "function_call",
+      call_id: id,
+      name: "exec_command",
+      arguments: "{}",
+    });
+    const output = (id: string) => ({
+      type: "function_call_output",
+      call_id: id,
+      output: `${id}-out`,
+    });
+    const message = (role: string, text: string) => ({
+      type: "message",
+      role,
+      content: [{ type: "input_text", text }],
+    });
+
+    it("keeps only the outputs after the latest user message", () => {
+      expect(
+        responsesTurnToolOutputs([
+          message("developer", "rules"),
+          message("user", "first"),
+          call("call_old"),
+          output("call_old"),
+          message("assistant", "done"),
+          message("user", "second"),
+          { type: "reasoning", summary: [] },
+          call("call_a"),
+          output("call_a"),
+          message("assistant", "next"),
+          call("call_b"),
+          output("call_b"),
+        ]).map((item) => item.callId),
+      ).toEqual(["call_a", "call_b"]);
+    });
+
+    it("finds no current-turn outputs once a new user turn starts", () => {
+      const input = [message("user", "first"), call("call_1"), output("call_1")];
+      expect(
+        responsesTurnToolOutputs([...input, message("user", "second")]),
+      ).toEqual([]);
+      expect(responsesTurnToolOutputs([...input, "second"])).toEqual([]);
+      expect(
+        responsesTurnToolOutputs([...input, { role: "developer", content: "x" }]),
+      ).toEqual([]);
+    });
+
+    it("treats an input of outputs only as the current turn", () => {
+      expect(responsesTurnToolOutputs([output("call_1")])).toEqual([
+        { callId: "call_1", output: "call_1-out" },
+      ]);
+      expect(responsesTurnToolOutputs("plain text")).toEqual([]);
+    });
+
+    it("lists every call id once", () => {
+      expect(
+        responsesCallIds([
+          message("user", "first"),
+          call("call_1"),
+          output("call_1"),
+          call("call_2"),
+          { type: "function_call_output" },
+        ]),
+      ).toEqual(["call_1", "call_2"]);
+    });
   });
 
   it("reads Anthropic tool_result and error state", () => {
