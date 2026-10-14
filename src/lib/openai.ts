@@ -163,6 +163,25 @@ export function responsesInputToMessages(
 }
 
 /**
+ * The definition to render for one request tool, or undefined to leave it
+ * out. Chat tools wrap it in `function`. Anthropic client tools (no `type`,
+ * or `custom`) and Responses freeform `custom` tools are their own
+ * definition. Any other type is a Responses `namespace` group or a host-side
+ * builtin (`web_search`, `file_search`, `web_search_20250305`,
+ * `bash_20250124`, ...) the model cannot call through this prompt, and an
+ * entry without a name would only render as `Function: undefined`.
+ */
+function systemTextDefinition(tool: any): any {
+  const fn =
+    tool?.type === "function"
+      ? tool.function
+      : tool?.type == null || tool.type === "custom"
+        ? tool
+        : undefined;
+  return typeof fn?.name === "string" ? fn : undefined;
+}
+
+/**
  * Serialise tool/function schemas into a text block for the system prompt.
  * This allows the model to be aware of available tools even though we can't
  * return tool_call deltas natively.
@@ -175,7 +194,7 @@ export function toolsToSystemText(
 
   if (tools && tools.length > 0) {
     for (const t of tools) {
-      const fn = t?.type === "function" ? t.function : t;
+      const fn = systemTextDefinition(t);
       if (fn) defs.push(fn);
     }
   }

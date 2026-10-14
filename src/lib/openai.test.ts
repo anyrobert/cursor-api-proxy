@@ -180,6 +180,135 @@ describe("toolsToSystemText", () => {
     expect(result).toContain("foo");
     expect(result).toContain("bar");
   });
+
+  const functionLines = (text: string | undefined) =>
+    (text ?? "").split("\n").filter((line) => line.startsWith("Function:"));
+
+  it("skips namespace groups, Responses builtins and nameless entries", () => {
+    const result = toolsToSystemText([
+      { type: "web_search", external_web_access: true },
+      {
+        type: "namespace",
+        name: "mcp__docs",
+        tools: [{ type: "function", name: "search" }],
+      },
+      { type: "file_search", vector_store_ids: ["vs_1"] },
+      { description: "no name" },
+      { type: "function", function: { name: "keep" } },
+    ]);
+    expect(functionLines(result)).toEqual(["Function: keep"]);
+    expect(result).not.toContain("undefined");
+  });
+
+  it("skips Anthropic builtin tool types but keeps client tools", () => {
+    const result = toolsToSystemText([
+      { type: "web_search_20250305", name: "web_search", max_uses: 5 },
+      { type: "bash_20250124", name: "bash" },
+      { type: "text_editor_20250124", name: "str_replace_editor" },
+      { name: "lookup", input_schema: { type: "object" } },
+      { type: "custom", name: "custom_tool", input_schema: { type: "object" } },
+    ]);
+    expect(functionLines(result)).toEqual([
+      "Function: lookup",
+      "Function: custom_tool",
+    ]);
+  });
+
+  it("returns undefined when only builtins and namespace groups remain", () => {
+    expect(
+      toolsToSystemText([
+        { type: "web_search" },
+        { type: "namespace", name: "multi_agent_v1", tools: [] },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("still leaves flat Responses function tools out", () => {
+    expect(
+      toolsToSystemText([{ type: "function", name: "flat", parameters: {} }]),
+    ).toBeUndefined();
+  });
+
+  it("renders Chat Completions and Anthropic tools exactly as before", () => {
+    expect(
+      toolsToSystemText(
+        [
+          {
+            type: "function",
+            function: {
+              name: "get_weather",
+              description: "Get current weather",
+              parameters: {
+                type: "object",
+                properties: { city: { type: "string" } },
+                required: ["city"],
+              },
+            },
+          },
+        ],
+        [
+          {
+            name: "legacy_add",
+            description: "Add two numbers",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      ),
+    ).toBe(
+      [
+        "Available tools (respond with a JSON object to call one):",
+        "",
+        "Function: get_weather",
+        "Description: Get current weather",
+        "Parameters: {",
+        '  "type": "object",',
+        '  "properties": {',
+        '    "city": {',
+        '      "type": "string"',
+        "    }",
+        "  },",
+        '  "required": [',
+        '    "city"',
+        "  ]",
+        "}",
+        "Function: legacy_add",
+        "Description: Add two numbers",
+        "Parameters: {",
+        '  "type": "object",',
+        '  "properties": {}',
+        "}",
+      ].join("\n"),
+    );
+    expect(
+      toolsToSystemText([
+        {
+          name: "lookup",
+          description: "Look up a record",
+          input_schema: {
+            type: "object",
+            properties: { id: { type: "string" } },
+          },
+        },
+        {
+          type: "custom",
+          name: "custom_tool",
+          description: "Custom",
+          input_schema: { type: "object" },
+        },
+      ]),
+    ).toBe(
+      [
+        "Available tools (respond with a JSON object to call one):",
+        "",
+        "Function: lookup",
+        "Description: Look up a record",
+        "Parameters: {}",
+        "Function: custom_tool",
+        "Description: Custom",
+        "Parameters: {}",
+      ].join("\n"),
+    );
+  });
 });
 
 describe("responsesInputToMessages", () => {
