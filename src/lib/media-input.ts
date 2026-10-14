@@ -168,8 +168,20 @@ function imageBlock(data: Buffer, mime: string): AcpPromptBlock {
   return { type: "image", mimeType: mime, data: data.toString("base64") };
 }
 
+/**
+ * The demuxer is pinned per MIME type so ffmpeg never content-probes the
+ * client's bytes into a playlist or concat format (HLS, ffconcat, SDP) that
+ * would make it open other files or network URLs.
+ */
+const VIDEO_DEMUXERS: Record<string, string> = {
+  "video/mp4": "mov",
+  "video/quicktime": "mov",
+  "video/webm": "matroska",
+};
+
 async function videoFrames(data: Buffer, mime: string): Promise<AcpPromptBlock[]> {
-  if (!["video/mp4", "video/webm", "video/quicktime"].includes(mime)) {
+  const demuxer = VIDEO_DEMUXERS[mime];
+  if (!demuxer) {
     throw new MediaInputError("unsupported video MIME type");
   }
   const dir = await mkdtemp(join(tmpdir(), "cursor-media-"));
@@ -177,10 +189,16 @@ async function videoFrames(data: Buffer, mime: string): Promise<AcpPromptBlock[]
     const input = join(dir, "input");
     await writeFile(input, data, { mode: 0o600 });
     try {
-      await execFileAsync("ffmpeg", ["-nostdin", "-hide_banner", "-loglevel", "error", "-i", input,
+      await execFileAsync("ffmpeg", ["-nostdin", "-hide_banner", "-loglevel", "error",
+        "-protocol_whitelist", "file", "-f", demuxer, "-i", input,
         "-vf", "fps=1/5:round=up,scale=768:-2:force_original_aspect_ratio=decrease", "-frames:v", "3",
         join(dir, "frame-%02d.jpg")], { timeout: 20_000, maxBuffer: 64 * 1024 });
-    } catch { throw new MediaInputError("video decoding failed"); }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+        throw new MediaInputError("video input requires ffmpeg on the proxy host");
+      }
+      throw new MediaInputError("video decoding failed");
+    }
     const files = (await readdir(dir)).filter((name) => name.startsWith("frame-")).sort();
     if (!files.length) throw new MediaInputError("video has no decodable frames");
     const blocks: AcpPromptBlock[] = [{ type: "text", text: `[Video: ${files.length} sampled frames, approximately five seconds apart]` }];

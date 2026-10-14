@@ -1,11 +1,15 @@
 import { EventEmitter } from "node:events";
+import { existsSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { lookupMock, requestMock } = vi.hoisted(() => ({
+const { execFileMock, lookupMock, requestMock } = vi.hoisted(() => ({
+  execFileMock: vi.fn(),
   lookupMock: vi.fn(),
   requestMock: vi.fn(),
 }));
+vi.mock("node:child_process", () => ({ execFile: execFileMock }));
 vi.mock("node:dns/promises", () => ({ lookup: lookupMock }));
 vi.mock("node:https", () => ({ request: requestMock }));
 
@@ -76,6 +80,7 @@ function serve(onEnd: (req: FakeRequest) => void): FakeRequest[] {
 const imagePart = (url: string) => [{ content: [{ type: "image_url", image_url: { url } }] }];
 
 beforeEach(() => {
+  execFileMock.mockReset();
   lookupMock.mockReset();
   requestMock.mockReset();
 });
@@ -220,5 +225,50 @@ describe("remote media fetch", () => {
     const assertion = expect(pending).rejects.toThrow("media download timed out");
     await vi.advanceTimersByTimeAsync(30_000);
     await assertion;
+  });
+});
+
+describe("video frame sampling", () => {
+  const videoPart = (mime: string) => [{ content: [
+    { type: "video_url", video_url: { url: `data:${mime};base64,${Buffer.from("not really a video").toString("base64")}` } },
+  ] }];
+
+  /** Fakes a successful ffmpeg run that writes one JPEG frame. */
+  const ffmpegWritesOneFrame = () =>
+    execFileMock.mockImplementation((_cmd: string, args: string[], _opts: unknown, cb: (error: Error | null, out?: unknown) => void) => {
+      writeFileSync(args[args.length - 1].replace("%02d", "01"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+      cb(null, { stdout: "", stderr: "" });
+    });
+
+  it.each([
+    ["video/mp4", "mov"],
+    ["video/quicktime", "mov"],
+    ["video/webm", "matroska"],
+  ])("pins the %s demuxer to %s and keeps ffmpeg off the network", async (mime, demuxer) => {
+    ffmpegWritesOneFrame();
+    const blocks = await mediaPromptBlocks(videoPart(mime));
+    expect(blocks).toEqual([
+      { type: "text", text: "[Video: 1 sampled frames, approximately five seconds apart]" },
+      { type: "image", mimeType: "image/jpeg", data: Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64") },
+    ]);
+    const [cmd, args] = execFileMock.mock.calls[0] as [string, string[]];
+    expect(cmd).toBe("ffmpeg");
+    const inputAt = args.indexOf("-i");
+    expect(args.slice(inputAt - 4, inputAt)).toEqual(["-protocol_whitelist", "file", "-f", demuxer]);
+    expect(existsSync(dirname(args[inputAt + 1]))).toBe(false);
+  });
+
+  it("rejects video MIME types without a pinned demuxer before running ffmpeg", async () => {
+    await expect(mediaPromptBlocks(videoPart("video/x-msvideo")))
+      .rejects.toThrow("unsupported video MIME type");
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("explains a missing ffmpeg binary instead of a generic decode failure", async () => {
+    execFileMock.mockImplementation((_cmd: string, _args: string[], _opts: unknown, cb: (error: Error) => void) => {
+      cb(Object.assign(new Error("spawn ffmpeg ENOENT"), { code: "ENOENT" }));
+    });
+    await expect(mediaPromptBlocks(videoPart("video/mp4")))
+      .rejects.toThrow("video input requires ffmpeg on the proxy host");
   });
 });
