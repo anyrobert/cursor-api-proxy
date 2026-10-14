@@ -573,9 +573,7 @@ export async function handleResponses(
   }
   const toolsText = structuredToolStart
     ? undefined
-    : body.tool_choice === "none"
-      ? undefined
-      : toolsToSystemText(body.tools);
+    : toolsToSystemText(selectedTools);
   const media = await prepareRequestMedia(
     Array.isArray(body.input) ? body.input : [],
     {
