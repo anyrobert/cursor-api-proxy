@@ -216,7 +216,7 @@ describe("resolveAcpModelConfigValue", () => {
 });
 
 describe("acpModelSelectionError", () => {
-  it("lists the base ids that were tried", () => {
+  it("lists the other ids that were tried", () => {
     expect(
       acpModelSelectionError("cursor-grok-4.6-medium", [
         "cursor-grok-4.6-medium",
@@ -225,7 +225,7 @@ describe("acpModelSelectionError", () => {
         "grok-4.6",
       ]),
     ).toBe(
-      'ACP model catalog has no match for "cursor-grok-4.6-medium" (also tried base ids: grok-4.6-medium, cursor-grok-4.6, grok-4.6)',
+      'ACP model catalog has no match for "cursor-grok-4.6-medium" (also tried: grok-4.6-medium, cursor-grok-4.6, grok-4.6)',
     );
   });
 

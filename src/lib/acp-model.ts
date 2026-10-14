@@ -299,7 +299,7 @@ export function acpModelSelectionError(
     ),
   ].filter((value) => value !== norm(requested));
   const detail = tried.length
-    ? ` (also tried base ids: ${tried.join(", ")})`
+    ? ` (also tried: ${tried.join(", ")})`
     : "";
   return `ACP model catalog has no match for ${JSON.stringify(requested)}${detail}`;
 }
