@@ -7,7 +7,6 @@ import {
 } from "./acp-model.js";
 import {
   extractAcpUpdateText,
-  resolveAcpModelConfigValue,
   runAcpStream,
   runAcpSync,
 } from "./acp-client.js";
@@ -45,41 +44,48 @@ describe("extractAcpUpdateText", () => {
   });
 });
 
-describe("resolveAcpModelConfigValue", () => {
-  it("returns display name when catalog is missing", () => {
-    expect(resolveAcpModelConfigValue("gpt-4", undefined)).toBe("gpt-4");
+describe("planAcpModelSelection", () => {
+  it("passes the requested id through when the catalog is missing", () => {
+    expect(planAcpModelSelection("gpt-4", undefined)).toEqual({
+      action: "passthrough",
+      modelId: "gpt-4",
+    });
   });
 
-  it("returns display name when catalog is empty", () => {
-    expect(resolveAcpModelConfigValue("gpt-4", [])).toBe("gpt-4");
+  it("passes the requested id through when the catalog is empty", () => {
+    expect(planAcpModelSelection("gpt-4", [])).toEqual({
+      action: "passthrough",
+      modelId: "gpt-4",
+    });
   });
 
   it("maps name to modelId when matched", () => {
     expect(
-      resolveAcpModelConfigValue("gpt-4", [
+      planAcpModelSelection("gpt-4", [
         { modelId: "gpt-4[fast=false]", name: "gpt-4" },
       ]),
-    ).toBe("gpt-4[fast=false]");
+    ).toEqual({ action: "set", modelId: "gpt-4[fast=false]" });
   });
 
-  it("falls back to default[] when name not in catalog", () => {
+  it("reports a miss when the name is not in the catalog", () => {
     expect(
-      resolveAcpModelConfigValue("unknown", [{ modelId: "x[]", name: "gpt-4" }]),
-    ).toBe("default[]");
+      planAcpModelSelection("unknown", [{ modelId: "x[]", name: "gpt-4" }])
+        .action,
+    ).toBe("missing");
   });
 
   it("uses first match when duplicate names", () => {
     expect(
-      resolveAcpModelConfigValue("gpt-4", [
+      planAcpModelSelection("gpt-4", [
         { modelId: "first[]", name: "gpt-4" },
         { modelId: "second[]", name: "gpt-4" },
       ]),
-    ).toBe("first[]");
+    ).toEqual({ action: "set", modelId: "first[]" });
   });
 
   it("maps CLI ids through their catalog display-name alias", () => {
     expect(
-      resolveAcpModelConfigValue(
+      planAcpModelSelection(
         "gpt-5.6-sol-high",
         [
           {
@@ -89,16 +95,16 @@ describe("resolveAcpModelConfigValue", () => {
         ],
         ["GPT-5.6 Sol High"],
       ),
-    ).toBe("gpt-5.6-sol[reasoning=high]");
+    ).toEqual({ action: "set", modelId: "gpt-5.6-sol[reasoning=high]" });
   });
 
   it("maps auto onto the catalog default row", () => {
     expect(
-      resolveAcpModelConfigValue("auto", [
+      planAcpModelSelection("auto", [
         { modelId: "default", name: "Auto" },
         { modelId: "glm-5.2", name: "GLM 5.2" },
       ]),
-    ).toBe("default");
+    ).toEqual({ action: "set", modelId: "default" });
   });
 
   it("plans parameterized effort, thinking, and fast variants", () => {

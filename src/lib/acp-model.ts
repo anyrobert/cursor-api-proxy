@@ -99,7 +99,7 @@ function stripSuffix(
   return { base: model.slice(0, -(suffix.length + 1)), suffix };
 }
 
-export function parseCliModelVariant(model: string): {
+function parseCliModelVariant(model: string): {
   base: string;
   effort?: string;
   thinking: boolean;
@@ -272,21 +272,6 @@ export function planAcpModelSelection(
   return missing();
 }
 
-/**
- * Legacy string resolver. `default[]` means the catalog has no row.
- * `default` means "leave the session model alone".
- */
-export function resolveAcpModelConfigValue(
-  displayName: string,
-  availableModels: readonly AcpCatalogModel[] | undefined,
-  aliases: readonly string[] = [],
-): string {
-  const plan = planAcpModelSelection(displayName, availableModels, aliases);
-  if (plan.action === "passthrough" || plan.action === "set") return plan.modelId;
-  if (plan.action === "skip") return "default";
-  return "default[]";
-}
-
 export function acpModelSelectionError(
   requested: string,
   candidates?: readonly string[],
@@ -304,7 +289,7 @@ export function acpModelSelectionError(
   return `ACP model catalog has no match for ${JSON.stringify(requested)}${detail}`;
 }
 
-export function readAcpConfigOptions(result: unknown): AcpConfigOption[] {
+function readAcpConfigOptions(result: unknown): AcpConfigOption[] {
   if (!result || typeof result !== "object") return [];
   const list = (result as { configOptions?: unknown }).configOptions;
   return Array.isArray(list) ? (list as AcpConfigOption[]) : [];

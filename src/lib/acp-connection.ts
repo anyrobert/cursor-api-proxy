@@ -7,6 +7,7 @@ import {
   ACP_CLIENT_CAPABILITIES,
   applyAcpModelPlan,
   formatAcpRpcError,
+  type AcpCatalogModel,
   type AcpModelPlan,
 } from "./acp-model.js";
 import { trackChildProcess } from "./process.js";
@@ -29,8 +30,6 @@ export type AcpMcpServer =
       env?: Array<{ name: string; value: string }>;
     };
 
-export type AcpAvailableModel = { modelId: string; name: string };
-
 export type AcpInitializeResult = {
   protocolVersion?: number;
   agentCapabilities?: {
@@ -41,7 +40,7 @@ export type AcpInitializeResult = {
 
 export type AcpSessionResult = {
   sessionId?: string;
-  models?: { availableModels?: AcpAvailableModel[] };
+  models?: { availableModels?: AcpCatalogModel[] };
 };
 
 export type AcpPermissionParams = {
@@ -134,7 +133,7 @@ function parseLine(line: string): JsonRpcMessage | null {
   }
 }
 
-export function extractAcpContentText(content: unknown): string {
+function extractAcpContentText(content: unknown): string {
   if (
     content &&
     typeof content === "object" &&
@@ -274,10 +273,6 @@ export class AcpConnection {
     })) as AcpSessionResult;
   }
 
-  async setSessionModel(sessionId: string, value: string): Promise<void> {
-    await this.configureSessionModel(sessionId, { action: "set", modelId: value });
-  }
-
   /**
    * `requested` is the public CLI id; when set, option-level failures name
    * both the request and the matched ACP base row.
@@ -356,10 +351,6 @@ export class AcpConnection {
 
   async cancelSession(sessionId: string): Promise<void> {
     this.notify("session/cancel", { sessionId });
-  }
-
-  waitForExit(): Promise<number> {
-    return this.#exitPromise;
   }
 
   async close(signal: NodeJS.Signals = "SIGKILL"): Promise<void> {

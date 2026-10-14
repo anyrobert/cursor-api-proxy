@@ -21,12 +21,6 @@ import { trackChildProcess } from "./process.js";
 import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
 import type { AcpPromptBlock } from "./media-input.js";
 
-export {
-  resolveAcpModelConfigValue,
-  planAcpModelSelection,
-  parseCliModelVariant,
-} from "./acp-model.js";
-
 const debugAcp = debuglog("cursor-api-proxy:acp");
 
 export type AcpRunOptions = {
@@ -168,7 +162,6 @@ export function extractAcpUpdateText(
 function handleAcpNotification(
   msg: AcpParsedMsg,
   opts: {
-    rawDebug?: boolean;
     stdin: NodeJS.WritableStream | null | undefined;
     onAgentTextChunk?: (text: string) => void;
     onAgentThoughtChunk?: (text: string) => void;
@@ -243,8 +236,6 @@ function handleAcpNotification(
   return false;
 }
 
-export type AcpAvailableModel = AcpCatalogModel;
-
 function appendAcpFailure(stderr: string, error: unknown): string {
   const message = acpFailureText(error);
   if (!message) return stderr;
@@ -291,7 +282,7 @@ async function configureAcpModel(
   requestTimeoutMs: number,
   sessionId: string,
   requested: string | undefined,
-  availableModels: AcpAvailableModel[] | undefined,
+  availableModels: AcpCatalogModel[] | undefined,
   aliases: readonly string[] | undefined,
   strictModel: boolean | undefined,
 ): Promise<void> {
@@ -477,7 +468,6 @@ export function runAcpSync(
         }
 
         handleAcpNotification(msg, {
-          rawDebug: opts.rawDebug,
           stdin: child.stdin,
           onAgentTextChunk: (text) => {
             accumulated += text;
@@ -541,7 +531,7 @@ export function runAcpSync(
           requestTimeoutMs,
         )) as {
           sessionId?: string;
-          models?: { availableModels?: AcpAvailableModel[] };
+          models?: { availableModels?: AcpCatalogModel[] };
         };
         const sessionId = sessionResult?.sessionId;
         if (!sessionId) {
@@ -679,7 +669,6 @@ export function runAcpStream(
         }
 
         handleAcpNotification(msg, {
-          rawDebug: opts.rawDebug,
           stdin: child.stdin,
           onAgentTextChunk: onChunk,
         });
@@ -738,7 +727,7 @@ export function runAcpStream(
           requestTimeoutMs,
         )) as {
           sessionId?: string;
-          models?: { availableModels?: AcpAvailableModel[] };
+          models?: { availableModels?: AcpCatalogModel[] };
         };
         const sessionId = sessionResult?.sessionId;
         if (!sessionId) {
