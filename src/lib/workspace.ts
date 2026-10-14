@@ -6,8 +6,28 @@ import type { BridgeConfig } from "./config.js";
 
 export type WorkspaceResult = {
   workspaceDir: string;
+  /** Isolation root of a chat-only request, removed when the request ends. */
   tempDir?: string;
 };
+
+/**
+ * A chat-only request's temp dir holds two siblings: the agent's empty
+ * `workspace` (its cwd and `--workspace`) and a private `home` for `HOME`,
+ * Cursor's config and, on macOS, the link to the real keychains. Keeping
+ * `home` out of the workspace keeps that link out of everything the agent
+ * lists, searches or edits as "the project".
+ */
+const CHAT_ONLY_WORKSPACE = "workspace";
+const CHAT_ONLY_HOME = "home";
+
+/**
+ * `HOME` for a chat-only run: the `home` beside its workspace. A caller with
+ * no isolation root (no `tempDir`) keeps the old layout, `HOME` at the
+ * workspace, where nothing is linked.
+ */
+export function chatOnlyHomeDir(workspaceDir: string, tempDir?: string): string {
+  return tempDir ? path.join(tempDir, CHAT_ONLY_HOME) : workspaceDir;
+}
 
 /**
  * Env overrides for chat-only (isolated) workspace so the agent cannot load
@@ -22,10 +42,10 @@ export type WorkspaceResult = {
  * Without a pool, the temp `HOME` keeps rules from the real `~/.cursor` from loading.
  */
 export function getChatOnlyEnvOverrides(
-  workspaceDir: string,
+  homeDir: string,
   authConfigDir?: string,
 ): Record<string, string> {
-  const cursorDir = authConfigDir ?? path.join(workspaceDir, ".cursor");
+  const cursorDir = authConfigDir ?? path.join(homeDir, ".cursor");
   const overrides: Record<string, string> = {
     CURSOR_CONFIG_DIR: cursorDir,
   };
@@ -34,15 +54,15 @@ export function getChatOnlyEnvOverrides(
     return overrides;
   }
 
-  overrides.HOME = workspaceDir;
-  overrides.USERPROFILE = workspaceDir;
+  overrides.HOME = homeDir;
+  overrides.USERPROFILE = homeDir;
   if (process.platform === "win32") {
-    const appDataRoaming = path.join(workspaceDir, "AppData", "Roaming");
-    const appDataLocal = path.join(workspaceDir, "AppData", "Local");
+    const appDataRoaming = path.join(homeDir, "AppData", "Roaming");
+    const appDataLocal = path.join(homeDir, "AppData", "Local");
     overrides.APPDATA = appDataRoaming;
     overrides.LOCALAPPDATA = appDataLocal;
   } else {
-    overrides.XDG_CONFIG_HOME = path.join(workspaceDir, ".config");
+    overrides.XDG_CONFIG_HOME = path.join(homeDir, ".config");
   }
   return overrides;
 }
@@ -51,6 +71,8 @@ export function getChatOnlyEnvOverrides(
  * macOS resolves the login keychain from `$HOME/Library/Keychains`. With the temp
  * `HOME` from chat-only mode the CLI cannot read or save its auth token there
  * ("Not logged in" / `security` exit 154), so expose the real keychains folder.
+ * Only ever link into the private `home` (see CHAT_ONLY_HOME), never into a
+ * directory the agent works in.
  */
 export function linkMacKeychains(tempHome: string, realHome = os.homedir()): void {
   const source = path.join(realHome, "Library", "Keychains");
@@ -74,7 +96,10 @@ export function resolveWorkspace(
       : config.chatOnlyWorkspace;
   if (useChatOnly) {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-proxy-"));
-    const cursorDir = path.join(tempDir, ".cursor");
+    const workspaceDir = path.join(tempDir, CHAT_ONLY_WORKSPACE);
+    const homeDir = chatOnlyHomeDir(workspaceDir, tempDir);
+    fs.mkdirSync(workspaceDir);
+    const cursorDir = path.join(homeDir, ".cursor");
     fs.mkdirSync(cursorDir, { recursive: true });
     fs.mkdirSync(path.join(cursorDir, "rules"), { recursive: true });
     const minimalConfig = {
@@ -88,15 +113,15 @@ export function resolveWorkspace(
       "utf8",
     );
     if (process.platform === "win32") {
-      fs.mkdirSync(path.join(tempDir, "AppData", "Roaming"), { recursive: true });
-      fs.mkdirSync(path.join(tempDir, "AppData", "Local"), { recursive: true });
+      fs.mkdirSync(path.join(homeDir, "AppData", "Roaming"), { recursive: true });
+      fs.mkdirSync(path.join(homeDir, "AppData", "Local"), { recursive: true });
     } else {
-      fs.mkdirSync(path.join(tempDir, ".config"), { recursive: true });
+      fs.mkdirSync(path.join(homeDir, ".config"), { recursive: true });
     }
     if (process.platform === "darwin") {
-      linkMacKeychains(tempDir);
+      linkMacKeychains(homeDir);
     }
-    return { workspaceDir: tempDir, tempDir };
+    return { workspaceDir, tempDir };
   }
   const headerWs =
     typeof workspaceHeader === "string" && workspaceHeader.trim()

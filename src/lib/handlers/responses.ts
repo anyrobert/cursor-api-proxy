@@ -42,6 +42,7 @@ import {
   logAccountStats,
   logAgentError,
   logModelResolution,
+  logToolSession,
   logTrafficRequest,
   logTrafficResponse,
   type TrafficMessage,
@@ -58,7 +59,10 @@ import { abortOnClientDisconnect } from "../client-disconnect.js";
 import {
   parseOpenAiFunctionTools,
   resolveToolChoice,
+  responsesCallIds,
   responsesToolOutputs,
+  responsesTurnToolOutputs,
+  type ClientToolOutput,
   type PendingClientToolCall,
 } from "../tool-types.js";
 import {
@@ -100,6 +104,109 @@ function functionCallItem(
     ...(call.namespaced ? { namespace: call.namespaced.namespace } : {}),
     arguments: status === "completed" ? call.arguments : "",
   };
+}
+
+function logToolTurn(
+  verbose: boolean,
+  record: ToolSessionRecord,
+  turn: ToolTurnResult,
+): void {
+  logToolSession(
+    verbose,
+    turn.status === "tool_calls"
+      ? `${record.id} parked ${turn.toolCalls.map((call) => `${call.name} ${call.callId}`).join(", ")}`
+      : `${record.id} completed`,
+  );
+}
+
+/** A parked session and the outputs that answer its calls. */
+type ParkedResume = {
+  record: ToolSessionRecord;
+  outputs: ClientToolOutput[];
+};
+
+/**
+ * What a request from a client that resends its whole history does:
+ * resume a parked call, continue a turn whose calls are no longer parked
+ * from the transcript, or start a new turn.
+ */
+type TranscriptTurn =
+  | ({ kind: "resume" } & ParkedResume)
+  | { kind: "rebuild" }
+  | { kind: "new" };
+
+/**
+ * Tells a session rebuilt mid-turn that the calls in its transcript already
+ * ran. Without it, a rebuilt session was seen repeating the last call,
+ * which would run a client's side-effecting command twice.
+ */
+const REBUILT_TURN_NOTE =
+  "This conversation is being continued in a new session. The tool calls " +
+  "in the transcript already ran and each result follows its call. Do not " +
+  "call a tool again for a result that is already there; continue from the " +
+  "latest result.";
+
+/**
+ * Classifies a request from a client that resends its whole history (Codex
+ * sends store=false and no previous_response_id). Its input also carries
+ * the outputs of finished turns, so only the outputs after the latest user
+ * message can answer a parked call.
+ *
+ * When none of them is parked (expired, restarted, another process), the
+ * transcript already holds the tool results and the caller rebuilds the
+ * turn in a new session; a 409 would leave a stateless client nothing to
+ * retry with. Bare outputs with no user message leave nothing to rebuild,
+ * so they still get 409. A new or rebuilt turn also closes parked sessions
+ * the transcript has moved past instead of letting them idle until the TTL.
+ */
+async function classifyTranscriptTurn(
+  registry: ToolSessionRegistry,
+  ownerKey: string,
+  input: unknown,
+  verbose: boolean,
+): Promise<TranscriptTurn> {
+  const turnOutputs = responsesTurnToolOutputs(input);
+  const match = registry.findPendingCalls(
+    "responses",
+    ownerKey,
+    turnOutputs.map((output) => output.callId),
+  );
+  if (match) {
+    const callIds = new Set(match.callIds);
+    return {
+      kind: "resume",
+      record: match.record,
+      outputs: turnOutputs.filter((output) => callIds.has(output.callId)),
+    };
+  }
+  if (turnOutputs.length > 0) {
+    const hasUserTurn = responsesInputToMessages({ input }).some(
+      (message) => message.role === "user",
+    );
+    if (!hasUserTurn) {
+      throw new ToolSessionError(
+        "Response tool session is missing or expired; resend the conversation",
+        409,
+        "tool_session_expired",
+      );
+    }
+    logToolSession(
+      verbose,
+      `no parked call for ${turnOutputs.map((output) => output.callId).join(", ")}; starting a new session from the transcript`,
+    );
+  }
+  const closed = await registry.closeSuperseded(
+    "responses",
+    ownerKey,
+    responsesCallIds(input),
+  );
+  if (closed > 0) {
+    logToolSession(
+      verbose,
+      `closed ${closed} parked session(s) the transcript moved past`,
+    );
+  }
+  return { kind: turnOutputs.length > 0 ? "rebuild" : "new" };
 }
 
 function structuredResponseObject(opts: {
@@ -485,7 +592,14 @@ export async function handleResponses(
     });
     return;
   }
-  if (config.useAcp && submittedToolOutputs.length > 0) {
+  // A stateful client names the response whose parked calls it answers.
+  // Every other client resends its transcript, and classifyTranscriptTurn
+  // matches the call ids its current turn answers instead.
+  const statefulResume =
+    config.useAcp &&
+    submittedToolOutputs.length > 0 &&
+    typeof body.previous_response_id === "string";
+  if (statefulResume) {
     if (
       Array.isArray(body.input) &&
       body.input.some(
@@ -518,6 +632,30 @@ export async function handleResponses(
     }
   }
   const ownerKey = toolSessionOwnerKey(req, remoteAddress);
+  let transcriptTurn: TranscriptTurn | undefined;
+  if (config.useAcp && !statefulResume) {
+    try {
+      transcriptTurn = await classifyTranscriptTurn(
+        ctx.toolSessions,
+        ownerKey,
+        body.input,
+        config.verbose,
+      );
+    } catch (error) {
+      if (!(error instanceof ToolSessionError)) throw error;
+      json(res, error.status, {
+        error: {
+          message: error.message,
+          code: error.code,
+          type: "invalid_request_error",
+        },
+      });
+      return;
+    }
+  }
+  const transcriptResume =
+    transcriptTurn?.kind === "resume" ? transcriptTurn : undefined;
+  const resuming = statefulResume || transcriptResume !== undefined;
   const requested = normalizeModelId(body.model);
   const model = resolveModel(requested, lastRequestedModelRef, config);
   const models = await getCachedCursorModels(config, modelCacheRef);
@@ -557,29 +695,13 @@ export async function handleResponses(
   const createdAt = Math.floor(Date.now() / 1000);
 
   const structuredToolStart =
-    config.useAcp &&
-    selectedTools.length > 0 &&
-    submittedToolOutputs.length === 0;
-  if (structuredToolStart && body.store === false) {
-    json(res, 400, {
-      error: {
-        message:
-          "store=false is incompatible with stateful ACP tool passthrough",
-        code: "invalid_store",
-        type: "invalid_request_error",
-      },
-    });
-    return;
-  }
+    config.useAcp && selectedTools.length > 0 && !resuming;
   const toolsText = structuredToolStart
     ? undefined
     : toolsToSystemText(selectedTools);
   const media = await prepareRequestMedia(
     Array.isArray(body.input) ? body.input : [],
-    {
-      useAcp: config.useAcp,
-      resumesToolSession: config.useAcp && submittedToolOutputs.length > 0,
-    },
+    { useAcp: config.useAcp, resumesToolSession: resuming },
   );
   if (!media.ok) {
     json(res, 422, {
@@ -604,6 +726,10 @@ export async function handleResponses(
       : []),
     ...(toolsText ? [{ role: "system", content: toolsText }] : []),
     ...cleanMessages,
+    // Last among the system parts, so it sits next to the transcript.
+    ...(transcriptTurn?.kind === "rebuild"
+      ? [{ role: "system", content: REBUILT_TURN_NOTE }]
+      : []),
   ];
   const prompt = buildPromptFromMessages(messagesWithTools);
 
@@ -618,19 +744,24 @@ export async function handleResponses(
     !!body.stream,
   );
 
-  if (config.useAcp && submittedToolOutputs.length > 0) {
+  if (resuming) {
     const previousResponseId = body.previous_response_id;
-    const record =
-      typeof previousResponseId === "string"
-        ? ctx.toolSessions.findByResponseId(ownerKey, previousResponseId)
-        : undefined;
-    if (
-      !record ||
-      record.api !== "responses" ||
-      !submittedToolOutputs.every((output) =>
-        record.session.hasCall(output.callId),
-      )
-    ) {
+    let resumed: ParkedResume | undefined = transcriptResume;
+    if (!resumed && typeof previousResponseId === "string") {
+      const found = ctx.toolSessions.findByResponseId(
+        ownerKey,
+        previousResponseId,
+      );
+      if (
+        found?.api === "responses" &&
+        submittedToolOutputs.every((output) =>
+          found.session.hasCall(output.callId),
+        )
+      ) {
+        resumed = { record: found, outputs: submittedToolOutputs };
+      }
+    }
+    if (!resumed) {
       json(res, 409, {
         error: {
           message:
@@ -641,6 +772,11 @@ export async function handleResponses(
       });
       return;
     }
+    const { record, outputs } = resumed;
+    logToolSession(
+      config.verbose,
+      `${record.id} resumed with ${outputs.map((output) => output.callId).join(", ")} (matched by ${transcriptResume ? "call_id" : "previous_response_id"})`,
+    );
     const configDir = record.configDir;
     logAccountAssigned(configDir);
     reportRequestStart(configDir);
@@ -665,12 +801,13 @@ export async function handleResponses(
         run: async (listener) => {
           const turn = await ctx.toolSessions.resume(
             record,
-            submittedToolOutputs,
+            outputs,
             listener,
           );
           if (turn.status === "tool_calls") {
             ctx.toolSessions.aliasResponse(record, id);
           }
+          logToolTurn(config.verbose, record, turn);
           return turn;
         },
       });
@@ -846,6 +983,7 @@ export async function handleResponses(
           if (turn.status === "tool_calls") {
             ctx.toolSessions.aliasResponse(record!, id);
           }
+          logToolTurn(config.verbose, record!, turn);
           return turn;
         },
       });
