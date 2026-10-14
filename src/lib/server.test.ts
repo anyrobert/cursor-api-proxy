@@ -523,6 +523,104 @@ describe("startBridgeServer", () => {
     expect(opts?.stdinContent).toBeUndefined();
   });
 
+  describe("media without ACP", () => {
+    const png =
+      "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR4nO3NMQEAAAjDMMC/ZzDBvlRA01vZJvwHAAAAAAAAAAAAbx2jxAE/i2AjOgAAAABJRU5ErkJggg==";
+    // A private URL and an unsupported source would both be rejected with ACP
+    // on; without ACP they must stay plain transcript placeholders.
+    const cases = [
+      {
+        path: "/v1/chat/completions",
+        body: {
+          model: "claude-3-opus",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "What color?" },
+                { type: "image_url", image_url: { url: `data:image/png;base64,${png}` } },
+                { type: "image_url", image_url: { url: "https://127.0.0.1/private.png" } },
+                { type: "video_url", video_url: { url: "data:video/x-msvideo;base64,AAAA" } },
+              ],
+            },
+          ],
+        },
+        parts: 3,
+        placeholders: ["[Image: base64 image/png]", "[Image: https://127.0.0.1/private.png]"],
+      },
+      {
+        path: "/v1/responses",
+        body: {
+          model: "claude-3-opus",
+          input: [
+            {
+              role: "user",
+              content: [
+                { type: "input_text", text: "What color?" },
+                { type: "input_image", image_url: `data:image/png;base64,${png}` },
+                { type: "input_image", file_id: "file_123" },
+              ],
+            },
+          ],
+        },
+        parts: 2,
+        placeholders: ["[Image: base64 image/png]", "[Image]"],
+      },
+      {
+        path: "/v1/messages",
+        body: {
+          model: "claude-3-opus",
+          max_tokens: 100,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "What color?" },
+                { type: "image", source: { type: "base64", media_type: "image/png", data: png } },
+                { type: "image", source: { type: "url", url: "https://127.0.0.1/private.png" } },
+              ],
+            },
+          ],
+        },
+        parts: 2,
+        placeholders: ["[Image: base64 image/png]", "[Image: https://127.0.0.1/private.png]"],
+      },
+    ];
+
+    it.each(cases)("$path answers with text placeholders and one warning", async ({ path, body, parts, placeholders }) => {
+      const runMock = vi.mocked(run);
+      runMock.mockClear();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        servers = startBridgeServer({
+          version: "1.0.0",
+          config: createTestConfig({ promptViaStdin: true }),
+        });
+        await new Promise<void>((resolve) =>
+          servers[0].on("listening", () => resolve()),
+        );
+
+        const { status } = await fetchServer(servers[0], path, {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        expect(status).toBe(200);
+        expect(runMock).toHaveBeenCalledTimes(1);
+        const [, , opts] = runMock.mock.calls[0];
+        for (const placeholder of placeholders) {
+          expect(opts?.stdinContent).toContain(placeholder);
+        }
+        const mediaWarnings = warn.mock.calls.filter(([line]) =>
+          String(line).includes("CURSOR_BRIDGE_USE_ACP=true"),
+        );
+        expect(mediaWarnings).toHaveLength(1);
+        expect(String(mediaWarnings[0][0])).toContain(`${parts} image/video part(s)`);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
   it("returns display model when request is default and defaultModel is set", async () => {
     servers = startBridgeServer({
       version: "0.1.0",

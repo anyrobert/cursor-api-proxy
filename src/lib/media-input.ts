@@ -207,16 +207,67 @@ async function videoFrames(data: Buffer, mime: string): Promise<AcpPromptBlock[]
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
 
+type MediaKind = "image" | "video";
+
+/** Classifies an OpenAI, Responses or Anthropic content part as media. */
+function mediaKind(part: unknown): MediaKind | undefined {
+  if (!part || typeof part !== "object") return undefined;
+  const type = (part as { type?: unknown }).type;
+  if (type === "image_url" || type === "input_image" || type === "image") return "image";
+  if (type === "video_url" || type === "input_video" || type === "video") return "video";
+  return undefined;
+}
+
+function contentParts(item: unknown): unknown[] {
+  const parts = (item as { content?: unknown } | null | undefined)?.content;
+  return Array.isArray(parts) ? parts : [];
+}
+
+function warnMediaWithoutAcp(count: number): void {
+  console.warn(
+    `[${new Date().toISOString()}] ${count} image/video part(s) sent to the model as text placeholders; forwarding media requires CURSOR_BRIDGE_USE_ACP=true.`,
+  );
+}
+
+export type PreparedMedia =
+  | { ok: true; blocks: AcpPromptBlock[] }
+  | { ok: false; error: string };
+
+/**
+ * Turns the media in a request into ACP prompt blocks.
+ *
+ * Without ACP there is no way to forward media, so the transcript keeps the
+ * text placeholders the prompt builders already emit and one warning is
+ * logged for the request. A resumed ACP tool session already received its
+ * media with the opening prompt, so nothing is fetched or decoded again.
+ */
+export async function prepareRequestMedia(
+  items: readonly unknown[],
+  opts: { useAcp: boolean; resumesToolSession: boolean },
+): Promise<PreparedMedia> {
+  if (!opts.useAcp) {
+    const count = items.reduce<number>(
+      (total, item) => total + contentParts(item).filter((part) => mediaKind(part)).length,
+      0,
+    );
+    if (count) warnMediaWithoutAcp(count);
+    return { ok: true, blocks: [] };
+  }
+  if (opts.resumesToolSession) return { ok: true, blocks: [] };
+  try {
+    return { ok: true, blocks: await mediaPromptBlocks(items) };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "invalid media input" };
+  }
+}
+
 /** Resolve media before invoking Cursor so unsupported media can never return a text-only 200. */
-export async function mediaPromptBlocks(items: unknown[]): Promise<AcpPromptBlock[]> {
+export async function mediaPromptBlocks(items: readonly unknown[]): Promise<AcpPromptBlock[]> {
   const result: AcpPromptBlock[] = [];
   for (const item of items) {
-    const parts = (item as any)?.content;
-    if (!Array.isArray(parts)) continue;
-    for (const part of parts) {
-      if (!part || typeof part !== "object") continue;
-      const type = part.type;
-      if (type === "image_url" || type === "input_image" || type === "image") {
+    for (const part of contentParts(item) as any[]) {
+      const type = mediaKind(part);
+      if (type === "image") {
         const source = part.image_url ?? part.url ?? part.source;
         const raw = typeof source === "string" ? source : source?.url ??
           (source?.type === "base64" && source?.data && source?.media_type
@@ -224,7 +275,7 @@ export async function mediaPromptBlocks(items: unknown[]): Promise<AcpPromptBloc
         if (typeof raw !== "string") throw new MediaInputError("image block has no supported source");
         const media = await loadMedia(raw, IMAGE_LIMIT);
         result.push(imageBlock(media.data, media.mime));
-      } else if (type === "video_url" || type === "input_video" || type === "video") {
+      } else if (type === "video") {
         const source = part.video_url ?? part.url ?? part.source;
         const raw = typeof source === "string" ? source : source?.url ??
           (source?.data && source?.media_type ? `data:${source.media_type};base64,${source.data}` : undefined);

@@ -3,7 +3,7 @@ import * as http from "node:http";
 
 import type { AnthropicMessagesRequest } from "../anthropic.js";
 import { buildPromptFromAnthropicMessages } from "../anthropic.js";
-import { mediaPromptBlocks, MediaInputError, type AcpPromptBlock } from "../media-input.js";
+import { prepareRequestMedia } from "../media-input.js";
 import {
   buildBridgeContextPreamble,
   BRIDGE_AGENT_PROMPT_SEPARATOR,
@@ -346,24 +346,6 @@ export async function handleAnthropicMessages(
   const systemWithTools = [cleanSystemText, toolsText, toolInstruction]
     .filter(Boolean)
     .join("\n\n");
-  const resumesToolSession = config.useAcp && submittedToolOutputs.length > 0;
-  let mediaBlocks: AcpPromptBlock[] = [];
-  // A tool_result turn resumes the ACP session whose opening prompt already
-  // carried this media, so do not fetch or decode it again.
-  if (!resumesToolSession) {
-    try {
-      mediaBlocks = await mediaPromptBlocks(body.messages ?? []);
-      if (mediaBlocks.length && !config.useAcp) throw new MediaInputError("multimodal input requires CURSOR_BRIDGE_USE_ACP=true");
-    } catch (error) {
-      json(res, 422, { error: { message: error instanceof Error ? error.message : "invalid media input", code: "unsupported_media", type: "invalid_request_error" } });
-      return;
-    }
-  }
-  const prompt = buildPromptFromAnthropicMessages(
-    cleanMessages,
-    systemWithTools as AnthropicMessagesRequest["system"],
-  );
-
   if (body.max_tokens == null || typeof body.max_tokens !== "number") {
     json(res, 400, {
       error: {
@@ -373,6 +355,27 @@ export async function handleAnthropicMessages(
     });
     return;
   }
+
+  const resumesToolSession = config.useAcp && submittedToolOutputs.length > 0;
+  const media = await prepareRequestMedia(cleanMessages, {
+    useAcp: config.useAcp,
+    resumesToolSession,
+  });
+  if (!media.ok) {
+    json(res, 422, {
+      error: {
+        type: "invalid_request_error",
+        message: media.error,
+        code: "unsupported_media",
+      },
+    });
+    return;
+  }
+  const mediaBlocks = media.blocks;
+  const prompt = buildPromptFromAnthropicMessages(
+    cleanMessages,
+    systemWithTools as AnthropicMessagesRequest["system"],
+  );
 
   const trafficMessages: TrafficMessage[] = [];
   if (cleanSystem) {

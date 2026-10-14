@@ -38,7 +38,7 @@ import { resolveRequestMode } from "../resolve-mode.js";
 import { resolveWorkspace } from "../workspace.js";
 import { buildBridgeContextPreamble, BRIDGE_AGENT_PROMPT_SEPARATOR } from "../bridge-context-preamble.js";
 import { sanitizeMessages } from "../sanitize.js";
-import { mediaPromptBlocks, MediaInputError, type AcpPromptBlock } from "../media-input.js";
+import { prepareRequestMedia } from "../media-input.js";
 import {
   getNextAccountConfigDir,
   reportRequestStart,
@@ -324,20 +324,21 @@ export async function handleChatCompletions(
     ...cleanMessages,
   ];
   const resumesToolSession = config.useAcp && submittedToolOutputs.length > 0;
-  let mediaBlocks: AcpPromptBlock[] = [];
-  // A tool-output turn resumes the ACP session whose opening prompt already
-  // carried this media, so do not fetch or decode it again.
-  if (!resumesToolSession) {
-    try {
-      mediaBlocks = await mediaPromptBlocks(cleanMessages);
-      if (mediaBlocks.length && !config.useAcp) {
-        throw new MediaInputError("multimodal input requires CURSOR_BRIDGE_USE_ACP=true");
-      }
-    } catch (error) {
-      json(res, 422, { error: { message: error instanceof Error ? error.message : "invalid media input", code: "unsupported_media", type: "invalid_request_error" } });
-      return;
-    }
+  const media = await prepareRequestMedia(cleanMessages, {
+    useAcp: config.useAcp,
+    resumesToolSession,
+  });
+  if (!media.ok) {
+    json(res, 422, {
+      error: {
+        message: media.error,
+        code: "unsupported_media",
+        type: "invalid_request_error",
+      },
+    });
+    return;
   }
+  const mediaBlocks = media.blocks;
   const prompt = buildPromptFromMessages(messagesWithTools);
 
   const trafficMessages: TrafficMessage[] = cleanMessages.map((m: any) => {
