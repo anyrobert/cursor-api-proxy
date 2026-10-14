@@ -5,12 +5,7 @@ import {
   type AcpPermissionParams,
   type AcpSessionResult,
 } from "./acp-connection.js";
-import {
-  acpModelSelectionError,
-  planAcpModelSelection,
-  type AcpModelOptions,
-  type AcpModelPlan,
-} from "./acp-model.js";
+import type { AcpModelOptions } from "./acp-model.js";
 import { ClientToolBridge } from "./client-tool-bridge.js";
 import type { AcpPromptBlock } from "./media-input.js";
 import type {
@@ -248,36 +243,10 @@ export class AcpToolSession {
 
   async #setModel(session: AcpSessionResult): Promise<void> {
     if (!this.#connection || !this.#sessionId) return;
-    const candidates = [
-      this.#opts.model,
-      ...(this.#opts.modelAliases ?? []),
-    ].filter((value): value is string => Boolean(value));
-    if (candidates.length === 0) return;
-    const available = session.models?.availableModels;
-    let plan: AcpModelPlan | undefined;
-    for (const candidate of candidates) {
-      const next = planAcpModelSelection(candidate, available, candidates);
-      if (next.action === "set" || next.action === "passthrough") {
-        plan = next;
-        break;
-      }
-      plan ??= next;
-    }
-    if (!plan || plan.action === "skip" || plan.action === "missing") {
-      if (this.#opts.strictModel && plan?.action !== "skip") {
-        throw new Error(
-          acpModelSelectionError(
-            candidates[0] ?? "",
-            plan?.action === "missing" ? plan.candidates : undefined,
-          ),
-        );
-      }
-      return;
-    }
     await this.#connection.configureSessionModel(
       this.#sessionId,
-      plan,
-      candidates[0],
+      this.#opts,
+      session,
     );
   }
 

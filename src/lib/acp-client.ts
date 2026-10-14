@@ -11,12 +11,10 @@ import { debuglog } from "node:util";
 import {
   ACP_CLIENT_CAPABILITIES,
   acpFailureText,
-  acpModelSelectionError,
-  applyAcpModelPlan,
+  configureAcpSessionModel,
   formatAcpRpcError,
-  planAcpModelSelection,
-  type AcpCatalogModel,
   type AcpModelOptions,
+  type AcpSessionModelState,
 } from "./acp-model.js";
 import { trackChildProcess } from "./process.js";
 import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
@@ -263,7 +261,8 @@ function describeAcpExit(
   return out;
 }
 
-async function configureAcpModel(
+/** Pick the session model through the decision the tool path shares. */
+function configureAcpModel(
   stdin: NodeJS.WritableStream,
   nextId: { current: number },
   pending: Map<
@@ -276,42 +275,19 @@ async function configureAcpModel(
   >,
   requestTimeoutMs: number,
   sessionId: string,
-  requested: string | undefined,
-  availableModels: AcpCatalogModel[] | undefined,
-  aliases: readonly string[] | undefined,
-  strictModel: boolean | undefined,
-): Promise<void> {
-  if (!requested) return;
-  const plan = planAcpModelSelection(requested, availableModels, aliases);
-  if (plan.action === "missing") {
-    debugAcp(
-      "ACP model: no catalog match for display name %j",
-      requested,
-    );
-    if (strictModel && requested !== "default") {
-      throw new Error(acpModelSelectionError(requested, plan.candidates));
-    }
-    return;
-  }
-  if (plan.action === "skip") {
-    debugAcp(
-      "ACP step: session/set_config_option (model) — skipped, using session default",
-    );
-    return;
-  }
-  // Pass the public CLI id so option-level errors can name both the request
-  // and the matched ACP base row.
-  await applyAcpModelPlan(plan, (configId, value) => {
-    debugAcp("ACP step: session/set_config_option (%s)", configId);
-    return sendRequest(
+  request: AcpModelOptions,
+  session: AcpSessionModelState,
+): Promise<unknown> {
+  return configureAcpSessionModel(request, session, (configId, value) =>
+    sendRequest(
       stdin,
       nextId,
       "session/set_config_option",
       { sessionId, configId, value },
       pending,
       requestTimeoutMs,
-    );
-  }, requested);
+    ),
+  );
 }
 
 function sendRequest(
@@ -524,10 +500,7 @@ export function runAcpSync(
           { cwd: opts.cwd, mcpServers: [] },
           pending,
           requestTimeoutMs,
-        )) as {
-          sessionId?: string;
-          models?: { availableModels?: AcpCatalogModel[] };
-        };
+        )) as ({ sessionId?: string } & AcpSessionModelState) | undefined;
         const sessionId = sessionResult?.sessionId;
         if (!sessionId) {
           stderr = appendAcpFailure(stderr, "ACP session/new returned no sessionId");
@@ -541,10 +514,8 @@ export function runAcpSync(
           pending,
           requestTimeoutMs,
           sessionId,
-          opts.model,
-          sessionResult.models?.availableModels,
-          opts.modelAliases,
-          opts.strictModel,
+          opts,
+          sessionResult,
         );
 
         debugAcp("ACP step: session/prompt");
@@ -720,10 +691,7 @@ export function runAcpStream(
           { cwd: opts.cwd, mcpServers: [] },
           pending,
           requestTimeoutMs,
-        )) as {
-          sessionId?: string;
-          models?: { availableModels?: AcpCatalogModel[] };
-        };
+        )) as ({ sessionId?: string } & AcpSessionModelState) | undefined;
         const sessionId = sessionResult?.sessionId;
         if (!sessionId) {
           stderr = appendAcpFailure(stderr, "ACP session/new returned no sessionId");
@@ -737,10 +705,8 @@ export function runAcpStream(
           pending,
           requestTimeoutMs,
           sessionId,
-          opts.model,
-          sessionResult.models?.availableModels,
-          opts.modelAliases,
-          opts.strictModel,
+          opts,
+          sessionResult,
         );
 
         debugAcp("ACP step: session/prompt");

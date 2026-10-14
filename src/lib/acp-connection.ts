@@ -5,10 +5,11 @@ import type { AcpPromptBlock } from "./media-input.js";
 
 import {
   ACP_CLIENT_CAPABILITIES,
-  applyAcpModelPlan,
+  configureAcpSessionModel,
   formatAcpRpcError,
-  type AcpCatalogModel,
+  type AcpModelOptions,
   type AcpModelPlan,
+  type AcpSessionModelState,
 } from "./acp-model.js";
 import { trackChildProcess } from "./process.js";
 import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
@@ -38,10 +39,7 @@ export type AcpInitializeResult = {
   };
 };
 
-export type AcpSessionResult = {
-  sessionId?: string;
-  models?: { availableModels?: AcpCatalogModel[] };
-};
+export type AcpSessionResult = { sessionId?: string } & AcpSessionModelState;
 
 export type AcpPermissionParams = {
   sessionId?: string;
@@ -273,23 +271,15 @@ export class AcpConnection {
     })) as AcpSessionResult;
   }
 
-  /**
-   * `requested` is the public CLI id; when set, option-level failures name
-   * both the request and the matched ACP base row.
-   */
-  async configureSessionModel(
+  /** Pick the session model through the decision the plain path shares. */
+  configureSessionModel(
     sessionId: string,
-    plan: AcpModelPlan,
-    requested?: string,
-  ): Promise<void> {
-    await applyAcpModelPlan(plan, async (configId, value) => {
-      debugAcp("ACP step: session/set_config_option (%s)", configId);
-      return this.request("session/set_config_option", {
-        sessionId,
-        configId,
-        value,
-      });
-    }, requested);
+    request: AcpModelOptions,
+    session: AcpSessionModelState,
+  ): Promise<AcpModelPlan> {
+    return configureAcpSessionModel(request, session, (configId, value) =>
+      this.request("session/set_config_option", { sessionId, configId, value }),
+    );
   }
 
   prompt(
