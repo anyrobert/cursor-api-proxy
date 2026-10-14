@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as http from "node:http";
 
 import { buildAgentFixedArgs } from "../agent-cmd-args.js";
+import { mediaPromptBlocks, MediaInputError } from "../media-input.js";
 import {
   getAccountStats,
   getNextAccountConfigDir,
@@ -581,6 +582,14 @@ export async function handleResponses(
     ...(toolsText ? [{ role: "system", content: toolsText }] : []),
     ...cleanMessages,
   ];
+  let mediaBlocks;
+  try {
+    mediaBlocks = await mediaPromptBlocks(Array.isArray(body.input) ? body.input : []);
+    if (mediaBlocks.length && !config.useAcp) throw new MediaInputError("multimodal input requires CURSOR_BRIDGE_USE_ACP=true");
+  } catch (error) {
+    json(res, 422, { error: { message: error instanceof Error ? error.message : "invalid media input", code: "unsupported_media", type: "invalid_request_error" } });
+    return;
+  }
   const prompt = buildPromptFromMessages(messagesWithTools);
 
   const trafficMessages: TrafficMessage[] = cleanMessages.map((m: any) => ({
@@ -787,6 +796,7 @@ export async function handleResponses(
         effectiveChatOnly,
         cmdArgs,
         prompt: agentPrompt,
+        mediaBlocks,
         tools: selectedTools,
         tempDir,
         configDir,
@@ -979,6 +989,7 @@ export async function handleResponses(
         configDir,
         abortController.signal,
         modelCatalogName,
+        mediaBlocks,
       )
         .then(({ code, stderr: stderrOut }) => {
           stopKeepalive();
@@ -1059,6 +1070,7 @@ export async function handleResponses(
       configDir,
       abortController.signal,
       modelCatalogName,
+      mediaBlocks,
     )
       .then(({ code, stderr: stderrOut }) => {
         stopKeepalive();
@@ -1120,6 +1132,7 @@ export async function handleResponses(
     configDir,
     abortController.signal,
     modelCatalogName,
+    mediaBlocks,
   );
   const syncLatency = Date.now() - syncStart;
   reportRequestEnd(configDir);

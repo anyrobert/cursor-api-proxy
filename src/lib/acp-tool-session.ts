@@ -11,6 +11,7 @@ import {
   type AcpModelPlan,
 } from "./acp-model.js";
 import { ClientToolBridge } from "./client-tool-bridge.js";
+import type { AcpPromptBlock } from "./media-input.js";
 import type {
   ClientToolDefinition,
   ClientToolOutput,
@@ -87,7 +88,7 @@ export class AcpToolSession {
     this.bridge = new ClientToolBridge(opts.tools);
   }
 
-  async start(prompt: string): Promise<void> {
+  async start(prompt: string, mediaBlocks?: AcpPromptBlock[]): Promise<void> {
     await this.bridge.start();
     try {
       const connectionOptions: AcpConnectionOptions = {
@@ -135,7 +136,7 @@ export class AcpToolSession {
       await this.#setModel(session);
       this.#armTtl();
       this.#promptDone = this.#connection
-        .prompt(this.#sessionId, prompt, 0)
+        .prompt(this.#sessionId, prompt, 0, mediaBlocks)
         .then(() => ({ ok: true }) as const)
         .catch((error: unknown) => ({
           ok: false as const,

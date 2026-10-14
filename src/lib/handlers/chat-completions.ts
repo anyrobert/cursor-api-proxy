@@ -38,6 +38,7 @@ import { resolveRequestMode } from "../resolve-mode.js";
 import { resolveWorkspace } from "../workspace.js";
 import { buildBridgeContextPreamble, BRIDGE_AGENT_PROMPT_SEPARATOR } from "../bridge-context-preamble.js";
 import { sanitizeMessages } from "../sanitize.js";
+import { mediaPromptBlocks, MediaInputError } from "../media-input.js";
 import {
   getNextAccountConfigDir,
   reportRequestStart,
@@ -322,6 +323,16 @@ export async function handleChatCompletions(
     ...(toolsText ? [{ role: "system", content: toolsText }] : []),
     ...cleanMessages,
   ];
+  let mediaBlocks;
+  try {
+    mediaBlocks = await mediaPromptBlocks(cleanMessages);
+    if (mediaBlocks.length && !config.useAcp) {
+      throw new MediaInputError("multimodal input requires CURSOR_BRIDGE_USE_ACP=true");
+    }
+  } catch (error) {
+    json(res, 422, { error: { message: error instanceof Error ? error.message : "invalid media input", code: "unsupported_media", type: "invalid_request_error" } });
+    return;
+  }
   const prompt = buildPromptFromMessages(messagesWithTools);
 
   const trafficMessages: TrafficMessage[] = cleanMessages.map((m: any) => {
@@ -517,6 +528,7 @@ export async function handleChatCompletions(
         effectiveChatOnly,
         cmdArgs,
         prompt: agentPrompt,
+        mediaBlocks,
         tools: selectedTools,
         tempDir,
         configDir,
@@ -634,6 +646,7 @@ export async function handleChatCompletions(
         configDir,
         abortController.signal,
         modelCatalogName,
+        mediaBlocks,
       )
         .then(({ code, stderr: stderrOut }) => {
           stopKeepalive();
@@ -779,6 +792,7 @@ export async function handleChatCompletions(
       configDir,
       abortController.signal,
       modelCatalogName,
+      mediaBlocks,
     )
       .then(({ code, stderr: stderrOut }) => {
         stopKeepalive();
@@ -840,6 +854,7 @@ export async function handleChatCompletions(
     configDir,
     abortController.signal,
     modelCatalogName,
+    mediaBlocks,
   );
   const syncLatency = Date.now() - syncStart;
   reportRequestEnd(configDir);

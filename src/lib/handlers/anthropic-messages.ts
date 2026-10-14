@@ -3,6 +3,7 @@ import * as http from "node:http";
 
 import type { AnthropicMessagesRequest } from "../anthropic.js";
 import { buildPromptFromAnthropicMessages } from "../anthropic.js";
+import { mediaPromptBlocks, MediaInputError } from "../media-input.js";
 import {
   buildBridgeContextPreamble,
   BRIDGE_AGENT_PROMPT_SEPARATOR,
@@ -345,6 +346,14 @@ export async function handleAnthropicMessages(
   const systemWithTools = [cleanSystemText, toolsText, toolInstruction]
     .filter(Boolean)
     .join("\n\n");
+  let mediaBlocks;
+  try {
+    mediaBlocks = await mediaPromptBlocks(body.messages ?? []);
+    if (mediaBlocks.length && !config.useAcp) throw new MediaInputError("multimodal input requires CURSOR_BRIDGE_USE_ACP=true");
+  } catch (error) {
+    json(res, 422, { error: { message: error instanceof Error ? error.message : "invalid media input", code: "unsupported_media", type: "invalid_request_error" } });
+    return;
+  }
   const prompt = buildPromptFromAnthropicMessages(
     cleanMessages,
     systemWithTools as AnthropicMessagesRequest["system"],
@@ -563,6 +572,7 @@ export async function handleAnthropicMessages(
         effectiveChatOnly,
         cmdArgs,
         prompt: agentPrompt,
+        mediaBlocks,
         tools: selectedTools,
         tempDir,
         configDir,
@@ -690,6 +700,7 @@ export async function handleAnthropicMessages(
         configDir,
         abortController.signal,
         modelCatalogName,
+        mediaBlocks,
       )
         .then(({ code, stderr: stderrOut }) => {
           stopKeepalive();
@@ -797,6 +808,7 @@ export async function handleAnthropicMessages(
       configDir,
       abortController.signal,
       modelCatalogName,
+      mediaBlocks,
     )
       .then(({ code, stderr: stderrOut }) => {
         stopKeepalive();
@@ -858,6 +870,7 @@ export async function handleAnthropicMessages(
     configDir,
     abortController.signal,
     modelCatalogName,
+    mediaBlocks,
   );
   const syncLatency = Date.now() - syncStart;
   reportRequestEnd(configDir);

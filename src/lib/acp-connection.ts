@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
 import { debuglog } from "node:util";
+import type { AcpPromptBlock } from "./media-input.js";
 
 import {
   ACP_CLIENT_CAPABILITIES,
@@ -292,13 +293,14 @@ export class AcpConnection {
     sessionId: string,
     prompt: string,
     timeoutMs?: number,
+    mediaBlocks?: AcpPromptBlock[],
   ): Promise<unknown> {
     debugAcp("ACP step: session/prompt");
     return this.request(
       "session/prompt",
       {
         sessionId,
-        prompt: [{ type: "text", text: prompt }],
+        prompt: [{ type: "text", text: prompt }, ...(mediaBlocks ?? [])],
       },
       timeoutMs,
     );
