@@ -3,6 +3,7 @@ import * as http from "node:http";
 
 import type { AnthropicMessagesRequest } from "../anthropic.js";
 import { buildPromptFromAnthropicMessages } from "../anthropic.js";
+import { prepareRequestMedia } from "../media-input.js";
 import {
   buildBridgeContextPreamble,
   BRIDGE_AGENT_PROMPT_SEPARATOR,
@@ -345,11 +346,6 @@ export async function handleAnthropicMessages(
   const systemWithTools = [cleanSystemText, toolsText, toolInstruction]
     .filter(Boolean)
     .join("\n\n");
-  const prompt = buildPromptFromAnthropicMessages(
-    cleanMessages,
-    systemWithTools as AnthropicMessagesRequest["system"],
-  );
-
   if (body.max_tokens == null || typeof body.max_tokens !== "number") {
     json(res, 400, {
       error: {
@@ -359,6 +355,27 @@ export async function handleAnthropicMessages(
     });
     return;
   }
+
+  const resumesToolSession = config.useAcp && submittedToolOutputs.length > 0;
+  const media = await prepareRequestMedia(cleanMessages, {
+    useAcp: config.useAcp,
+    resumesToolSession,
+  });
+  if (!media.ok) {
+    json(res, 422, {
+      error: {
+        type: "invalid_request_error",
+        message: media.error,
+        code: "unsupported_media",
+      },
+    });
+    return;
+  }
+  const mediaBlocks = media.blocks;
+  const prompt = buildPromptFromAnthropicMessages(
+    media.items,
+    systemWithTools as AnthropicMessagesRequest["system"],
+  );
 
   const trafficMessages: TrafficMessage[] = [];
   if (cleanSystem) {
@@ -389,7 +406,7 @@ export async function handleAnthropicMessages(
     !!body.stream,
   );
 
-  if (config.useAcp && submittedToolOutputs.length > 0) {
+  if (resumesToolSession) {
     const record = ctx.toolSessions.findByCallIds(
       "anthropic",
       ownerKey,
@@ -563,6 +580,7 @@ export async function handleAnthropicMessages(
         effectiveChatOnly,
         cmdArgs,
         prompt: agentPrompt,
+        mediaBlocks,
         tools: selectedTools,
         tempDir,
         configDir,
@@ -690,6 +708,7 @@ export async function handleAnthropicMessages(
         configDir,
         abortController.signal,
         modelCatalogName,
+        mediaBlocks,
       )
         .then(({ code, stderr: stderrOut }) => {
           stopKeepalive();
@@ -797,6 +816,7 @@ export async function handleAnthropicMessages(
       configDir,
       abortController.signal,
       modelCatalogName,
+      mediaBlocks,
     )
       .then(({ code, stderr: stderrOut }) => {
         stopKeepalive();
@@ -858,6 +878,7 @@ export async function handleAnthropicMessages(
     configDir,
     abortController.signal,
     modelCatalogName,
+    mediaBlocks,
   );
   const syncLatency = Date.now() - syncStart;
   reportRequestEnd(configDir);

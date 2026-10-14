@@ -19,6 +19,7 @@ import {
 } from "./acp-model.js";
 import { trackChildProcess } from "./process.js";
 import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
+import type { AcpPromptBlock } from "./media-input.js";
 
 export {
   resolveAcpModelConfigValue,
@@ -29,6 +30,8 @@ export {
 const debugAcp = debuglog("cursor-api-proxy:acp");
 
 export type AcpRunOptions = {
+  /** Optional validated media blocks appended to the text prompt. */
+  mediaBlocks?: AcpPromptBlock[];
   cwd: string;
   timeoutMs: number;
   env?: Record<string, string | undefined>;
@@ -562,7 +565,7 @@ export function runAcpSync(
         debugAcp("ACP step: session/prompt");
         await sendRequest(child.stdin, nextId, "session/prompt", {
           sessionId,
-          prompt: [{ type: "text", text: prompt }],
+          prompt: [{ type: "text", text: prompt }, ...(opts.mediaBlocks ?? [])],
         }, pending, requestTimeoutMs);
         if (accumulated.length === 0) {
           debugAcp("ACP sync: no content accumulated; stderr tail: %s", stderr.slice(-500));
@@ -759,7 +762,7 @@ export function runAcpStream(
         debugAcp("ACP step: session/prompt");
         await sendRequest(child.stdin, nextId, "session/prompt", {
           sessionId,
-          prompt: [{ type: "text", text: prompt }],
+          prompt: [{ type: "text", text: prompt }, ...(opts.mediaBlocks ?? [])],
         }, pending, requestTimeoutMs);
         finish(0);
       } catch (err) {

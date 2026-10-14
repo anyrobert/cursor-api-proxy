@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as http from "node:http";
 
 import { buildAgentFixedArgs } from "../agent-cmd-args.js";
+import { prepareRequestMedia } from "../media-input.js";
 import {
   getAccountStats,
   getNextAccountConfigDir,
@@ -555,7 +556,6 @@ export async function handleResponses(
   const id = `resp_${randomUUID().replace(/-/g, "")}`;
   const createdAt = Math.floor(Date.now() / 1000);
 
-  const cleanMessages = sanitizeMessages(responsesInputToMessages(body));
   const structuredToolStart =
     config.useAcp &&
     selectedTools.length > 0 &&
@@ -576,6 +576,30 @@ export async function handleResponses(
     : body.tool_choice === "none"
       ? undefined
       : toolsToSystemText(body.tools);
+  const media = await prepareRequestMedia(
+    Array.isArray(body.input) ? body.input : [],
+    {
+      useAcp: config.useAcp,
+      resumesToolSession: config.useAcp && submittedToolOutputs.length > 0,
+    },
+  );
+  if (!media.ok) {
+    json(res, 422, {
+      error: {
+        message: media.error,
+        code: "unsupported_media",
+        type: "invalid_request_error",
+      },
+    });
+    return;
+  }
+  const mediaBlocks = media.blocks;
+  // Forwarded media is replaced by its "[Image n of N attached below]" label.
+  const cleanMessages = sanitizeMessages(
+    responsesInputToMessages(
+      Array.isArray(body.input) ? { ...body, input: media.items } : body,
+    ),
+  );
   const messagesWithTools = [
     ...(toolInstruction && structuredToolStart
       ? [{ role: "system", content: toolInstruction }]
@@ -789,6 +813,7 @@ export async function handleResponses(
         effectiveChatOnly,
         cmdArgs,
         prompt: agentPrompt,
+        mediaBlocks,
         tools: selectedTools,
         tempDir,
         configDir,
@@ -981,6 +1006,7 @@ export async function handleResponses(
         configDir,
         abortController.signal,
         modelCatalogName,
+        mediaBlocks,
       )
         .then(({ code, stderr: stderrOut }) => {
           stopKeepalive();
@@ -1061,6 +1087,7 @@ export async function handleResponses(
       configDir,
       abortController.signal,
       modelCatalogName,
+      mediaBlocks,
     )
       .then(({ code, stderr: stderrOut }) => {
         stopKeepalive();
@@ -1122,6 +1149,7 @@ export async function handleResponses(
     configDir,
     abortController.signal,
     modelCatalogName,
+    mediaBlocks,
   );
   const syncLatency = Date.now() - syncStart;
   reportRequestEnd(configDir);

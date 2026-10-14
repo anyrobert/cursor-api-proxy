@@ -38,6 +38,7 @@ import { resolveRequestMode } from "../resolve-mode.js";
 import { resolveWorkspace } from "../workspace.js";
 import { buildBridgeContextPreamble, BRIDGE_AGENT_PROMPT_SEPARATOR } from "../bridge-context-preamble.js";
 import { sanitizeMessages } from "../sanitize.js";
+import { prepareRequestMedia } from "../media-input.js";
 import {
   getNextAccountConfigDir,
   reportRequestStart,
@@ -315,12 +316,29 @@ export async function handleChatCompletions(
     : body.tool_choice === "none"
       ? undefined
       : toolsToSystemText(body.tools, body.functions);
+  const resumesToolSession = config.useAcp && submittedToolOutputs.length > 0;
+  const media = await prepareRequestMedia(cleanMessages, {
+    useAcp: config.useAcp,
+    resumesToolSession,
+  });
+  if (!media.ok) {
+    json(res, 422, {
+      error: {
+        message: media.error,
+        code: "unsupported_media",
+        type: "invalid_request_error",
+      },
+    });
+    return;
+  }
+  const mediaBlocks = media.blocks;
   const messagesWithTools = [
     ...(toolInstruction && structuredToolStart
       ? [{ role: "system", content: toolInstruction }]
       : []),
     ...(toolsText ? [{ role: "system", content: toolsText }] : []),
-    ...cleanMessages,
+    // Forwarded media is replaced by its "[Image n of N attached below]" label.
+    ...media.items,
   ];
   const prompt = buildPromptFromMessages(messagesWithTools);
 
@@ -343,7 +361,7 @@ export async function handleChatCompletions(
     !!body.stream,
   );
 
-  if (config.useAcp && submittedToolOutputs.length > 0) {
+  if (resumesToolSession) {
     const record = ctx.toolSessions.findByCallIds(
       "chat",
       ownerKey,
@@ -517,6 +535,7 @@ export async function handleChatCompletions(
         effectiveChatOnly,
         cmdArgs,
         prompt: agentPrompt,
+        mediaBlocks,
         tools: selectedTools,
         tempDir,
         configDir,
@@ -634,6 +653,7 @@ export async function handleChatCompletions(
         configDir,
         abortController.signal,
         modelCatalogName,
+        mediaBlocks,
       )
         .then(({ code, stderr: stderrOut }) => {
           stopKeepalive();
@@ -779,6 +799,7 @@ export async function handleChatCompletions(
       configDir,
       abortController.signal,
       modelCatalogName,
+      mediaBlocks,
     )
       .then(({ code, stderr: stderrOut }) => {
         stopKeepalive();
@@ -840,6 +861,7 @@ export async function handleChatCompletions(
     configDir,
     abortController.signal,
     modelCatalogName,
+    mediaBlocks,
   );
   const syncLatency = Date.now() - syncStart;
   reportRequestEnd(configDir);

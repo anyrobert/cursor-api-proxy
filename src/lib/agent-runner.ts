@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 
 import { runAcpStream, runAcpSync } from "./acp-client.js";
+import type { AcpPromptBlock } from "./media-input.js";
 import { AcpToolSession } from "./acp-tool-session.js";
 import type { BridgeConfig } from "./config.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
@@ -89,7 +90,11 @@ export function runAgentSync(
   configDir?: string,
   signal?: AbortSignal,
   modelDisplayName?: string,
+  mediaBlocks?: AcpPromptBlock[],
 ): Promise<AgentRunResult> {
+  if (mediaBlocks?.length && !config.useAcp) {
+    return Promise.reject(new Error("multimodal input requires Cursor ACP mode"));
+  }
   if (config.useAcp && typeof stdinPrompt === "string") {
     const invocation = acpInvocation(
       config,
@@ -110,6 +115,7 @@ export function runAgentSync(
       skipAuthenticate: config.acpSkipAuthenticate,
       rawDebug: config.acpRawDebug,
       signal,
+      mediaBlocks,
     }).then((out) => {
       cacheTokenForAccount(configDir);
       if (tempDir) {
@@ -159,7 +165,11 @@ export function runAgentStream(
   configDir?: string,
   signal?: AbortSignal,
   modelDisplayName?: string,
+  mediaBlocks?: AcpPromptBlock[],
 ): Promise<{ code: number; stderr: string }> {
+  if (mediaBlocks?.length && !config.useAcp) {
+    return Promise.reject(new Error("multimodal input requires Cursor ACP mode"));
+  }
   if (config.useAcp && typeof stdinPrompt === "string") {
     const invocation = acpInvocation(
       config,
@@ -184,6 +194,7 @@ export function runAgentStream(
         skipAuthenticate: config.acpSkipAuthenticate,
         rawDebug: config.acpRawDebug,
         signal,
+        mediaBlocks,
       },
       onLine,
     ).then((result) => {
@@ -229,6 +240,7 @@ export async function startAgentToolSession(opts: {
   effectiveChatOnly: boolean;
   cmdArgs: string[];
   prompt: string;
+  mediaBlocks?: AcpPromptBlock[];
   tools: readonly ClientToolDefinition[];
   tempDir?: string;
   configDir?: string;
@@ -281,7 +293,7 @@ export async function startAgentToolSession(opts: {
     onClose: cleanup,
   });
   try {
-    await session.start(opts.prompt);
+    await session.start(opts.prompt, opts.mediaBlocks);
     return session;
   } catch (error) {
     cleanup();

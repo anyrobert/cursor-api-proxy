@@ -342,6 +342,116 @@ describe.each([false, true])("ACP tool APIs stream=%s", (stream) => {
   });
 });
 
+describe("ACP tool sessions with media", () => {
+  const redPng =
+    "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR4nO3NMQEAAAjDMMC/ZzDBvlRA01vZJvwHAAAAAAAAAAAAbx2jxAE/i2AjOgAAAABJRU5ErkJggg==";
+  // Resolving this URL fails, so a 200 proves the resumed turn did not
+  // re-fetch media that the opening prompt already delivered.
+  const unfetchableImage = "https://127.0.0.1/gone.png";
+
+  it("does not re-resolve history media on a Chat Completions tool result", async () => {
+    const base = await start();
+    const tools = [
+      {
+        type: "function",
+        function: {
+          name: "weather",
+          description: "Get weather",
+          parameters: { type: "object", properties: { city: { type: "string" } } },
+        },
+      },
+    ];
+    const initial = await post(base, "/v1/chat/completions", {
+      model: "gpt-4",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Weather where this photo was taken?" },
+            { type: "image_url", image_url: { url: `data:image/png;base64,${redPng}` } },
+          ],
+        },
+      ],
+      tools,
+    });
+    expect(initial.status).toBe(200);
+    const call = JSON.parse(initial.text).choices[0].message.tool_calls[0];
+
+    const follow = await post(base, "/v1/chat/completions", {
+      model: "gpt-4",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Weather where this photo was taken?" },
+            { type: "image_url", image_url: { url: unfetchableImage } },
+          ],
+        },
+        { role: "assistant", content: null, tool_calls: [call] },
+        { role: "tool", tool_call_id: call.id, content: "sunny" },
+      ],
+    });
+    expect(follow.status).toBe(200);
+    expect(JSON.parse(follow.text).choices[0].message.content).toContain(
+      "Tool result: sunny",
+    );
+  });
+
+  it("does not re-resolve history media on an Anthropic tool_result", async () => {
+    const base = await start();
+    const initial = await post(base, "/v1/messages", {
+      model: "gpt-4",
+      max_tokens: 256,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Weather where this photo was taken?" },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: redPng } },
+          ],
+        },
+      ],
+      tools: [
+        {
+          name: "weather",
+          description: "Get weather",
+          input_schema: { type: "object", properties: { city: { type: "string" } } },
+        },
+      ],
+    });
+    expect(initial.status).toBe(200);
+    const call = JSON.parse(initial.text).content.find(
+      (block: any) => block.type === "tool_use",
+    );
+
+    const follow = await post(base, "/v1/messages", {
+      model: "gpt-4",
+      max_tokens: 256,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Weather where this photo was taken?" },
+            { type: "image", source: { type: "url", url: unfetchableImage } },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: call.id, name: call.name, input: call.input }],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: call.id, content: "sunny" }],
+        },
+      ],
+    });
+    expect(follow.status).toBe(200);
+    expect(JSON.parse(follow.text).content[0].text).toContain(
+      "Tool result: sunny",
+    );
+  });
+});
+
 describe("ACP tool session errors", () => {
   it("returns conflict for unknown tool call ids", async () => {
     const base = await start();
