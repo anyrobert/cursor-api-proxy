@@ -1,20 +1,61 @@
 /**
- * Map Cursor CLI model ids onto ACP session/set_config_option.
+ * Choose the ACP session model for a public Cursor CLI id.
  *
- * Matching is catalog-driven and has no per-family id table. Public CLI ids
- * are decomposed by trailing suffixes (`-fast`, effort, `-thinking`) plus an
- * optional `cursor-` vendor prefix; the ACP catalog then supplies the base
- * row and the concrete option ids/values. New families (Grok 4.8, …) work as
- * long as ACP advertises a matching base row.
+ * The proxy spawns `agent acp --model <public id>`, so `session/new` already
+ * reports the CLI's own resolution: `models.currentModelId` plus the current
+ * `configOptions` values. On top of that the proxy matches the public id
+ * against the ACP catalog (no per-family id table): public ids are decomposed
+ * by trailing suffixes (`-fast`, effort, `-thinking`, in any order) plus an
+ * optional `cursor-` vendor prefix, and the catalog supplies the base row and
+ * the concrete option ids/values.
+ *
+ * `configureAcpSessionModel` is the single entry point for both the plain
+ * path (acp-client) and the tool path (acp-connection/acp-tool-session):
+ * 1. catalog match: set that row, then apply the requested options strictly
+ * 2. catalog miss, but the CLI selected a catalog row: keep the CLI's row and
+ *    apply only the options that map cleanly onto its configOptions
+ * 3. neither: "missing"; strict mode turns it into an error naming the id
  *
  * Catalog shapes:
  * - parameterized (client advertises `_meta.parameterizedModelPicker`): one
- *   family id (`glm-5.2`, `grok-4.6`) plus reasoning/effort/thinking/fast/speed
+ *   family row (`glm-5.2`, `grok-4.6`) plus effort/thinking/fast selects
  * - legacy bracket rows (`glm-5.2[reasoning=high]`) with a single variant
  * - per-variant rows (`grok-4.6-medium`) that already encode the suffix
  */
 
+import { debuglog } from "node:util";
+
+const debugAcp = debuglog("cursor-api-proxy:acp");
+
 export type AcpCatalogModel = { modelId: string; name: string };
+
+export type AcpConfigOption = {
+  id: string;
+  currentValue?: string;
+  options?: Array<{ value?: string }>;
+};
+
+/** The model-related part of an ACP `session/new` result. */
+export type AcpSessionModelState = {
+  models?: {
+    currentModelId?: string;
+    availableModels?: AcpCatalogModel[];
+  };
+  configOptions?: AcpConfigOption[];
+};
+
+/**
+ * The model request. Both ACP paths take these fields in their options and
+ * pass them through unchanged, so they always decide on the same inputs.
+ */
+export type AcpModelOptions = {
+  /** Public CLI id (`agent --list-models`); also spawned as `agent acp --model`. */
+  model?: string;
+  /** Extra catalog names, typically the `agent --list-models` display name. */
+  modelAliases?: readonly string[];
+  /** Fail when neither the ACP catalog nor the CLI yields a model. */
+  strictModel?: boolean;
+};
 
 export type AcpModelParameters = {
   effort?: string;
@@ -23,16 +64,21 @@ export type AcpModelParameters = {
 };
 
 export type AcpModelPlan =
-  | { action: "passthrough"; modelId: string }
+  /** Nothing requested, or `auto` without an auto row: leave the session alone. */
   | { action: "skip" }
-  | { action: "missing"; candidates: string[] }
-  | { action: "set"; modelId: string; parameters?: AcpModelParameters };
+  /** No catalog to match against: hand the id to ACP as-is. */
+  | { action: "passthrough"; modelId: string }
+  /** The proxy matched a catalog row. */
+  | { action: "set"; modelId: string; parameters?: AcpModelParameters }
+  /** The proxy missed, but the CLI already selected this catalog row. */
+  | { action: "keep"; modelId: string; parameters?: AcpModelParameters }
+  /** Neither the catalog nor the CLI produced a model. */
+  | { action: "missing"; candidates: string[]; sessionModelId?: string };
 
-export type AcpConfigOption = {
-  id: string;
-  currentValue?: string;
-  options?: Array<{ value?: string }>;
-};
+export type AcpSetConfigOption = (
+  configId: string,
+  value: string,
+) => Promise<unknown>;
 
 export const ACP_CLIENT_CAPABILITIES = {
   fs: { readTextFile: false, writeTextFile: false },
@@ -50,6 +96,9 @@ const EFFORT_SUFFIXES = [
   "low",
   "max",
 ] as const;
+
+/** Effort/reasoning select ids seen in the ACP catalog and in bracket rows. */
+const LEVEL_OPTION_IDS = ["reasoning", "effort", "reasoning_effort"] as const;
 
 function norm(value: string): string {
   return value.trim().toLowerCase();
@@ -99,29 +148,71 @@ function stripSuffix(
   return { base: model.slice(0, -(suffix.length + 1)), suffix };
 }
 
-export function parseCliModelVariant(model: string): {
+type CliModelVariant = {
   base: string;
   effort?: string;
   thinking: boolean;
   fast: boolean;
   variant: boolean;
   auto: boolean;
-} {
+};
+
+/**
+ * Split `-fast`, effort and `-thinking` off a public id. Each suffix is
+ * stripped at most once, in any order: the CLI lists both
+ * `claude-opus-5-thinking-high-fast` and `claude-4.6-opus-high-thinking`.
+ */
+function parseCliModelVariant(model: string): CliModelVariant {
   const raw = model.trim();
   if (isAutoRequest(raw)) {
     return { base: raw, thinking: false, fast: false, variant: false, auto: true };
   }
-  const fast = stripSuffix(raw, ["fast"]);
-  const effort = stripSuffix(fast.base, EFFORT_SUFFIXES);
-  const thinking = stripSuffix(effort.base, ["thinking"]);
+  let base = raw;
+  let effort: string | undefined;
+  let thinking = false;
+  let fast = false;
+  for (;;) {
+    if (!fast) {
+      const next = stripSuffix(base, ["fast"]);
+      if (next.suffix) {
+        base = next.base;
+        fast = true;
+        continue;
+      }
+    }
+    if (!effort) {
+      const next = stripSuffix(base, EFFORT_SUFFIXES);
+      if (next.suffix) {
+        base = next.base;
+        effort = next.suffix;
+        continue;
+      }
+    }
+    if (!thinking) {
+      const next = stripSuffix(base, ["thinking"]);
+      if (next.suffix) {
+        base = next.base;
+        thinking = true;
+        continue;
+      }
+    }
+    break;
+  }
   return {
-    base: thinking.base,
-    effort: effort.suffix,
-    thinking: Boolean(thinking.suffix),
-    fast: Boolean(fast.suffix),
-    variant: Boolean(fast.suffix || effort.suffix || thinking.suffix),
+    base,
+    effort,
+    thinking,
+    fast,
+    variant: fast || thinking || Boolean(effort),
     auto: false,
   };
+}
+
+function variantParameters(
+  parsed: CliModelVariant,
+): AcpModelParameters | undefined {
+  if (!parsed.variant) return undefined;
+  return { effort: parsed.effort, thinking: parsed.thinking, fast: parsed.fast };
 }
 
 function bracketParams(modelId: string): Record<string, string> | undefined {
@@ -146,23 +237,15 @@ function effortCandidates(effort: string): string[] {
 }
 
 function variantMatchesBracket(
-  parsed: ReturnType<typeof parseCliModelVariant>,
+  parsed: CliModelVariant,
   params: Record<string, string>,
 ): boolean {
   if (parsed.effort) {
-    const level = params.reasoning ?? params.effort ?? params.reasoning_effort;
+    const level = LEVEL_OPTION_IDS.map((id) => params[id]).find(Boolean);
     if (!level || !effortCandidates(parsed.effort).includes(level)) return false;
   }
-  if (parsed.fast) {
-    if (params.fast !== "true") return false;
-  } else if (params.fast === "true") {
-    return false;
-  }
-  if (parsed.thinking) {
-    if (params.thinking !== "true") return false;
-  } else if (params.thinking === "true") {
-    return false;
-  }
+  if (parsed.fast !== (params.fast === "true")) return false;
+  if (parsed.thinking !== (params.thinking === "true")) return false;
   return true;
 }
 
@@ -175,7 +258,7 @@ function rowMatches(model: AcpCatalogModel, keys: Set<string>): boolean {
 }
 
 /**
- * Resolve a public CLI id against the ACP catalog.
+ * Match a public CLI id against the ACP catalog alone.
  *
  * Phase 1 matches the full id (with/without `cursor-`). Phase 2 uses display
  * names only when they cannot swallow a variant (plain base name like
@@ -260,11 +343,7 @@ export function planAcpModelSelection(
       return {
         action: "set",
         modelId: hit.modelId,
-        parameters: {
-          effort: parsed.effort,
-          thinking: parsed.thinking,
-          fast: parsed.fast,
-        },
+        parameters: variantParameters(parsed),
       };
     }
   }
@@ -272,24 +351,49 @@ export function planAcpModelSelection(
   return missing();
 }
 
+/** The catalog row the CLI selected from `--model`, unless it is Auto. */
+function cliSelectedModel(
+  session: AcpSessionModelState | undefined,
+): string | undefined {
+  const current = session?.models?.currentModelId?.trim();
+  if (!current) return undefined;
+  const row = session?.models?.availableModels?.find(
+    (model) => model.modelId === current,
+  );
+  return row && !isAutoRow(row) ? row.modelId : undefined;
+}
+
 /**
- * Legacy string resolver. `default[]` means the catalog has no row.
- * `default` means "leave the session model alone".
+ * The one model decision shared by every ACP path. Catalog match first; on a
+ * miss, trust the row the CLI already selected for `--model <requested>`.
  */
-export function resolveAcpModelConfigValue(
-  displayName: string,
-  availableModels: readonly AcpCatalogModel[] | undefined,
+export function decideAcpModel(
+  requested: string,
+  session: AcpSessionModelState | undefined,
   aliases: readonly string[] = [],
-): string {
-  const plan = planAcpModelSelection(displayName, availableModels, aliases);
-  if (plan.action === "passthrough" || plan.action === "set") return plan.modelId;
-  if (plan.action === "skip") return "default";
-  return "default[]";
+): AcpModelPlan {
+  const plan = planAcpModelSelection(
+    requested,
+    session?.models?.availableModels,
+    aliases,
+  );
+  if (plan.action !== "missing") return plan;
+  const selected = cliSelectedModel(session);
+  if (!selected) {
+    return { ...plan, sessionModelId: session?.models?.currentModelId };
+  }
+  const parameters = variantParameters(parseCliModelVariant(requested));
+  return {
+    action: "keep",
+    modelId: selected,
+    ...(parameters ? { parameters } : {}),
+  };
 }
 
 export function acpModelSelectionError(
   requested: string,
   candidates?: readonly string[],
+  sessionModelId?: string,
 ): string {
   const tried = [
     ...new Set(
@@ -301,10 +405,13 @@ export function acpModelSelectionError(
   const detail = tried.length
     ? ` (also tried: ${tried.join(", ")})`
     : "";
-  return `ACP model catalog has no match for ${JSON.stringify(requested)}${detail}`;
+  const cli = sessionModelId === undefined
+    ? ""
+    : `; the Cursor CLI did not select a model for it either (session model: ${sessionModelId})`;
+  return `ACP model catalog has no match for ${JSON.stringify(requested)}${detail}${cli}`;
 }
 
-export function readAcpConfigOptions(result: unknown): AcpConfigOption[] {
+function readAcpConfigOptions(result: unknown): AcpConfigOption[] {
   if (!result || typeof result !== "object") return [];
   const list = (result as { configOptions?: unknown }).configOptions;
   return Array.isArray(list) ? (list as AcpConfigOption[]) : [];
@@ -316,29 +423,12 @@ function optionValues(option: AcpConfigOption): string[] {
     .filter(Boolean);
 }
 
-/** Pick the catalog select that represents reasoning/effort (id discovered, not hard-coded per model). */
-function isLevelOption(option: AcpConfigOption): boolean {
-  const id = norm(option.id);
-  return (
-    id === "reasoning" ||
-    id === "effort" ||
-    id === "reasoning_effort" ||
-    id.includes("reasoning") ||
-    id.includes("effort")
-  );
-}
-
-function pickLevelOption(
+function findOption(
   options: readonly AcpConfigOption[],
-  effort: string,
+  id: string,
 ): AcpConfigOption | undefined {
-  const present = options.filter(isLevelOption);
-  const candidates = effortCandidates(effort);
-  return (
-    present.find((option) =>
-      optionValues(option).some((value) => candidates.includes(norm(value))),
-    ) ?? present[0]
-  );
+  const key = norm(id);
+  return options.find((option) => norm(option.id) === key);
 }
 
 function describeAdvertised(options: readonly AcpConfigOption[]): string {
@@ -348,122 +438,159 @@ function describeAdvertised(options: readonly AcpConfigOption[]): string {
   return parts.length ? parts.join(", ") : "(none)";
 }
 
-function optionResolutionError(
-  requested: string | undefined,
-  modelId: string,
-  detail: string,
-  options: readonly AcpConfigOption[],
-): Error {
-  const publicId = requested?.trim();
-  const head = publicId
-    ? `Requested public model: ${publicId}; matched ACP base model: ${modelId}; `
-    : `ACP model ${JSON.stringify(modelId)} `;
-  return new Error(
-    `${head}${detail}; advertised ACP options: ${describeAdvertised(options)}`,
-  );
+/** A select change to send, a reason it cannot be sent, or nothing to do. */
+type OptionChange =
+  | { configId: string; value: string }
+  | { problem: string }
+  | undefined;
+
+function changeTo(option: AcpConfigOption, value: string): OptionChange {
+  return String(option.currentValue) === value
+    ? undefined
+    : { configId: option.id, value };
 }
 
-function matchingOptionValue(
-  option: AcpConfigOption,
+function effortChange(
+  options: readonly AcpConfigOption[],
   effort: string,
-): string | undefined {
-  const candidates = effortCandidates(effort);
-  return optionValues(option).find((value) => candidates.includes(norm(value)));
+): OptionChange {
+  const levels = LEVEL_OPTION_IDS.map((id) => findOption(options, id)).filter(
+    (option): option is AcpConfigOption => Boolean(option),
+  );
+  if (levels.length === 0) {
+    return { problem: "has no reasoning or effort parameter" };
+  }
+  const wanted = effortCandidates(effort);
+  for (const option of levels) {
+    const value = optionValues(option).find((item) => wanted.includes(norm(item)));
+    if (value) return changeTo(option, value);
+  }
+  const first = levels[0]!;
+  return {
+    problem: `does not offer ${first.id} ${JSON.stringify(effort)} (available: ${optionValues(first).join(", ")})`,
+  };
 }
 
-async function applyBooleanParameter(
+function booleanChange(
   options: readonly AcpConfigOption[],
-  setOption: (configId: string, value: string) => Promise<unknown>,
   id: "thinking" | "fast",
   desired: boolean,
-): Promise<void> {
-  const option = options.find((item) => item.id === id);
-  if (!option) {
-    if (desired) {
-      throw new Error(`ACP model has no ${id} parameter`);
-    }
-    return;
-  }
-  const value = desired ? "true" : "false";
+): OptionChange {
+  const option = findOption(options, id);
+  if (!option) return desired ? { problem: `has no ${id} parameter` } : undefined;
+  const value = String(desired);
   if (!optionValues(option).includes(value)) {
-    throw new Error(
-      `ACP model does not offer ${id}=${value} (available: ${optionValues(option).join(", ")})`,
-    );
+    return {
+      problem: `does not offer ${id}=${value} (available: ${optionValues(option).join(", ")})`,
+    };
   }
-  if (String(option.currentValue) === value) return;
-  await setOption(id, value);
+  return changeTo(option, value);
 }
-
-const FAST_TRUE_VALUES = new Set(["true", "fast"]);
-const FAST_FALSE_VALUES = new Set(["false", "normal", "default", "standard"]);
 
 /**
- * Map the CLI `-fast` suffix onto whatever the catalog advertises: a boolean
- * `fast` select (Claude/GPT/Composer) or a `speed` select (`fast`/`normal`).
+ * Apply a plan. `sessionOptions` are the `configOptions` from `session/new`;
+ * a "keep" plan applies its parameters against them and skips any parameter
+ * that does not map cleanly, while a "set" plan re-selects the row and fails
+ * on any parameter the row cannot honour.
  */
-async function applyFastParameter(
-  options: readonly AcpConfigOption[],
-  setOption: (configId: string, value: string) => Promise<unknown>,
-  desired: boolean,
-): Promise<void> {
-  const booleanFast = options.find((item) => norm(item.id) === "fast");
-  if (booleanFast) {
-    await applyBooleanParameter(options, setOption, "fast", desired);
-    return;
-  }
-  const speed = options.find((item) => {
-    const id = norm(item.id);
-    return id === "speed" || id.includes("speed");
-  });
-  if (!speed) {
-    if (desired) throw new Error("has no fast or speed parameter");
-    return;
-  }
-  const wanted = desired ? FAST_TRUE_VALUES : FAST_FALSE_VALUES;
-  const value = optionValues(speed).find((item) => wanted.has(norm(item)));
-  if (!value) {
-    throw new Error(
-      `does not offer ${speed.id}=${desired ? "fast" : "normal"} (available: ${optionValues(speed).join(", ")})`,
-    );
-  }
-  if (String(speed.currentValue) === value) return;
-  await setOption(speed.id, value);
-}
-
 export async function applyAcpModelPlan(
   plan: AcpModelPlan,
-  setOption: (configId: string, value: string) => Promise<unknown>,
+  sessionOptions: readonly AcpConfigOption[],
+  setOption: AcpSetConfigOption,
   requested?: string,
 ): Promise<void> {
   if (plan.action === "skip" || plan.action === "missing") return;
-  const result = await setOption("model", plan.modelId);
-  if (plan.action !== "set" || !plan.parameters) return;
+  if (plan.action === "passthrough") {
+    await setOption("model", plan.modelId);
+    return;
+  }
+  const options =
+    plan.action === "set"
+      ? readAcpConfigOptions(await setOption("model", plan.modelId))
+      : sessionOptions;
+  if (!plan.parameters) return;
 
-  const options = readAcpConfigOptions(result);
+  const fail = (detail: string): Error => {
+    const publicId = requested?.trim();
+    const source =
+      plan.action === "set" ? "matched ACP base model" : "Cursor CLI selected ACP model";
+    const head = publicId
+      ? `Requested public model: ${publicId}; ${source}: ${plan.modelId}; `
+      : `ACP model ${JSON.stringify(plan.modelId)} `;
+    return new Error(
+      `${head}${detail}; advertised ACP options: ${describeAdvertised(options)}`,
+    );
+  };
+
   const { effort, thinking, fast } = plan.parameters;
-  const fail = (detail: string): Error =>
-    optionResolutionError(requested, plan.modelId, detail, options);
-  if (effort) {
-    const option = pickLevelOption(options, effort);
-    if (!option) {
-      throw fail("has no reasoning or effort parameter");
+  const changes = [
+    effort ? effortChange(options, effort) : undefined,
+    booleanChange(options, "thinking", thinking),
+    booleanChange(options, "fast", fast),
+  ];
+  for (const change of changes) {
+    if (!change) continue;
+    if ("problem" in change) {
+      if (plan.action === "set") throw fail(change.problem);
+      debugAcp("ACP model: keeping CLI value, %s %s", plan.modelId, change.problem);
+      continue;
     }
-    const value = matchingOptionValue(option, effort);
-    if (!value) {
-      throw fail(
-        `does not offer ${option.id} ${JSON.stringify(effort)} (available: ${optionValues(option).join(", ")})`,
+    try {
+      await setOption(change.configId, change.value);
+    } catch (error) {
+      throw fail(acpFailureText(error));
+    }
+  }
+}
+
+function describePlan(plan: AcpModelPlan): string {
+  switch (plan.action) {
+    case "skip":
+      return "skip (session default)";
+    case "missing":
+      return `missing (session model: ${plan.sessionModelId ?? "none"})`;
+    case "passthrough":
+      return `passthrough ${plan.modelId}`;
+    default:
+      return `${plan.action} ${plan.modelId}${plan.parameters ? ` ${JSON.stringify(plan.parameters)}` : ""}`;
+  }
+}
+
+/**
+ * Decide and apply the session model. Both ACP paths call this with the
+ * same request and the raw `session/new` result, so they cannot disagree.
+ */
+export async function configureAcpSessionModel(
+  request: AcpModelOptions,
+  session: AcpSessionModelState | undefined,
+  setOption: AcpSetConfigOption,
+): Promise<AcpModelPlan> {
+  const requested = request.model?.trim();
+  if (!requested) return { action: "skip" };
+  const plan = decideAcpModel(requested, session, request.modelAliases);
+  debugAcp("ACP model: %s -> %s", requested, describePlan(plan));
+  if (plan.action === "missing") {
+    if (request.strictModel) {
+      throw new Error(
+        acpModelSelectionError(
+          requested,
+          plan.candidates,
+          plan.sessionModelId || "none",
+        ),
       );
     }
-    if (String(option.currentValue) !== value) {
-      await setOption(option.id, value);
-    }
+    return plan;
   }
-  try {
-    await applyBooleanParameter(options, setOption, "thinking", thinking);
-    await applyFastParameter(options, setOption, fast);
-  } catch (error) {
-    throw fail(error instanceof Error ? error.message : String(error));
-  }
+  await applyAcpModelPlan(
+    plan,
+    session?.configOptions ?? [],
+    (configId, value) => {
+      debugAcp("ACP step: session/set_config_option %s=%s", configId, value);
+      return setOption(configId, value);
+    },
+    requested,
+  );
+  return plan;
 }
 
 export function formatAcpRpcError(error: {

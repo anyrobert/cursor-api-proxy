@@ -2,12 +2,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   acpModelSelectionError,
-  applyAcpModelPlan,
   planAcpModelSelection,
 } from "./acp-model.js";
 import {
   extractAcpUpdateText,
-  resolveAcpModelConfigValue,
   runAcpStream,
   runAcpSync,
 } from "./acp-client.js";
@@ -45,41 +43,48 @@ describe("extractAcpUpdateText", () => {
   });
 });
 
-describe("resolveAcpModelConfigValue", () => {
-  it("returns display name when catalog is missing", () => {
-    expect(resolveAcpModelConfigValue("gpt-4", undefined)).toBe("gpt-4");
+describe("planAcpModelSelection", () => {
+  it("passes the requested id through when the catalog is missing", () => {
+    expect(planAcpModelSelection("gpt-4", undefined)).toEqual({
+      action: "passthrough",
+      modelId: "gpt-4",
+    });
   });
 
-  it("returns display name when catalog is empty", () => {
-    expect(resolveAcpModelConfigValue("gpt-4", [])).toBe("gpt-4");
+  it("passes the requested id through when the catalog is empty", () => {
+    expect(planAcpModelSelection("gpt-4", [])).toEqual({
+      action: "passthrough",
+      modelId: "gpt-4",
+    });
   });
 
   it("maps name to modelId when matched", () => {
     expect(
-      resolveAcpModelConfigValue("gpt-4", [
+      planAcpModelSelection("gpt-4", [
         { modelId: "gpt-4[fast=false]", name: "gpt-4" },
       ]),
-    ).toBe("gpt-4[fast=false]");
+    ).toEqual({ action: "set", modelId: "gpt-4[fast=false]" });
   });
 
-  it("falls back to default[] when name not in catalog", () => {
+  it("reports a miss when the name is not in the catalog", () => {
     expect(
-      resolveAcpModelConfigValue("unknown", [{ modelId: "x[]", name: "gpt-4" }]),
-    ).toBe("default[]");
+      planAcpModelSelection("unknown", [{ modelId: "x[]", name: "gpt-4" }])
+        .action,
+    ).toBe("missing");
   });
 
   it("uses first match when duplicate names", () => {
     expect(
-      resolveAcpModelConfigValue("gpt-4", [
+      planAcpModelSelection("gpt-4", [
         { modelId: "first[]", name: "gpt-4" },
         { modelId: "second[]", name: "gpt-4" },
       ]),
-    ).toBe("first[]");
+    ).toEqual({ action: "set", modelId: "first[]" });
   });
 
   it("maps CLI ids through their catalog display-name alias", () => {
     expect(
-      resolveAcpModelConfigValue(
+      planAcpModelSelection(
         "gpt-5.6-sol-high",
         [
           {
@@ -89,16 +94,16 @@ describe("resolveAcpModelConfigValue", () => {
         ],
         ["GPT-5.6 Sol High"],
       ),
-    ).toBe("gpt-5.6-sol[reasoning=high]");
+    ).toEqual({ action: "set", modelId: "gpt-5.6-sol[reasoning=high]" });
   });
 
   it("maps auto onto the catalog default row", () => {
     expect(
-      resolveAcpModelConfigValue("auto", [
+      planAcpModelSelection("auto", [
         { modelId: "default", name: "Auto" },
         { modelId: "glm-5.2", name: "GLM 5.2" },
       ]),
-    ).toBe("default");
+    ).toEqual({ action: "set", modelId: "default" });
   });
 
   it("plans parameterized effort, thinking, and fast variants", () => {
@@ -236,47 +241,6 @@ describe("acpModelSelectionError", () => {
   });
 });
 
-describe("applyAcpModelPlan", () => {
-  it("maps -fast onto a catalog speed select when no boolean fast option exists", async () => {
-    const calls: Array<[string, string]> = [];
-    const requested = "cursor-grok-4.6-medium-fast";
-    const plan = planAcpModelSelection(requested, [
-      { modelId: "grok-4.6", name: "Grok 4.6" },
-    ]);
-    await applyAcpModelPlan(
-      plan,
-      async (id, value) => {
-        calls.push([id, value]);
-        if (id !== "model") return {};
-        return {
-          configOptions: [
-            { id: "model", currentValue: value },
-            {
-              id: "reasoning",
-              currentValue: "medium",
-              options: [
-                { value: "low" },
-                { value: "medium" },
-                { value: "high" },
-              ],
-            },
-            {
-              id: "speed",
-              currentValue: "normal",
-              options: [{ value: "normal" }, { value: "fast" }],
-            },
-          ],
-        };
-      },
-      requested,
-    );
-    expect(calls).toEqual([
-      ["model", "grok-4.6"],
-      ["speed", "fast"],
-    ]);
-  });
-});
-
 describe("runAcpSync", () => {
   it("returns stdout content from session/update agent_message_chunk", async () => {
     const resultPromise = runAcpSync(node, [fakeServerPath], "test prompt", {
@@ -406,6 +370,9 @@ describe("runAcpSync", () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("no match");
     expect(result.stderr).toContain("glm-5.2-max");
+    expect(result.error).toBe(
+      'ACP model catalog has no match for "glm-5.2-max" (also tried: glm-5.2); the Cursor CLI did not select a model for it either (session model: none)',
+    );
   });
 
   it("sets parameterized family and variant options", async () => {
@@ -482,6 +449,8 @@ describe("runAcpSync", () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("Error: Authentication required.");
     expect(result.stderr).toContain("ACP child exited with code 1");
+    // Raw CLI output stays in the server-side stderr only.
+    expect(result.error).toBeUndefined();
   });
 
   it("surfaces an unavailable reasoning level", async () => {
@@ -674,6 +643,7 @@ describe("runAcpStream", () => {
     }, (t) => chunks.push(t));
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("Internal error");
+    expect(result.error).toBe("Internal error");
   });
 
   it("reports why the child exited before answering (stream)", async () => {

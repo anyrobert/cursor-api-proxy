@@ -719,7 +719,7 @@ export async function handleAnthropicMessages(
         modelCatalogName,
         mediaBlocks,
       )
-        .then(({ code, stderr: stderrOut }) => {
+        .then(({ code, stderr: stderrOut, error }) => {
           stopKeepalive();
           const latencyMs = Date.now() - streamStart;
           reportRequestEnd(configDir);
@@ -738,6 +738,7 @@ export async function handleAnthropicMessages(
                 remoteAddress,
                 code,
                 stderrOut,
+                error,
               );
               writeEvent({
                 type: "error",
@@ -906,6 +907,7 @@ export async function handleAnthropicMessages(
       remoteAddress,
       out.code,
       out.stderr,
+      out.error,
     );
     json(res, 500, {
       error: { type: "api_error", message: errMsg, code: "cursor_cli_error" },

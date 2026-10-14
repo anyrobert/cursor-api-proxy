@@ -1,0 +1,1062 @@
+{
+  "_source": "Cursor agent 2026.10.14-0f9edde, captured 2026-10-14: `agent --list-models` plus `agent acp --model <id>` initialize (parameterizedModelPicker) + session/new; familyOptions are the set_config_option(model) responses. No prompts were sent; sessionId replaced.",
+  "sessionNewSample": {
+    "model": "claude-4.6-sonnet-medium",
+    "result": {
+      "sessionId": "sess-1",
+      "modes": {
+        "currentModeId": "agent",
+        "availableModes": [
+          {
+            "id": "agent",
+            "name": "Agent",
+            "description": "Full agent capabilities with tool access"
+          },
+          {
+            "id": "plan",
+            "name": "Plan",
+            "description": "Read-only mode for planning and designing before implementation"
+          },
+          {
+            "id": "ask",
+            "name": "Ask",
+            "description": "Q&A mode - no edits or command execution"
+          }
+        ]
+      },
+      "models": {
+        "currentModelId": "claude-sonnet-4-6",
+        "availableModels": [
+          {
+            "modelId": "default",
+            "name": "Auto"
+          },
+          {
+            "modelId": "grok-4.7",
+            "name": "Grok 4.7"
+          },
+          {
+            "modelId": "grok-4.6",
+            "name": "Grok 4.6"
+          },
+          {
+            "modelId": "composer-2.5",
+            "name": "Composer 2.5"
+          },
+          {
+            "modelId": "claude-opus-5-5",
+            "name": "Claude Opus 5.5"
+          },
+          {
+            "modelId": "claude-opus-5",
+            "name": "Claude Opus 5"
+          },
+          {
+            "modelId": "claude-opus-4-8",
+            "name": "Claude Opus 4.8"
+          },
+          {
+            "modelId": "gpt-5.6-sol",
+            "name": "GPT-5.6 Sol"
+          },
+          {
+            "modelId": "gemini-4-argon",
+            "name": "Gemini 4 Argon"
+          },
+          {
+            "modelId": "gpt-5.5",
+            "name": "GPT-5.5"
+          },
+          {
+            "modelId": "claude-fable-5-1",
+            "name": "Claude Fable 5.1"
+          },
+          {
+            "modelId": "claude-fable-5",
+            "name": "Claude Fable 5"
+          },
+          {
+            "modelId": "grok-4.5",
+            "name": "Grok 4.5"
+          },
+          {
+            "modelId": "gemini-3.8-flash",
+            "name": "Gemini 3.8 Flash"
+          },
+          {
+            "modelId": "gemini-3.7-flash",
+            "name": "Gemini 3.7 Flash"
+          },
+          {
+            "modelId": "muse-spark-1.3",
+            "name": "Muse Spark 1.3"
+          },
+          {
+            "modelId": "gpt-5.6-terra",
+            "name": "GPT-5.6 Terra"
+          },
+          {
+            "modelId": "claude-sonnet-5-5",
+            "name": "Claude Sonnet 5.5"
+          },
+          {
+            "modelId": "claude-sonnet-5",
+            "name": "Claude Sonnet 5"
+          },
+          {
+            "modelId": "claude-sonnet-4-6",
+            "name": "Claude Sonnet 4.6"
+          },
+          {
+            "modelId": "gpt-5.3-codex",
+            "name": "Codex 5.3"
+          },
+          {
+            "modelId": "claude-opus-4-7",
+            "name": "Claude Opus 4.7"
+          },
+          {
+            "modelId": "gpt-5.4",
+            "name": "GPT-5.4"
+          },
+          {
+            "modelId": "claude-opus-4-6",
+            "name": "Claude Opus 4.6"
+          },
+          {
+            "modelId": "claude-opus-4-5",
+            "name": "Claude Opus 4.5"
+          },
+          {
+            "modelId": "gpt-5.2",
+            "name": "GPT-5.2"
+          },
+          {
+            "modelId": "gpt-5.6-luna",
+            "name": "GPT-5.6 Luna"
+          },
+          {
+            "modelId": "gemini-3.6-flash",
+            "name": "Gemini 3.6 Flash"
+          },
+          {
+            "modelId": "gemini-3.1-pro",
+            "name": "Gemini 3.1 Pro"
+          },
+          {
+            "modelId": "gpt-5.4-mini",
+            "name": "GPT-5.4 Mini"
+          },
+          {
+            "modelId": "gpt-5.4-nano",
+            "name": "GPT-5.4 Nano"
+          },
+          {
+            "modelId": "claude-haiku-5-5",
+            "name": "Claude Haiku 5.5"
+          },
+          {
+            "modelId": "claude-haiku-4-5",
+            "name": "Claude Haiku 4.5"
+          },
+          {
+            "modelId": "claude-sonnet-4-5",
+            "name": "Claude Sonnet 4.5"
+          },
+          {
+            "modelId": "gpt-5.1",
+            "name": "GPT-5.1"
+          },
+          {
+            "modelId": "gemini-3-flash",
+            "name": "Gemini 3 Flash"
+          },
+          {
+            "modelId": "gemini-3.5-flash",
+            "name": "Gemini 3.5 Flash"
+          },
+          {
+            "modelId": "claude-sonnet-4",
+            "name": "Claude Sonnet 4"
+          },
+          {
+            "modelId": "gpt-5-mini",
+            "name": "GPT-5 Mini"
+          },
+          {
+            "modelId": "gemini-2.5-flash",
+            "name": "Gemini 2.5 Flash"
+          },
+          {
+            "modelId": "kimi-k3",
+            "name": "Kimi K3"
+          },
+          {
+            "modelId": "kimi-k2.7-code",
+            "name": "Kimi K2.7 Code"
+          },
+          {
+            "modelId": "glm-5.2",
+            "name": "GLM 5.2"
+          },
+          {
+            "modelId": "glm-5p3",
+            "name": "GLM 5.3"
+          },
+          {
+            "modelId": "glm-5p3-flash",
+            "name": "GLM 5.3 Flash"
+          }
+        ]
+      },
+      "configOptions": [
+        {
+          "id": "mode",
+          "name": "Mode",
+          "description": "Controls how the agent executes tasks",
+          "category": "mode",
+          "type": "select",
+          "currentValue": "agent",
+          "options": [
+            {
+              "value": "agent",
+              "name": "Agent",
+              "description": "Full agent capabilities with tool access"
+            },
+            {
+              "value": "plan",
+              "name": "Plan",
+              "description": "Read-only mode for planning and designing before implementation"
+            },
+            {
+              "value": "ask",
+              "name": "Ask",
+              "description": "Q&A mode - no edits or command execution"
+            }
+          ]
+        },
+        {
+          "id": "model",
+          "name": "Model",
+          "description": "Controls which model is used for responses",
+          "category": "model",
+          "type": "select",
+          "currentValue": "claude-sonnet-4-6",
+          "options": [
+            {
+              "value": "default",
+              "name": "Auto"
+            },
+            {
+              "value": "grok-4.7",
+              "name": "Grok 4.7"
+            },
+            {
+              "value": "grok-4.6",
+              "name": "Grok 4.6"
+            },
+            {
+              "value": "composer-2.5",
+              "name": "Composer 2.5"
+            },
+            {
+              "value": "claude-opus-5-5",
+              "name": "Claude Opus 5.5"
+            },
+            {
+              "value": "claude-opus-5",
+              "name": "Claude Opus 5"
+            },
+            {
+              "value": "claude-opus-4-8",
+              "name": "Claude Opus 4.8"
+            },
+            {
+              "value": "gpt-5.6-sol",
+              "name": "GPT-5.6 Sol"
+            },
+            {
+              "value": "gemini-4-argon",
+              "name": "Gemini 4 Argon"
+            },
+            {
+              "value": "gpt-5.5",
+              "name": "GPT-5.5"
+            },
+            {
+              "value": "claude-fable-5-1",
+              "name": "Claude Fable 5.1"
+            },
+            {
+              "value": "claude-fable-5",
+              "name": "Claude Fable 5"
+            },
+            {
+              "value": "grok-4.5",
+              "name": "Grok 4.5"
+            },
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            },
+            {
+              "value": "gemini-3.7-flash",
+              "name": "Gemini 3.7 Flash"
+            },
+            {
+              "value": "muse-spark-1.3",
+              "name": "Muse Spark 1.3"
+            },
+            {
+              "value": "gpt-5.6-terra",
+              "name": "GPT-5.6 Terra"
+            },
+            {
+              "value": "claude-sonnet-5-5",
+              "name": "Claude Sonnet 5.5"
+            },
+            {
+              "value": "claude-sonnet-5",
+              "name": "Claude Sonnet 5"
+            },
+            {
+              "value": "claude-sonnet-4-6",
+              "name": "Claude Sonnet 4.6"
+            },
+            {
+              "value": "gpt-5.3-codex",
+              "name": "Codex 5.3"
+            },
+            {
+              "value": "claude-opus-4-7",
+              "name": "Claude Opus 4.7"
+            },
+            {
+              "value": "gpt-5.4",
+              "name": "GPT-5.4"
+            },
+            {
+              "value": "claude-opus-4-6",
+              "name": "Claude Opus 4.6"
+            },
+            {
+              "value": "claude-opus-4-5",
+              "name": "Claude Opus 4.5"
+            },
+            {
+              "value": "gpt-5.2",
+              "name": "GPT-5.2"
+            },
+            {
+              "value": "gpt-5.6-luna",
+              "name": "GPT-5.6 Luna"
+            },
+            {
+              "value": "gemini-3.6-flash",
+              "name": "Gemini 3.6 Flash"
+            },
+            {
+              "value": "gemini-3.1-pro",
+              "name": "Gemini 3.1 Pro"
+            },
+            {
+              "value": "gpt-5.4-mini",
+              "name": "GPT-5.4 Mini"
+            },
+            {
+              "value": "gpt-5.4-nano",
+              "name": "GPT-5.4 Nano"
+            },
+            {
+              "value": "claude-haiku-5-5",
+              "name": "Claude Haiku 5.5"
+            },
+            {
+              "value": "claude-haiku-4-5",
+              "name": "Claude Haiku 4.5"
+            },
+            {
+              "value": "claude-sonnet-4-5",
+              "name": "Claude Sonnet 4.5"
+            },
+            {
+              "value": "gpt-5.1",
+              "name": "GPT-5.1"
+            },
+            {
+              "value": "gemini-3-flash",
+              "name": "Gemini 3 Flash"
+            },
+            {
+              "value": "gemini-3.5-flash",
+              "name": "Gemini 3.5 Flash"
+            },
+            {
+              "value": "claude-sonnet-4",
+              "name": "Claude Sonnet 4"
+            },
+            {
+              "value": "gpt-5-mini",
+              "name": "GPT-5 Mini"
+            },
+            {
+              "value": "gemini-2.5-flash",
+              "name": "Gemini 2.5 Flash"
+            },
+            {
+              "value": "kimi-k3",
+              "name": "Kimi K3"
+            },
+            {
+              "value": "kimi-k2.7-code",
+              "name": "Kimi K2.7 Code"
+            },
+            {
+              "value": "glm-5.2",
+              "name": "GLM 5.2"
+            },
+            {
+              "value": "glm-5p3",
+              "name": "GLM 5.3"
+            },
+            {
+              "value": "glm-5p3-flash",
+              "name": "GLM 5.3 Flash"
+            }
+          ]
+        },
+        {
+          "id": "thinking",
+          "name": "Thinking",
+          "description": "Does the model use thinking to generate its response?",
+          "category": "thought_level",
+          "type": "select",
+          "currentValue": "false",
+          "options": [
+            {
+              "value": "false",
+              "name": "Off"
+            },
+            {
+              "value": "true",
+              "name": "On"
+            }
+          ]
+        },
+        {
+          "id": "context",
+          "name": "Context",
+          "description": "Context size the model has available.",
+          "category": "model_config",
+          "type": "select",
+          "currentValue": "200k",
+          "options": [
+            {
+              "value": "200k",
+              "name": "200K"
+            },
+            {
+              "value": "1m",
+              "name": "1M"
+            }
+          ]
+        },
+        {
+          "id": "effort",
+          "name": "Effort",
+          "description": "Effort the model uses to generate its response.",
+          "category": "thought_level",
+          "type": "select",
+          "currentValue": "medium",
+          "options": [
+            {
+              "value": "low",
+              "name": "Low"
+            },
+            {
+              "value": "medium",
+              "name": "Medium"
+            },
+            {
+              "value": "high",
+              "name": "High"
+            },
+            {
+              "value": "max",
+              "name": "Max"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "familyOptions": {
+    "default": [],
+    "grok-4.7": [{"id": "context", "currentValue": "256k", "options": [{"value": "256k"}, {"value": "500k"}]}, {"id": "reasoning_effort", "currentValue": "xhigh", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}]}, {"id": "fast", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "grok-4.6": [{"id": "effort", "currentValue": "xhigh", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}]}, {"id": "fast", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "composer-2.5": [{"id": "fast", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "claude-opus-5-5": [{"id": "context", "currentValue": "300k", "options": [{"value": "300k"}, {"value": "1m"}]}, {"id": "effort", "currentValue": "max", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}, {"value": "max"}]}, {"id": "fast", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "claude-opus-5": [{"id": "thinking", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}, {"id": "context", "currentValue": "300k", "options": [{"value": "300k"}, {"value": "1m"}]}, {"id": "effort", "currentValue": "max", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}, {"value": "max"}]}, {"id": "fast", "currentValue": "false", "options": [{"value": "false"}, {"value": "true"}]}],
+    "claude-opus-4-8": [{"id": "thinking", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}, {"id": "context", "currentValue": "300k", "options": [{"value": "300k"}, {"value": "1m"}]}, {"id": "effort", "currentValue": "max", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}, {"value": "max"}]}, {"id": "fast", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "gpt-5.6-sol": [{"id": "context", "currentValue": "272k", "options": [{"value": "272k"}, {"value": "1m"}]}, {"id": "reasoning", "currentValue": "max", "options": [{"value": "none"}, {"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}, {"value": "max"}]}, {"id": "fast", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "gemini-4-argon": [{"id": "reasoning_effort", "currentValue": "high", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}]}],
+    "gpt-5.5": [{"id": "context", "currentValue": "272k", "options": [{"value": "272k"}, {"value": "1m"}]}, {"id": "reasoning", "currentValue": "extra-high", "options": [{"value": "none"}, {"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "extra-high"}]}, {"id": "fast", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "claude-fable-5-1": [{"id": "thinking", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}, {"id": "context", "currentValue": "300k", "options": [{"value": "300k"}, {"value": "1m"}]}, {"id": "effort", "currentValue": "max", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}, {"value": "max"}]}],
+    "claude-fable-5": [{"id": "thinking", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}, {"id": "context", "currentValue": "300k", "options": [{"value": "300k"}, {"value": "1m"}]}, {"id": "effort", "currentValue": "max", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}, {"value": "max"}]}],
+    "grok-4.5": [{"id": "effort", "currentValue": "medium", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}]}, {"id": "fast", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "gemini-3.8-flash": [{"id": "reasoning_effort", "currentValue": "low", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}]}],
+    "gemini-3.7-flash": [{"id": "effort", "currentValue": "high", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}]}],
+    "muse-spark-1.3": [{"id": "context", "currentValue": "300k", "options": [{"value": "300k"}, {"value": "1m"}]}, {"id": "effort", "currentValue": "max", "options": [{"value": "minimal"}, {"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}, {"value": "max"}]}],
+    "gpt-5.6-terra": [{"id": "context", "currentValue": "272k", "options": [{"value": "272k"}, {"value": "1m"}]}, {"id": "reasoning", "currentValue": "max", "options": [{"value": "none"}, {"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}, {"value": "max"}]}, {"id": "fast", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "claude-sonnet-5-5": [{"id": "context", "currentValue": "300k", "options": [{"value": "300k"}, {"value": "1m"}]}, {"id": "reasoning_effort", "currentValue": "max", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}, {"value": "max"}]}],
+    "claude-sonnet-5": [{"id": "thinking", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}, {"id": "context", "currentValue": "300k", "options": [{"value": "300k"}, {"value": "1m"}]}, {"id": "effort", "currentValue": "max", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}, {"value": "max"}]}],
+    "claude-sonnet-4-6": [{"id": "thinking", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}, {"id": "context", "currentValue": "200k", "options": [{"value": "200k"}, {"value": "1m"}]}, {"id": "effort", "currentValue": "medium", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "max"}]}],
+    "gpt-5.3-codex": [{"id": "reasoning", "currentValue": "extra-high", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "extra-high"}]}, {"id": "fast", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "claude-opus-4-7": [{"id": "thinking", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}, {"id": "context", "currentValue": "300k", "options": [{"value": "300k"}, {"value": "1m"}]}, {"id": "effort", "currentValue": "max", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}, {"value": "max"}]}, {"id": "fast", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "gpt-5.4": [{"id": "context", "currentValue": "272k", "options": [{"value": "272k"}, {"value": "1m"}]}, {"id": "reasoning", "currentValue": "extra-high", "options": [{"value": "none"}, {"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "extra-high"}]}, {"id": "fast", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "claude-opus-4-6": [{"id": "thinking", "currentValue": "false", "options": [{"value": "false"}, {"value": "true"}]}, {"id": "context", "currentValue": "200k", "options": [{"value": "200k"}, {"value": "1m"}]}, {"id": "effort", "currentValue": "high", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "max"}]}],
+    "claude-opus-4-5": [{"id": "thinking", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "gpt-5.2": [{"id": "reasoning", "currentValue": "extra-high", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "extra-high"}]}, {"id": "fast", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "gpt-5.6-luna": [{"id": "context", "currentValue": "272k", "options": [{"value": "272k"}, {"value": "1m"}]}, {"id": "reasoning", "currentValue": "high", "options": [{"value": "none"}, {"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}, {"value": "max"}]}, {"id": "fast", "currentValue": "false", "options": [{"value": "false"}, {"value": "true"}]}],
+    "gemini-3.6-flash": [{"id": "effort", "currentValue": "high", "options": [{"value": "minimal"}, {"value": "low"}, {"value": "medium"}, {"value": "high"}]}],
+    "gemini-3.1-pro": [],
+    "gpt-5.4-mini": [{"id": "reasoning", "currentValue": "xhigh", "options": [{"value": "none"}, {"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}]}],
+    "gpt-5.4-nano": [{"id": "reasoning", "currentValue": "xhigh", "options": [{"value": "none"}, {"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}]}],
+    "claude-haiku-5-5": [{"id": "thinking", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}, {"id": "context", "currentValue": "300k", "options": [{"value": "300k"}, {"value": "1m"}]}, {"id": "reasoning_effort", "currentValue": "max", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}, {"value": "xhigh"}, {"value": "max"}]}],
+    "claude-haiku-4-5": [{"id": "thinking", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "claude-sonnet-4-5": [{"id": "thinking", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "gpt-5.1": [{"id": "reasoning", "currentValue": "high", "options": [{"value": "low"}, {"value": "medium"}, {"value": "high"}]}],
+    "gemini-3-flash": [],
+    "gemini-3.5-flash": [],
+    "claude-sonnet-4": [{"id": "thinking", "currentValue": "true", "options": [{"value": "false"}, {"value": "true"}]}],
+    "gpt-5-mini": [],
+    "gemini-2.5-flash": [],
+    "kimi-k3": [{"id": "reasoning", "currentValue": "max", "options": [{"value": "low"}, {"value": "high"}, {"value": "max"}]}],
+    "kimi-k2.7-code": [],
+    "glm-5.2": [{"id": "reasoning", "currentValue": "max", "options": [{"value": "high"}, {"value": "max"}]}],
+    "glm-5p3": [{"id": "reasoning", "currentValue": "high", "options": [{"value": "low"}, {"value": "high"}, {"value": "max"}]}],
+    "glm-5p3-flash": [{"id": "reasoning", "currentValue": "high", "options": [{"value": "low"}, {"value": "high"}, {"value": "max"}]}]
+  },
+  "listModels": {
+    "auto": "Auto",
+    "gpt-5.3-codex-low": "Codex 5.3 Low",
+    "gpt-5.3-codex-low-fast": "Codex 5.3 Low Fast",
+    "gpt-5.3-codex": "Codex 5.3",
+    "gpt-5.3-codex-fast": "Codex 5.3 Fast",
+    "gpt-5.3-codex-high": "Codex 5.3 High",
+    "gpt-5.3-codex-high-fast": "Codex 5.3 High Fast",
+    "gpt-5.3-codex-xhigh": "Codex 5.3 Extra High",
+    "gpt-5.3-codex-xhigh-fast": "Codex 5.3 Extra High Fast",
+    "gpt-5.2": "GPT-5.2",
+    "composer-2.5": "Composer 2.5",
+    "claude-opus-5-thinking-high": "Claude Opus 5 1M Thinking",
+    "claude-opus-5-thinking-high-fast": "Claude Opus 5 1M Thinking Fast",
+    "gpt-5.6-sol-high": "GPT-5.6 Sol 1M High",
+    "gpt-5.6-sol-high-fast": "GPT-5.6 Sol 1M High Fast",
+    "gpt-5.6-sol-xhigh": "GPT-5.6 Sol 1M Extra High",
+    "gpt-5.6-sol-xhigh-fast": "GPT-5.6 Sol 1M Extra High Fast",
+    "claude-fable-5-thinking-high": "Claude Fable 5 1M Thinking",
+    "claude-fable-5-thinking-xhigh": "Claude Fable 5 1M Extra High Thinking",
+    "cursor-grok-4.5-high": "Grok 4.5",
+    "cursor-grok-4.5-high-fast": "Grok 4.5 Fast",
+    "gemini-3.7-flash-high": "Gemini 3.7 Flash",
+    "claude-sonnet-5-thinking-high": "Claude Sonnet 5 1M Thinking",
+    "claude-sonnet-5-thinking-xhigh": "Claude Sonnet 5 1M Extra High Thinking",
+    "gpt-5.6-luna-high": "GPT-5.6 Luna 1M High",
+    "grok-4.7-low": "Grok 4.7  Low",
+    "grok-4.7-low-fast": "Grok 4.7  Low Fast\u200b\u200b",
+    "grok-4.7-medium": "Grok 4.7  Medium",
+    "grok-4.7-medium-fast": "Grok 4.7  Medium Fast\u200b\u200b",
+    "grok-4.7-high": "Grok 4.7  High",
+    "grok-4.7-high-fast": "Grok 4.7  High Fast\u200b\u200b",
+    "grok-4.7-xhigh": "Grok 4.7  Extra High",
+    "grok-4.7-xhigh-fast": "Grok 4.7  Extra High Fast\u200b\u200b",
+    "cursor-grok-4.6-low": "Grok 4.6 Low",
+    "cursor-grok-4.6-low-fast": "Grok 4.6 Low Fast",
+    "cursor-grok-4.6-medium": "Grok 4.6 Medium",
+    "cursor-grok-4.6-medium-fast": "Grok 4.6 Medium Fast",
+    "cursor-grok-4.6-high": "Grok 4.6",
+    "cursor-grok-4.6-high-fast": "Grok 4.6 Fast",
+    "cursor-grok-4.6-xhigh": "Grok 4.6 Extra High",
+    "cursor-grok-4.6-xhigh-fast": "Grok 4.6 Extra High Fast",
+    "composer-2.5-fast": "Composer 2.5 Fast",
+    "claude-opus-5-5-low": "Claude Opus 5.5 1M Low",
+    "claude-opus-5-5-low-fast": "Claude Opus 5.5 1M Low Fast",
+    "claude-opus-5-5-medium": "Claude Opus 5.5 1M",
+    "claude-opus-5-5-medium-fast": "Claude Opus 5.5 1M Fast",
+    "claude-opus-5-5-high": "Claude Opus 5.5 1M High",
+    "claude-opus-5-5-high-fast": "Claude Opus 5.5 1M High Fast",
+    "claude-opus-5-5-xhigh": "Claude Opus 5.5 1M Extra High",
+    "claude-opus-5-5-xhigh-fast": "Claude Opus 5.5 1M Extra High Fast",
+    "claude-opus-5-5-max": "Claude Opus 5.5 1M Max",
+    "claude-opus-5-5-max-fast": "Claude Opus 5.5 1M Max Fast",
+    "claude-opus-5-low": "Claude Opus 5 1M Low",
+    "claude-opus-5-low-fast": "Claude Opus 5 1M Low Fast",
+    "claude-opus-5-medium": "Claude Opus 5 1M Medium",
+    "claude-opus-5-medium-fast": "Claude Opus 5 1M Medium Fast",
+    "claude-opus-5-high": "Claude Opus 5 1M",
+    "claude-opus-5-high-fast": "Claude Opus 5 1M Fast",
+    "claude-opus-5-thinking-low": "Claude Opus 5 1M Low Thinking",
+    "claude-opus-5-thinking-low-fast": "Claude Opus 5 1M Low Thinking Fast",
+    "claude-opus-5-thinking-medium": "Claude Opus 5 1M Medium Thinking",
+    "claude-opus-5-thinking-medium-fast": "Claude Opus 5 1M Medium Thinking Fast",
+    "claude-opus-5-thinking-xhigh": "Claude Opus 5 1M Extra High Thinking",
+    "claude-opus-5-thinking-xhigh-fast": "Claude Opus 5 1M Extra High Thinking Fast",
+    "claude-opus-5-thinking-max": "Claude Opus 5 1M Max Thinking",
+    "claude-opus-5-thinking-max-fast": "Claude Opus 5 1M Max Thinking Fast",
+    "claude-opus-4-8-low": "Claude Opus 4.8 1M Low",
+    "claude-opus-4-8-low-fast": "Claude Opus 4.8 1M Low Fast",
+    "claude-opus-4-8-medium": "Claude Opus 4.8 1M Medium",
+    "claude-opus-4-8-medium-fast": "Claude Opus 4.8 1M Medium Fast",
+    "claude-opus-4-8-high": "Claude Opus 4.8 1M",
+    "claude-opus-4-8-high-fast": "Claude Opus 4.8 1M Fast",
+    "claude-opus-4-8-xhigh": "Claude Opus 4.8 1M Extra High",
+    "claude-opus-4-8-xhigh-fast": "Claude Opus 4.8 1M Extra High Fast",
+    "claude-opus-4-8-max": "Claude Opus 4.8 1M Max",
+    "claude-opus-4-8-max-fast": "Claude Opus 4.8 1M Max Fast",
+    "claude-opus-4-8-thinking-low": "Claude Opus 4.8 1M Low Thinking",
+    "claude-opus-4-8-thinking-low-fast": "Claude Opus 4.8 1M Low Thinking Fast",
+    "claude-opus-4-8-thinking-medium": "Claude Opus 4.8 1M Medium Thinking",
+    "claude-opus-4-8-thinking-medium-fast": "Claude Opus 4.8 1M Medium Thinking Fast",
+    "claude-opus-4-8-thinking-high": "Claude Opus 4.8 1M Thinking",
+    "claude-opus-4-8-thinking-high-fast": "Claude Opus 4.8 1M Thinking Fast",
+    "claude-opus-4-8-thinking-xhigh": "Claude Opus 4.8 1M Extra High Thinking",
+    "claude-opus-4-8-thinking-xhigh-fast": "Claude Opus 4.8 1M Extra High Thinking Fast",
+    "claude-opus-4-8-thinking-max": "Claude Opus 4.8 1M Max Thinking",
+    "claude-opus-4-8-thinking-max-fast": "Claude Opus 4.8 1M Max Thinking Fast",
+    "gpt-5.6-sol-none": "GPT-5.6 Sol 1M None",
+    "gpt-5.6-sol-none-fast": "GPT-5.6 Sol 1M None Fast",
+    "gpt-5.6-sol-low": "GPT-5.6 Sol 1M Low",
+    "gpt-5.6-sol-low-fast": "GPT-5.6 Sol 1M Low Fast",
+    "gpt-5.6-sol-medium": "GPT-5.6 Sol 1M",
+    "gpt-5.6-sol-medium-fast": "GPT-5.6 Sol 1M Fast",
+    "gpt-5.6-sol-max": "GPT-5.6 Sol 1M Max",
+    "gpt-5.6-sol-max-fast": "GPT-5.6 Sol 1M Max Fast",
+    "gemini-4-argon-low": "Gemini 4 Argon Low",
+    "gemini-4-argon-medium": "Gemini 4 Argon Medium",
+    "gemini-4-argon-high": "Gemini 4 Argon High",
+    "gpt-5.5-none": "GPT-5.5 1M None",
+    "gpt-5.5-none-fast": "GPT-5.5 None Fast",
+    "gpt-5.5-low": "GPT-5.5 1M Low",
+    "gpt-5.5-low-fast": "GPT-5.5 Low Fast",
+    "gpt-5.5-medium": "GPT-5.5 1M",
+    "gpt-5.5-medium-fast": "GPT-5.5 Fast",
+    "gpt-5.5-high": "GPT-5.5 1M High",
+    "gpt-5.5-high-fast": "GPT-5.5 High Fast",
+    "gpt-5.5-extra-high": "GPT-5.5 1M Extra High",
+    "gpt-5.5-extra-high-fast": "GPT-5.5 Extra High Fast",
+    "claude-fable-5-1-low": "Claude Fable 5.1 1M Low",
+    "claude-fable-5-1-medium": "Claude Fable 5.1 1M Medium",
+    "claude-fable-5-1-high": "Claude Fable 5.1 1M",
+    "claude-fable-5-1-xhigh": "Claude Fable 5.1 1M Extra High",
+    "claude-fable-5-1-max": "Claude Fable 5.1 1M Max",
+    "claude-fable-5-1-thinking-low": "Claude Fable 5.1 1M Low Thinking",
+    "claude-fable-5-1-thinking-medium": "Claude Fable 5.1 1M Medium Thinking",
+    "claude-fable-5-1-thinking-high": "Claude Fable 5.1 1M Thinking",
+    "claude-fable-5-1-thinking-xhigh": "Claude Fable 5.1 1M Extra High Thinking",
+    "claude-fable-5-1-thinking-max": "Claude Fable 5.1 1M Max Thinking",
+    "claude-fable-5-low": "Claude Fable 5 1M Low",
+    "claude-fable-5-medium": "Claude Fable 5 1M Medium",
+    "claude-fable-5-high": "Claude Fable 5 1M",
+    "claude-fable-5-xhigh": "Claude Fable 5 1M Extra High",
+    "claude-fable-5-max": "Claude Fable 5 1M Max",
+    "claude-fable-5-thinking-low": "Claude Fable 5 1M Low Thinking",
+    "claude-fable-5-thinking-medium": "Claude Fable 5 1M Medium Thinking",
+    "claude-fable-5-thinking-max": "Claude Fable 5 1M Max Thinking",
+    "cursor-grok-4.5-low": "Grok 4.5 Low",
+    "cursor-grok-4.5-low-fast": "Grok 4.5 Low Fast",
+    "cursor-grok-4.5-medium": "Grok 4.5 Medium",
+    "cursor-grok-4.5-medium-fast": "Grok 4.5 Medium Fast",
+    "gemini-3.8-flash-low": "Gemini 3.8 Flash Low",
+    "gemini-3.8-flash-medium": "Gemini 3.8 Flash Medium",
+    "gemini-3.8-flash-high": "Gemini 3.8 Flash High",
+    "gemini-3.7-flash-low": "Gemini 3.7 Flash Low",
+    "gemini-3.7-flash-medium": "Gemini 3.7 Flash Medium",
+    "muse-spark-1.3-minimal": "Muse Spark 1.3 1M Minimal",
+    "muse-spark-1.3-low": "Muse Spark 1.3 1M Low",
+    "muse-spark-1.3-medium": "Muse Spark 1.3 1M Medium",
+    "muse-spark-1.3-high": "Muse Spark 1.3 1M",
+    "muse-spark-1.3-xhigh": "Muse Spark 1.3 1M Extra High",
+    "muse-spark-1.3-max": "Muse Spark 1.3 1M Max",
+    "gpt-5.6-terra-none": "GPT-5.6 Terra 1M None",
+    "gpt-5.6-terra-none-fast": "GPT-5.6 Terra 1M None Fast",
+    "gpt-5.6-terra-low": "GPT-5.6 Terra 1M Low",
+    "gpt-5.6-terra-low-fast": "GPT-5.6 Terra 1M Low Fast",
+    "gpt-5.6-terra-medium": "GPT-5.6 Terra 1M",
+    "gpt-5.6-terra-medium-fast": "GPT-5.6 Terra 1M Fast",
+    "gpt-5.6-terra-high": "GPT-5.6 Terra 1M High",
+    "gpt-5.6-terra-high-fast": "GPT-5.6 Terra 1M High Fast",
+    "gpt-5.6-terra-xhigh": "GPT-5.6 Terra 1M Extra High",
+    "gpt-5.6-terra-xhigh-fast": "GPT-5.6 Terra 1M Extra High Fast",
+    "gpt-5.6-terra-max": "GPT-5.6 Terra 1M Max",
+    "gpt-5.6-terra-max-fast": "GPT-5.6 Terra 1M Max Fast",
+    "claude-sonnet-5-5-low": "Claude Sonnet 5.5  Low",
+    "claude-sonnet-5-5-medium": "Claude Sonnet 5.5  Medium",
+    "claude-sonnet-5-5-high": "Claude Sonnet 5.5  High",
+    "claude-sonnet-5-5-xhigh": "Claude Sonnet 5.5  Extra High",
+    "claude-sonnet-5-5-max": "Claude Sonnet 5.5  Max",
+    "claude-sonnet-5-low": "Claude Sonnet 5 1M Low",
+    "claude-sonnet-5-medium": "Claude Sonnet 5 1M Medium",
+    "claude-sonnet-5-high": "Claude Sonnet 5 1M",
+    "claude-sonnet-5-xhigh": "Claude Sonnet 5 1M Extra High",
+    "claude-sonnet-5-max": "Claude Sonnet 5 1M Max",
+    "claude-sonnet-5-thinking-low": "Claude Sonnet 5 1M Low Thinking",
+    "claude-sonnet-5-thinking-medium": "Claude Sonnet 5 1M Medium Thinking",
+    "claude-sonnet-5-thinking-max": "Claude Sonnet 5 1M Max Thinking",
+    "claude-4.6-sonnet-medium": "Claude Sonnet 4.6 1M",
+    "claude-4.6-sonnet-medium-thinking": "Claude Sonnet 4.6 1M Thinking",
+    "claude-opus-4-7-low": "Claude Opus 4.7 1M Low",
+    "claude-opus-4-7-low-fast": "Claude Opus 4.7 1M Low Fast",
+    "claude-opus-4-7-medium": "Claude Opus 4.7 1M Medium",
+    "claude-opus-4-7-medium-fast": "Claude Opus 4.7 1M Medium Fast",
+    "claude-opus-4-7-high": "Claude Opus 4.7 1M High",
+    "claude-opus-4-7-high-fast": "Claude Opus 4.7 1M High Fast",
+    "claude-opus-4-7-xhigh": "Claude Opus 4.7 1M",
+    "claude-opus-4-7-xhigh-fast": "Claude Opus 4.7 1M Fast",
+    "claude-opus-4-7-max": "Claude Opus 4.7 1M Max",
+    "claude-opus-4-7-max-fast": "Claude Opus 4.7 1M Max Fast",
+    "claude-opus-4-7-thinking-low": "Claude Opus 4.7 1M Low Thinking",
+    "claude-opus-4-7-thinking-low-fast": "Claude Opus 4.7 1M Low Thinking Fast",
+    "claude-opus-4-7-thinking-medium": "Claude Opus 4.7 1M Medium Thinking",
+    "claude-opus-4-7-thinking-medium-fast": "Claude Opus 4.7 1M Medium Thinking Fast",
+    "claude-opus-4-7-thinking-high": "Claude Opus 4.7 1M High Thinking",
+    "claude-opus-4-7-thinking-high-fast": "Claude Opus 4.7 1M High Thinking Fast",
+    "claude-opus-4-7-thinking-xhigh": "Claude Opus 4.7 1M Thinking",
+    "claude-opus-4-7-thinking-xhigh-fast": "Claude Opus 4.7 1M Thinking Fast",
+    "claude-opus-4-7-thinking-max": "Claude Opus 4.7 1M Max Thinking",
+    "claude-opus-4-7-thinking-max-fast": "Claude Opus 4.7 1M Max Thinking Fast",
+    "gpt-5.4-low": "GPT-5.4 1M Low",
+    "gpt-5.4-medium": "GPT-5.4 1M",
+    "gpt-5.4-medium-fast": "GPT-5.4 Fast",
+    "gpt-5.4-high": "GPT-5.4 1M High",
+    "gpt-5.4-high-fast": "GPT-5.4 High Fast",
+    "gpt-5.4-xhigh": "GPT-5.4 1M Extra High",
+    "gpt-5.4-xhigh-fast": "GPT-5.4 Extra High Fast",
+    "claude-4.6-opus-high": "Claude Opus 4.6 1M",
+    "claude-4.6-opus-max": "Claude Opus 4.6 1M Max",
+    "claude-4.6-opus-high-thinking": "Claude Opus 4.6 1M Thinking",
+    "claude-4.6-opus-max-thinking": "Claude Opus 4.6 1M Max Thinking",
+    "claude-4.5-opus-high": "Claude Opus 4.5",
+    "claude-4.5-opus-high-thinking": "Claude Opus 4.5 Thinking",
+    "gpt-5.2-low": "GPT-5.2 Low",
+    "gpt-5.2-low-fast": "GPT-5.2 Low Fast",
+    "gpt-5.2-fast": "GPT-5.2 Fast",
+    "gpt-5.2-high": "GPT-5.2 High",
+    "gpt-5.2-high-fast": "GPT-5.2 High Fast",
+    "gpt-5.2-xhigh": "GPT-5.2 Extra High",
+    "gpt-5.2-xhigh-fast": "GPT-5.2 Extra High Fast",
+    "gpt-5.6-luna-none": "GPT-5.6 Luna 1M None",
+    "gpt-5.6-luna-none-fast": "GPT-5.6 Luna 1M None Fast",
+    "gpt-5.6-luna-low": "GPT-5.6 Luna 1M Low",
+    "gpt-5.6-luna-low-fast": "GPT-5.6 Luna 1M Low Fast",
+    "gpt-5.6-luna-medium": "GPT-5.6 Luna 1M",
+    "gpt-5.6-luna-medium-fast": "GPT-5.6 Luna 1M Fast",
+    "gpt-5.6-luna-high-fast": "GPT-5.6 Luna 1M High Fast",
+    "gpt-5.6-luna-xhigh": "GPT-5.6 Luna 1M Extra High",
+    "gpt-5.6-luna-xhigh-fast": "GPT-5.6 Luna 1M Extra High Fast",
+    "gpt-5.6-luna-max": "GPT-5.6 Luna 1M Max",
+    "gpt-5.6-luna-max-fast": "GPT-5.6 Luna 1M Max Fast",
+    "gemini-3.6-flash-minimal": "Gemini 3.6 Flash Minimal",
+    "gemini-3.6-flash-low": "Gemini 3.6 Flash Low",
+    "gemini-3.6-flash-medium": "Gemini 3.6 Flash Medium",
+    "gemini-3.6-flash-high": "Gemini 3.6 Flash",
+    "gemini-3.1-pro": "Gemini 3.1 Pro",
+    "gpt-5.4-mini-none": "GPT-5.4 Mini None",
+    "gpt-5.4-mini-low": "GPT-5.4 Mini Low",
+    "gpt-5.4-mini-medium": "GPT-5.4 Mini",
+    "gpt-5.4-mini-high": "GPT-5.4 Mini High",
+    "gpt-5.4-mini-xhigh": "GPT-5.4 Mini Extra High",
+    "gpt-5.4-nano-none": "GPT-5.4 Nano None",
+    "gpt-5.4-nano-low": "GPT-5.4 Nano Low",
+    "gpt-5.4-nano-medium": "GPT-5.4 Nano",
+    "gpt-5.4-nano-high": "GPT-5.4 Nano High",
+    "gpt-5.4-nano-xhigh": "GPT-5.4 Nano Extra High",
+    "claude-haiku-5-5-low": "Claude Haiku 5.5  Low No Thinking",
+    "claude-haiku-5-5-medium": "Claude Haiku 5.5  Medium No Thinking",
+    "claude-haiku-5-5-high": "Claude Haiku 5.5  High No Thinking",
+    "claude-haiku-5-5-xhigh": "Claude Haiku 5.5  Extra High No Thinking",
+    "claude-haiku-5-5-max": "Claude Haiku 5.5  Max No Thinking",
+    "claude-haiku-5-5-thinking-low": "Claude Haiku 5.5  Low",
+    "claude-haiku-5-5-thinking-medium": "Claude Haiku 5.5  Medium",
+    "claude-haiku-5-5-thinking-high": "Claude Haiku 5.5  High",
+    "claude-haiku-5-5-thinking-xhigh": "Claude Haiku 5.5  Extra High",
+    "claude-haiku-5-5-thinking-max": "Claude Haiku 5.5  Max",
+    "claude-4.5-sonnet": "Claude Sonnet 4.5",
+    "claude-4.5-sonnet-thinking": "Claude Sonnet 4.5 Thinking",
+    "gpt-5.1-low": "GPT-5.1 Low",
+    "gpt-5.1": "GPT-5.1",
+    "gpt-5.1-high": "GPT-5.1 High",
+    "gemini-3-flash": "Gemini 3 Flash",
+    "gemini-3.5-flash": "Gemini 3.5 Flash",
+    "claude-4-sonnet": "Claude Sonnet 4",
+    "claude-4-sonnet-thinking": "Claude Sonnet 4 Thinking",
+    "gpt-5-mini": "GPT-5 Mini",
+    "kimi-k3-low": "Kimi K3 Low",
+    "kimi-k3-high": "Kimi K3 High",
+    "kimi-k3-max": "Kimi K3",
+    "kimi-k2.7-code": "Kimi K2.7 Code",
+    "glm-5.2-high": "GLM 5.2",
+    "glm-5.2-max": "GLM 5.2 Max"
+  },
+  "sessions": {
+    "auto": {"currentModelId": "default", "values": {}},
+    "gpt-5.3-codex-low": {"currentModelId": "gpt-5.3-codex", "values": {"reasoning": "low", "fast": "false"}},
+    "gpt-5.3-codex-low-fast": {"currentModelId": "gpt-5.3-codex", "values": {"reasoning": "low", "fast": "true"}},
+    "gpt-5.3-codex": {"currentModelId": "gpt-5.3-codex", "values": {"reasoning": "medium", "fast": "false"}},
+    "gpt-5.3-codex-fast": {"currentModelId": "gpt-5.3-codex", "values": {"reasoning": "medium", "fast": "true"}},
+    "gpt-5.3-codex-high": {"currentModelId": "gpt-5.3-codex", "values": {"reasoning": "high", "fast": "false"}},
+    "gpt-5.3-codex-high-fast": {"currentModelId": "gpt-5.3-codex", "values": {"reasoning": "high", "fast": "true"}},
+    "gpt-5.3-codex-xhigh": {"currentModelId": "gpt-5.3-codex", "values": {"reasoning": "extra-high", "fast": "false"}},
+    "gpt-5.3-codex-xhigh-fast": {"currentModelId": "gpt-5.3-codex", "values": {"reasoning": "extra-high", "fast": "true"}},
+    "gpt-5.2": {"currentModelId": "gpt-5.2", "values": {"reasoning": "medium", "fast": "false"}},
+    "composer-2.5": {"currentModelId": "composer-2.5", "values": {"fast": "false"}},
+    "claude-opus-5-thinking-high": {"currentModelId": "claude-opus-5", "values": {"thinking": "true", "context": "300k", "effort": "high", "fast": "false"}},
+    "claude-opus-5-thinking-high-fast": {"currentModelId": "claude-opus-5", "values": {"thinking": "true", "context": "300k", "effort": "high", "fast": "true"}},
+    "gpt-5.6-sol-high": {"currentModelId": "gpt-5.6-sol", "values": {"context": "272k", "reasoning": "high", "fast": "false"}},
+    "gpt-5.6-sol-high-fast": {"currentModelId": "gpt-5.6-sol", "values": {"context": "272k", "reasoning": "high", "fast": "true"}},
+    "gpt-5.6-sol-xhigh": {"currentModelId": "gpt-5.6-sol", "values": {"context": "272k", "reasoning": "xhigh", "fast": "false"}},
+    "gpt-5.6-sol-xhigh-fast": {"currentModelId": "gpt-5.6-sol", "values": {"context": "272k", "reasoning": "xhigh", "fast": "true"}},
+    "claude-fable-5-thinking-high": {"currentModelId": "claude-fable-5", "values": {"thinking": "true", "context": "300k", "effort": "high"}},
+    "claude-fable-5-thinking-xhigh": {"currentModelId": "claude-fable-5", "values": {"thinking": "true", "context": "300k", "effort": "xhigh"}},
+    "cursor-grok-4.5-high": {"currentModelId": "grok-4.5", "values": {"effort": "high", "fast": "false"}},
+    "cursor-grok-4.5-high-fast": {"currentModelId": "grok-4.5", "values": {"effort": "high", "fast": "true"}},
+    "gemini-3.7-flash-high": {"currentModelId": "gemini-3.7-flash", "values": {"effort": "high"}},
+    "claude-sonnet-5-thinking-high": {"currentModelId": "claude-sonnet-5", "values": {"thinking": "true", "context": "300k", "effort": "high"}},
+    "claude-sonnet-5-thinking-xhigh": {"currentModelId": "claude-sonnet-5", "values": {"thinking": "true", "context": "300k", "effort": "xhigh"}},
+    "gpt-5.6-luna-high": {"currentModelId": "gpt-5.6-luna", "values": {"context": "272k", "reasoning": "high", "fast": "false"}},
+    "grok-4.7-low": {"currentModelId": "grok-4.7", "values": {"context": "256k", "reasoning_effort": "low", "fast": "false"}},
+    "grok-4.7-low-fast": {"currentModelId": "grok-4.7", "values": {"context": "256k", "reasoning_effort": "low", "fast": "true"}},
+    "grok-4.7-medium": {"currentModelId": "grok-4.7", "values": {"context": "256k", "reasoning_effort": "medium", "fast": "false"}},
+    "grok-4.7-medium-fast": {"currentModelId": "grok-4.7", "values": {"context": "256k", "reasoning_effort": "medium", "fast": "true"}},
+    "grok-4.7-high": {"currentModelId": "grok-4.7", "values": {"context": "256k", "reasoning_effort": "high", "fast": "false"}},
+    "grok-4.7-high-fast": {"currentModelId": "grok-4.7", "values": {"context": "256k", "reasoning_effort": "high", "fast": "true"}},
+    "grok-4.7-xhigh": {"currentModelId": "grok-4.7", "values": {"context": "256k", "reasoning_effort": "xhigh", "fast": "false"}},
+    "grok-4.7-xhigh-fast": {"currentModelId": "grok-4.7", "values": {"context": "256k", "reasoning_effort": "xhigh", "fast": "true"}},
+    "cursor-grok-4.6-low": {"currentModelId": "grok-4.6", "values": {"effort": "low", "fast": "false"}},
+    "cursor-grok-4.6-low-fast": {"currentModelId": "grok-4.6", "values": {"effort": "low", "fast": "true"}},
+    "cursor-grok-4.6-medium": {"currentModelId": "grok-4.6", "values": {"effort": "medium", "fast": "false"}},
+    "cursor-grok-4.6-medium-fast": {"currentModelId": "grok-4.6", "values": {"effort": "medium", "fast": "true"}},
+    "cursor-grok-4.6-high": {"currentModelId": "grok-4.6", "values": {"effort": "high", "fast": "false"}},
+    "cursor-grok-4.6-high-fast": {"currentModelId": "grok-4.6", "values": {"effort": "high", "fast": "true"}},
+    "cursor-grok-4.6-xhigh": {"currentModelId": "grok-4.6", "values": {"effort": "xhigh", "fast": "false"}},
+    "cursor-grok-4.6-xhigh-fast": {"currentModelId": "grok-4.6", "values": {"effort": "xhigh", "fast": "true"}},
+    "composer-2.5-fast": {"currentModelId": "composer-2.5", "values": {"fast": "true"}},
+    "claude-opus-5-5-low": {"currentModelId": "claude-opus-5-5", "values": {"context": "300k", "effort": "low", "fast": "false"}},
+    "claude-opus-5-5-low-fast": {"currentModelId": "claude-opus-5-5", "values": {"context": "300k", "effort": "low", "fast": "true"}},
+    "claude-opus-5-5-medium": {"currentModelId": "claude-opus-5-5", "values": {"context": "300k", "effort": "medium", "fast": "false"}},
+    "claude-opus-5-5-medium-fast": {"currentModelId": "claude-opus-5-5", "values": {"context": "300k", "effort": "medium", "fast": "true"}},
+    "claude-opus-5-5-high": {"currentModelId": "claude-opus-5-5", "values": {"context": "300k", "effort": "high", "fast": "false"}},
+    "claude-opus-5-5-high-fast": {"currentModelId": "claude-opus-5-5", "values": {"context": "300k", "effort": "high", "fast": "true"}},
+    "claude-opus-5-5-xhigh": {"currentModelId": "claude-opus-5-5", "values": {"context": "300k", "effort": "xhigh", "fast": "false"}},
+    "claude-opus-5-5-xhigh-fast": {"currentModelId": "claude-opus-5-5", "values": {"context": "300k", "effort": "xhigh", "fast": "true"}},
+    "claude-opus-5-5-max": {"currentModelId": "claude-opus-5-5", "values": {"context": "300k", "effort": "max", "fast": "false"}},
+    "claude-opus-5-5-max-fast": {"currentModelId": "claude-opus-5-5", "values": {"context": "300k", "effort": "max", "fast": "true"}},
+    "claude-opus-5-low": {"currentModelId": "claude-opus-5", "values": {"thinking": "false", "context": "300k", "effort": "low", "fast": "false"}},
+    "claude-opus-5-low-fast": {"currentModelId": "claude-opus-5", "values": {"thinking": "false", "context": "300k", "effort": "low", "fast": "true"}},
+    "claude-opus-5-medium": {"currentModelId": "claude-opus-5", "values": {"thinking": "false", "context": "300k", "effort": "medium", "fast": "false"}},
+    "claude-opus-5-medium-fast": {"currentModelId": "claude-opus-5", "values": {"thinking": "false", "context": "300k", "effort": "medium", "fast": "true"}},
+    "claude-opus-5-high": {"currentModelId": "claude-opus-5", "values": {"thinking": "false", "context": "300k", "effort": "high", "fast": "false"}},
+    "claude-opus-5-high-fast": {"currentModelId": "claude-opus-5", "values": {"thinking": "false", "context": "300k", "effort": "high", "fast": "true"}},
+    "claude-opus-5-thinking-low": {"currentModelId": "claude-opus-5", "values": {"thinking": "true", "context": "300k", "effort": "low", "fast": "false"}},
+    "claude-opus-5-thinking-low-fast": {"currentModelId": "claude-opus-5", "values": {"thinking": "true", "context": "300k", "effort": "low", "fast": "true"}},
+    "claude-opus-5-thinking-medium": {"currentModelId": "claude-opus-5", "values": {"thinking": "true", "context": "300k", "effort": "medium", "fast": "false"}},
+    "claude-opus-5-thinking-medium-fast": {"currentModelId": "claude-opus-5", "values": {"thinking": "true", "context": "300k", "effort": "medium", "fast": "true"}},
+    "claude-opus-5-thinking-xhigh": {"currentModelId": "claude-opus-5", "values": {"thinking": "true", "context": "300k", "effort": "xhigh", "fast": "false"}},
+    "claude-opus-5-thinking-xhigh-fast": {"currentModelId": "claude-opus-5", "values": {"thinking": "true", "context": "300k", "effort": "xhigh", "fast": "true"}},
+    "claude-opus-5-thinking-max": {"currentModelId": "claude-opus-5", "values": {"thinking": "true", "context": "300k", "effort": "max", "fast": "false"}},
+    "claude-opus-5-thinking-max-fast": {"currentModelId": "claude-opus-5", "values": {"thinking": "true", "context": "300k", "effort": "max", "fast": "true"}},
+    "claude-opus-4-8-low": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "false", "context": "300k", "effort": "low", "fast": "false"}},
+    "claude-opus-4-8-low-fast": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "false", "context": "300k", "effort": "low", "fast": "true"}},
+    "claude-opus-4-8-medium": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "false", "context": "300k", "effort": "medium", "fast": "false"}},
+    "claude-opus-4-8-medium-fast": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "false", "context": "300k", "effort": "medium", "fast": "true"}},
+    "claude-opus-4-8-high": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "false", "context": "300k", "effort": "high", "fast": "false"}},
+    "claude-opus-4-8-high-fast": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "false", "context": "300k", "effort": "high", "fast": "true"}},
+    "claude-opus-4-8-xhigh": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "false", "context": "300k", "effort": "xhigh", "fast": "false"}},
+    "claude-opus-4-8-xhigh-fast": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "false", "context": "300k", "effort": "xhigh", "fast": "true"}},
+    "claude-opus-4-8-max": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "false", "context": "300k", "effort": "max", "fast": "false"}},
+    "claude-opus-4-8-max-fast": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "false", "context": "300k", "effort": "max", "fast": "true"}},
+    "claude-opus-4-8-thinking-low": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "true", "context": "300k", "effort": "low", "fast": "false"}},
+    "claude-opus-4-8-thinking-low-fast": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "true", "context": "300k", "effort": "low", "fast": "true"}},
+    "claude-opus-4-8-thinking-medium": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "true", "context": "300k", "effort": "medium", "fast": "false"}},
+    "claude-opus-4-8-thinking-medium-fast": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "true", "context": "300k", "effort": "medium", "fast": "true"}},
+    "claude-opus-4-8-thinking-high": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "true", "context": "300k", "effort": "high", "fast": "false"}},
+    "claude-opus-4-8-thinking-high-fast": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "true", "context": "300k", "effort": "high", "fast": "true"}},
+    "claude-opus-4-8-thinking-xhigh": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "true", "context": "300k", "effort": "xhigh", "fast": "false"}},
+    "claude-opus-4-8-thinking-xhigh-fast": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "true", "context": "300k", "effort": "xhigh", "fast": "true"}},
+    "claude-opus-4-8-thinking-max": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "true", "context": "300k", "effort": "max", "fast": "false"}},
+    "claude-opus-4-8-thinking-max-fast": {"currentModelId": "claude-opus-4-8", "values": {"thinking": "true", "context": "300k", "effort": "max", "fast": "true"}},
+    "gpt-5.6-sol-none": {"currentModelId": "gpt-5.6-sol", "values": {"context": "272k", "reasoning": "none", "fast": "false"}},
+    "gpt-5.6-sol-none-fast": {"currentModelId": "gpt-5.6-sol", "values": {"context": "272k", "reasoning": "none", "fast": "true"}},
+    "gpt-5.6-sol-low": {"currentModelId": "gpt-5.6-sol", "values": {"context": "272k", "reasoning": "low", "fast": "false"}},
+    "gpt-5.6-sol-low-fast": {"currentModelId": "gpt-5.6-sol", "values": {"context": "272k", "reasoning": "low", "fast": "true"}},
+    "gpt-5.6-sol-medium": {"currentModelId": "gpt-5.6-sol", "values": {"context": "272k", "reasoning": "medium", "fast": "false"}},
+    "gpt-5.6-sol-medium-fast": {"currentModelId": "gpt-5.6-sol", "values": {"context": "272k", "reasoning": "medium", "fast": "true"}},
+    "gpt-5.6-sol-max": {"currentModelId": "gpt-5.6-sol", "values": {"context": "272k", "reasoning": "max", "fast": "false"}},
+    "gpt-5.6-sol-max-fast": {"currentModelId": "gpt-5.6-sol", "values": {"context": "272k", "reasoning": "max", "fast": "true"}},
+    "gemini-4-argon-low": {"currentModelId": "gemini-4-argon", "values": {"reasoning_effort": "low"}},
+    "gemini-4-argon-medium": {"currentModelId": "gemini-4-argon", "values": {"reasoning_effort": "medium"}},
+    "gemini-4-argon-high": {"currentModelId": "gemini-4-argon", "values": {"reasoning_effort": "high"}},
+    "gpt-5.5-none": {"currentModelId": "gpt-5.5", "values": {"context": "272k", "reasoning": "none", "fast": "false"}},
+    "gpt-5.5-none-fast": {"currentModelId": "gpt-5.5", "values": {"context": "272k", "reasoning": "none", "fast": "true"}},
+    "gpt-5.5-low": {"currentModelId": "gpt-5.5", "values": {"context": "272k", "reasoning": "low", "fast": "false"}},
+    "gpt-5.5-low-fast": {"currentModelId": "gpt-5.5", "values": {"context": "272k", "reasoning": "low", "fast": "true"}},
+    "gpt-5.5-medium": {"currentModelId": "gpt-5.5", "values": {"context": "272k", "reasoning": "medium", "fast": "false"}},
+    "gpt-5.5-medium-fast": {"currentModelId": "gpt-5.5", "values": {"context": "272k", "reasoning": "medium", "fast": "true"}},
+    "gpt-5.5-high": {"currentModelId": "gpt-5.5", "values": {"context": "272k", "reasoning": "high", "fast": "false"}},
+    "gpt-5.5-high-fast": {"currentModelId": "gpt-5.5", "values": {"context": "272k", "reasoning": "high", "fast": "true"}},
+    "gpt-5.5-extra-high": {"currentModelId": "gpt-5.5", "values": {"context": "272k", "reasoning": "extra-high", "fast": "false"}},
+    "gpt-5.5-extra-high-fast": {"currentModelId": "gpt-5.5", "values": {"context": "272k", "reasoning": "extra-high", "fast": "true"}},
+    "claude-fable-5-1-low": {"currentModelId": "claude-fable-5-1", "values": {"thinking": "false", "context": "300k", "effort": "low"}},
+    "claude-fable-5-1-medium": {"currentModelId": "claude-fable-5-1", "values": {"thinking": "false", "context": "300k", "effort": "medium"}},
+    "claude-fable-5-1-high": {"currentModelId": "claude-fable-5-1", "values": {"thinking": "false", "context": "300k", "effort": "high"}},
+    "claude-fable-5-1-xhigh": {"currentModelId": "claude-fable-5-1", "values": {"thinking": "false", "context": "300k", "effort": "xhigh"}},
+    "claude-fable-5-1-max": {"currentModelId": "claude-fable-5-1", "values": {"thinking": "false", "context": "300k", "effort": "max"}},
+    "claude-fable-5-1-thinking-low": {"currentModelId": "claude-fable-5-1", "values": {"thinking": "true", "context": "300k", "effort": "low"}},
+    "claude-fable-5-1-thinking-medium": {"currentModelId": "claude-fable-5-1", "values": {"thinking": "true", "context": "300k", "effort": "medium"}},
+    "claude-fable-5-1-thinking-high": {"currentModelId": "claude-fable-5-1", "values": {"thinking": "true", "context": "300k", "effort": "high"}},
+    "claude-fable-5-1-thinking-xhigh": {"currentModelId": "claude-fable-5-1", "values": {"thinking": "true", "context": "300k", "effort": "xhigh"}},
+    "claude-fable-5-1-thinking-max": {"currentModelId": "claude-fable-5-1", "values": {"thinking": "true", "context": "300k", "effort": "max"}},
+    "claude-fable-5-low": {"currentModelId": "claude-fable-5", "values": {"thinking": "false", "context": "300k", "effort": "low"}},
+    "claude-fable-5-medium": {"currentModelId": "claude-fable-5", "values": {"thinking": "false", "context": "300k", "effort": "medium"}},
+    "claude-fable-5-high": {"currentModelId": "claude-fable-5", "values": {"thinking": "false", "context": "300k", "effort": "high"}},
+    "claude-fable-5-xhigh": {"currentModelId": "claude-fable-5", "values": {"thinking": "false", "context": "300k", "effort": "xhigh"}},
+    "claude-fable-5-max": {"currentModelId": "claude-fable-5", "values": {"thinking": "false", "context": "300k", "effort": "max"}},
+    "claude-fable-5-thinking-low": {"currentModelId": "claude-fable-5", "values": {"thinking": "true", "context": "300k", "effort": "low"}},
+    "claude-fable-5-thinking-medium": {"currentModelId": "claude-fable-5", "values": {"thinking": "true", "context": "300k", "effort": "medium"}},
+    "claude-fable-5-thinking-max": {"currentModelId": "claude-fable-5", "values": {"thinking": "true", "context": "300k", "effort": "max"}},
+    "cursor-grok-4.5-low": {"currentModelId": "grok-4.5", "values": {"effort": "low", "fast": "false"}},
+    "cursor-grok-4.5-low-fast": {"currentModelId": "grok-4.5", "values": {"effort": "low", "fast": "true"}},
+    "cursor-grok-4.5-medium": {"currentModelId": "grok-4.5", "values": {"effort": "medium", "fast": "false"}},
+    "cursor-grok-4.5-medium-fast": {"currentModelId": "grok-4.5", "values": {"effort": "medium", "fast": "true"}},
+    "gemini-3.8-flash-low": {"currentModelId": "gemini-3.8-flash", "values": {"reasoning_effort": "low"}},
+    "gemini-3.8-flash-medium": {"currentModelId": "gemini-3.8-flash", "values": {"reasoning_effort": "medium"}},
+    "gemini-3.8-flash-high": {"currentModelId": "gemini-3.8-flash", "values": {"reasoning_effort": "high"}},
+    "gemini-3.7-flash-low": {"currentModelId": "gemini-3.7-flash", "values": {"effort": "low"}},
+    "gemini-3.7-flash-medium": {"currentModelId": "gemini-3.7-flash", "values": {"effort": "medium"}},
+    "muse-spark-1.3-minimal": {"currentModelId": "muse-spark-1.3", "values": {"context": "300k", "effort": "minimal"}},
+    "muse-spark-1.3-low": {"currentModelId": "muse-spark-1.3", "values": {"context": "300k", "effort": "low"}},
+    "muse-spark-1.3-medium": {"currentModelId": "muse-spark-1.3", "values": {"context": "300k", "effort": "medium"}},
+    "muse-spark-1.3-high": {"currentModelId": "muse-spark-1.3", "values": {"context": "300k", "effort": "high"}},
+    "muse-spark-1.3-xhigh": {"currentModelId": "muse-spark-1.3", "values": {"context": "300k", "effort": "xhigh"}},
+    "muse-spark-1.3-max": {"currentModelId": "muse-spark-1.3", "values": {"context": "300k", "effort": "max"}},
+    "gpt-5.6-terra-none": {"currentModelId": "gpt-5.6-terra", "values": {"context": "272k", "reasoning": "none", "fast": "false"}},
+    "gpt-5.6-terra-none-fast": {"currentModelId": "gpt-5.6-terra", "values": {"context": "272k", "reasoning": "none", "fast": "true"}},
+    "gpt-5.6-terra-low": {"currentModelId": "gpt-5.6-terra", "values": {"context": "272k", "reasoning": "low", "fast": "false"}},
+    "gpt-5.6-terra-low-fast": {"currentModelId": "gpt-5.6-terra", "values": {"context": "272k", "reasoning": "low", "fast": "true"}},
+    "gpt-5.6-terra-medium": {"currentModelId": "gpt-5.6-terra", "values": {"context": "272k", "reasoning": "medium", "fast": "false"}},
+    "gpt-5.6-terra-medium-fast": {"currentModelId": "gpt-5.6-terra", "values": {"context": "272k", "reasoning": "medium", "fast": "true"}},
+    "gpt-5.6-terra-high": {"currentModelId": "gpt-5.6-terra", "values": {"context": "272k", "reasoning": "high", "fast": "false"}},
+    "gpt-5.6-terra-high-fast": {"currentModelId": "gpt-5.6-terra", "values": {"context": "272k", "reasoning": "high", "fast": "true"}},
+    "gpt-5.6-terra-xhigh": {"currentModelId": "gpt-5.6-terra", "values": {"context": "272k", "reasoning": "xhigh", "fast": "false"}},
+    "gpt-5.6-terra-xhigh-fast": {"currentModelId": "gpt-5.6-terra", "values": {"context": "272k", "reasoning": "xhigh", "fast": "true"}},
+    "gpt-5.6-terra-max": {"currentModelId": "gpt-5.6-terra", "values": {"context": "272k", "reasoning": "max", "fast": "false"}},
+    "gpt-5.6-terra-max-fast": {"currentModelId": "gpt-5.6-terra", "values": {"context": "272k", "reasoning": "max", "fast": "true"}},
+    "claude-sonnet-5-5-low": {"currentModelId": "claude-sonnet-5-5", "values": {"context": "300k", "reasoning_effort": "low"}},
+    "claude-sonnet-5-5-medium": {"currentModelId": "claude-sonnet-5-5", "values": {"context": "300k", "reasoning_effort": "medium"}},
+    "claude-sonnet-5-5-high": {"currentModelId": "claude-sonnet-5-5", "values": {"context": "300k", "reasoning_effort": "high"}},
+    "claude-sonnet-5-5-xhigh": {"currentModelId": "claude-sonnet-5-5", "values": {"context": "300k", "reasoning_effort": "xhigh"}},
+    "claude-sonnet-5-5-max": {"currentModelId": "claude-sonnet-5-5", "values": {"context": "300k", "reasoning_effort": "max"}},
+    "claude-sonnet-5-low": {"currentModelId": "claude-sonnet-5", "values": {"thinking": "false", "context": "300k", "effort": "low"}},
+    "claude-sonnet-5-medium": {"currentModelId": "claude-sonnet-5", "values": {"thinking": "false", "context": "300k", "effort": "medium"}},
+    "claude-sonnet-5-high": {"currentModelId": "claude-sonnet-5", "values": {"thinking": "false", "context": "300k", "effort": "high"}},
+    "claude-sonnet-5-xhigh": {"currentModelId": "claude-sonnet-5", "values": {"thinking": "false", "context": "300k", "effort": "xhigh"}},
+    "claude-sonnet-5-max": {"currentModelId": "claude-sonnet-5", "values": {"thinking": "false", "context": "300k", "effort": "max"}},
+    "claude-sonnet-5-thinking-low": {"currentModelId": "claude-sonnet-5", "values": {"thinking": "true", "context": "300k", "effort": "low"}},
+    "claude-sonnet-5-thinking-medium": {"currentModelId": "claude-sonnet-5", "values": {"thinking": "true", "context": "300k", "effort": "medium"}},
+    "claude-sonnet-5-thinking-max": {"currentModelId": "claude-sonnet-5", "values": {"thinking": "true", "context": "300k", "effort": "max"}},
+    "claude-4.6-sonnet-medium": {"currentModelId": "claude-sonnet-4-6", "values": {"thinking": "false", "context": "200k", "effort": "medium"}},
+    "claude-4.6-sonnet-medium-thinking": {"currentModelId": "claude-sonnet-4-6", "values": {"thinking": "true", "context": "200k", "effort": "medium"}},
+    "claude-opus-4-7-low": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "false", "context": "300k", "effort": "low", "fast": "false"}},
+    "claude-opus-4-7-low-fast": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "false", "context": "300k", "effort": "low", "fast": "true"}},
+    "claude-opus-4-7-medium": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "false", "context": "300k", "effort": "medium", "fast": "false"}},
+    "claude-opus-4-7-medium-fast": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "false", "context": "300k", "effort": "medium", "fast": "true"}},
+    "claude-opus-4-7-high": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "false", "context": "300k", "effort": "high", "fast": "false"}},
+    "claude-opus-4-7-high-fast": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "false", "context": "300k", "effort": "high", "fast": "true"}},
+    "claude-opus-4-7-xhigh": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "false", "context": "300k", "effort": "xhigh", "fast": "false"}},
+    "claude-opus-4-7-xhigh-fast": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "false", "context": "300k", "effort": "xhigh", "fast": "true"}},
+    "claude-opus-4-7-max": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "false", "context": "300k", "effort": "max", "fast": "false"}},
+    "claude-opus-4-7-max-fast": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "false", "context": "300k", "effort": "max", "fast": "true"}},
+    "claude-opus-4-7-thinking-low": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "true", "context": "300k", "effort": "low", "fast": "false"}},
+    "claude-opus-4-7-thinking-low-fast": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "true", "context": "300k", "effort": "low", "fast": "true"}},
+    "claude-opus-4-7-thinking-medium": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "true", "context": "300k", "effort": "medium", "fast": "false"}},
+    "claude-opus-4-7-thinking-medium-fast": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "true", "context": "300k", "effort": "medium", "fast": "true"}},
+    "claude-opus-4-7-thinking-high": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "true", "context": "300k", "effort": "high", "fast": "false"}},
+    "claude-opus-4-7-thinking-high-fast": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "true", "context": "300k", "effort": "high", "fast": "true"}},
+    "claude-opus-4-7-thinking-xhigh": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "true", "context": "300k", "effort": "xhigh", "fast": "false"}},
+    "claude-opus-4-7-thinking-xhigh-fast": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "true", "context": "300k", "effort": "xhigh", "fast": "true"}},
+    "claude-opus-4-7-thinking-max": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "true", "context": "300k", "effort": "max", "fast": "false"}},
+    "claude-opus-4-7-thinking-max-fast": {"currentModelId": "claude-opus-4-7", "values": {"thinking": "true", "context": "300k", "effort": "max", "fast": "true"}},
+    "gpt-5.4-low": {"currentModelId": "gpt-5.4", "values": {"context": "272k", "reasoning": "low", "fast": "false"}},
+    "gpt-5.4-medium": {"currentModelId": "gpt-5.4", "values": {"context": "272k", "reasoning": "medium", "fast": "false"}},
+    "gpt-5.4-medium-fast": {"currentModelId": "gpt-5.4", "values": {"context": "272k", "reasoning": "medium", "fast": "true"}},
+    "gpt-5.4-high": {"currentModelId": "gpt-5.4", "values": {"context": "272k", "reasoning": "high", "fast": "false"}},
+    "gpt-5.4-high-fast": {"currentModelId": "gpt-5.4", "values": {"context": "272k", "reasoning": "high", "fast": "true"}},
+    "gpt-5.4-xhigh": {"currentModelId": "gpt-5.4", "values": {"context": "272k", "reasoning": "extra-high", "fast": "false"}},
+    "gpt-5.4-xhigh-fast": {"currentModelId": "gpt-5.4", "values": {"context": "272k", "reasoning": "extra-high", "fast": "true"}},
+    "claude-4.6-opus-high": {"currentModelId": "claude-opus-4-6", "values": {"thinking": "false", "context": "200k", "effort": "high"}},
+    "claude-4.6-opus-max": {"currentModelId": "claude-opus-4-6", "values": {"thinking": "false", "context": "200k", "effort": "max"}},
+    "claude-4.6-opus-high-thinking": {"currentModelId": "claude-opus-4-6", "values": {"thinking": "true", "context": "200k", "effort": "high"}},
+    "claude-4.6-opus-max-thinking": {"currentModelId": "claude-opus-4-6", "values": {"thinking": "true", "context": "200k", "effort": "max"}},
+    "claude-4.5-opus-high": {"currentModelId": "claude-opus-4-5", "values": {"thinking": "false"}},
+    "claude-4.5-opus-high-thinking": {"currentModelId": "claude-opus-4-5", "values": {"thinking": "true"}},
+    "gpt-5.2-low": {"currentModelId": "gpt-5.2", "values": {"reasoning": "low", "fast": "false"}},
+    "gpt-5.2-low-fast": {"currentModelId": "gpt-5.2", "values": {"reasoning": "low", "fast": "true"}},
+    "gpt-5.2-fast": {"currentModelId": "gpt-5.2", "values": {"reasoning": "medium", "fast": "true"}},
+    "gpt-5.2-high": {"currentModelId": "gpt-5.2", "values": {"reasoning": "high", "fast": "false"}},
+    "gpt-5.2-high-fast": {"currentModelId": "gpt-5.2", "values": {"reasoning": "high", "fast": "true"}},
+    "gpt-5.2-xhigh": {"currentModelId": "gpt-5.2", "values": {"reasoning": "extra-high", "fast": "false"}},
+    "gpt-5.2-xhigh-fast": {"currentModelId": "gpt-5.2", "values": {"reasoning": "extra-high", "fast": "true"}},
+    "gpt-5.6-luna-none": {"currentModelId": "gpt-5.6-luna", "values": {"context": "272k", "reasoning": "none", "fast": "false"}},
+    "gpt-5.6-luna-none-fast": {"currentModelId": "gpt-5.6-luna", "values": {"context": "272k", "reasoning": "none", "fast": "true"}},
+    "gpt-5.6-luna-low": {"currentModelId": "gpt-5.6-luna", "values": {"context": "272k", "reasoning": "low", "fast": "false"}},
+    "gpt-5.6-luna-low-fast": {"currentModelId": "gpt-5.6-luna", "values": {"context": "272k", "reasoning": "low", "fast": "true"}},
+    "gpt-5.6-luna-medium": {"currentModelId": "gpt-5.6-luna", "values": {"context": "272k", "reasoning": "medium", "fast": "false"}},
+    "gpt-5.6-luna-medium-fast": {"currentModelId": "gpt-5.6-luna", "values": {"context": "272k", "reasoning": "medium", "fast": "true"}},
+    "gpt-5.6-luna-high-fast": {"currentModelId": "gpt-5.6-luna", "values": {"context": "272k", "reasoning": "high", "fast": "true"}},
+    "gpt-5.6-luna-xhigh": {"currentModelId": "gpt-5.6-luna", "values": {"context": "272k", "reasoning": "xhigh", "fast": "false"}},
+    "gpt-5.6-luna-xhigh-fast": {"currentModelId": "gpt-5.6-luna", "values": {"context": "272k", "reasoning": "xhigh", "fast": "true"}},
+    "gpt-5.6-luna-max": {"currentModelId": "gpt-5.6-luna", "values": {"context": "272k", "reasoning": "max", "fast": "false"}},
+    "gpt-5.6-luna-max-fast": {"currentModelId": "gpt-5.6-luna", "values": {"context": "272k", "reasoning": "max", "fast": "true"}},
+    "gemini-3.6-flash-minimal": {"currentModelId": "gemini-3.6-flash", "values": {"effort": "minimal"}},
+    "gemini-3.6-flash-low": {"currentModelId": "gemini-3.6-flash", "values": {"effort": "low"}},
+    "gemini-3.6-flash-medium": {"currentModelId": "gemini-3.6-flash", "values": {"effort": "medium"}},
+    "gemini-3.6-flash-high": {"currentModelId": "gemini-3.6-flash", "values": {"effort": "high"}},
+    "gemini-3.1-pro": {"currentModelId": "gemini-3.1-pro", "values": {}},
+    "gpt-5.4-mini-none": {"currentModelId": "gpt-5.4-mini", "values": {"reasoning": "none"}},
+    "gpt-5.4-mini-low": {"currentModelId": "gpt-5.4-mini", "values": {"reasoning": "low"}},
+    "gpt-5.4-mini-medium": {"currentModelId": "gpt-5.4-mini", "values": {"reasoning": "medium"}},
+    "gpt-5.4-mini-high": {"currentModelId": "gpt-5.4-mini", "values": {"reasoning": "high"}},
+    "gpt-5.4-mini-xhigh": {"currentModelId": "gpt-5.4-mini", "values": {"reasoning": "xhigh"}},
+    "gpt-5.4-nano-none": {"currentModelId": "gpt-5.4-nano", "values": {"reasoning": "none"}},
+    "gpt-5.4-nano-low": {"currentModelId": "gpt-5.4-nano", "values": {"reasoning": "low"}},
+    "gpt-5.4-nano-medium": {"currentModelId": "gpt-5.4-nano", "values": {"reasoning": "medium"}},
+    "gpt-5.4-nano-high": {"currentModelId": "gpt-5.4-nano", "values": {"reasoning": "high"}},
+    "gpt-5.4-nano-xhigh": {"currentModelId": "gpt-5.4-nano", "values": {"reasoning": "xhigh"}},
+    "claude-haiku-5-5-low": {"currentModelId": "claude-haiku-5-5", "values": {"thinking": "false", "context": "300k", "reasoning_effort": "low"}},
+    "claude-haiku-5-5-medium": {"currentModelId": "claude-haiku-5-5", "values": {"thinking": "false", "context": "300k", "reasoning_effort": "medium"}},
+    "claude-haiku-5-5-high": {"currentModelId": "claude-haiku-5-5", "values": {"thinking": "false", "context": "300k", "reasoning_effort": "high"}},
+    "claude-haiku-5-5-xhigh": {"currentModelId": "claude-haiku-5-5", "values": {"thinking": "false", "context": "300k", "reasoning_effort": "xhigh"}},
+    "claude-haiku-5-5-max": {"currentModelId": "claude-haiku-5-5", "values": {"thinking": "false", "context": "300k", "reasoning_effort": "max"}},
+    "claude-haiku-5-5-thinking-low": {"currentModelId": "claude-haiku-5-5", "values": {"thinking": "true", "context": "300k", "reasoning_effort": "low"}},
+    "claude-haiku-5-5-thinking-medium": {"currentModelId": "claude-haiku-5-5", "values": {"thinking": "true", "context": "300k", "reasoning_effort": "medium"}},
+    "claude-haiku-5-5-thinking-high": {"currentModelId": "claude-haiku-5-5", "values": {"thinking": "true", "context": "300k", "reasoning_effort": "high"}},
+    "claude-haiku-5-5-thinking-xhigh": {"currentModelId": "claude-haiku-5-5", "values": {"thinking": "true", "context": "300k", "reasoning_effort": "xhigh"}},
+    "claude-haiku-5-5-thinking-max": {"currentModelId": "claude-haiku-5-5", "values": {"thinking": "true", "context": "300k", "reasoning_effort": "max"}},
+    "claude-4.5-sonnet": {"currentModelId": "claude-sonnet-4-5", "values": {"thinking": "false"}},
+    "claude-4.5-sonnet-thinking": {"currentModelId": "claude-sonnet-4-5", "values": {"thinking": "true"}},
+    "gpt-5.1-low": {"currentModelId": "gpt-5.1", "values": {"reasoning": "low"}},
+    "gpt-5.1": {"currentModelId": "gpt-5.1", "values": {"reasoning": "medium"}},
+    "gpt-5.1-high": {"currentModelId": "gpt-5.1", "values": {"reasoning": "high"}},
+    "gemini-3-flash": {"currentModelId": "gemini-3-flash", "values": {}},
+    "gemini-3.5-flash": {"currentModelId": "gemini-3.5-flash", "values": {}},
+    "claude-4-sonnet": {"currentModelId": "claude-sonnet-4", "values": {"thinking": "false"}},
+    "claude-4-sonnet-thinking": {"currentModelId": "claude-sonnet-4", "values": {"thinking": "true"}},
+    "gpt-5-mini": {"currentModelId": "gpt-5-mini", "values": {}},
+    "kimi-k3-low": {"currentModelId": "kimi-k3", "values": {"reasoning": "low"}},
+    "kimi-k3-high": {"currentModelId": "kimi-k3", "values": {"reasoning": "high"}},
+    "kimi-k3-max": {"currentModelId": "kimi-k3", "values": {"reasoning": "max"}},
+    "kimi-k2.7-code": {"currentModelId": "kimi-k2.7-code", "values": {}},
+    "glm-5.2-high": {"currentModelId": "glm-5.2", "values": {"reasoning": "high"}},
+    "glm-5.2-max": {"currentModelId": "glm-5.2", "values": {"reasoning": "max"}}
+  }
+}

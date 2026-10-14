@@ -5,9 +5,11 @@ import type { AcpPromptBlock } from "./media-input.js";
 
 import {
   ACP_CLIENT_CAPABILITIES,
-  applyAcpModelPlan,
+  configureAcpSessionModel,
   formatAcpRpcError,
+  type AcpModelOptions,
   type AcpModelPlan,
+  type AcpSessionModelState,
 } from "./acp-model.js";
 import { trackChildProcess } from "./process.js";
 import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
@@ -29,8 +31,6 @@ export type AcpMcpServer =
       env?: Array<{ name: string; value: string }>;
     };
 
-export type AcpAvailableModel = { modelId: string; name: string };
-
 export type AcpInitializeResult = {
   protocolVersion?: number;
   agentCapabilities?: {
@@ -39,10 +39,7 @@ export type AcpInitializeResult = {
   };
 };
 
-export type AcpSessionResult = {
-  sessionId?: string;
-  models?: { availableModels?: AcpAvailableModel[] };
-};
+export type AcpSessionResult = { sessionId?: string } & AcpSessionModelState;
 
 export type AcpPermissionParams = {
   sessionId?: string;
@@ -134,7 +131,7 @@ function parseLine(line: string): JsonRpcMessage | null {
   }
 }
 
-export function extractAcpContentText(content: unknown): string {
+function extractAcpContentText(content: unknown): string {
   if (
     content &&
     typeof content === "object" &&
@@ -274,27 +271,15 @@ export class AcpConnection {
     })) as AcpSessionResult;
   }
 
-  async setSessionModel(sessionId: string, value: string): Promise<void> {
-    await this.configureSessionModel(sessionId, { action: "set", modelId: value });
-  }
-
-  /**
-   * `requested` is the public CLI id; when set, option-level failures name
-   * both the request and the matched ACP base row.
-   */
-  async configureSessionModel(
+  /** Pick the session model through the decision the plain path shares. */
+  configureSessionModel(
     sessionId: string,
-    plan: AcpModelPlan,
-    requested?: string,
-  ): Promise<void> {
-    await applyAcpModelPlan(plan, async (configId, value) => {
-      debugAcp("ACP step: session/set_config_option (%s)", configId);
-      return this.request("session/set_config_option", {
-        sessionId,
-        configId,
-        value,
-      });
-    }, requested);
+    request: AcpModelOptions,
+    session: AcpSessionModelState,
+  ): Promise<AcpModelPlan> {
+    return configureAcpSessionModel(request, session, (configId, value) =>
+      this.request("session/set_config_option", { sessionId, configId, value }),
+    );
   }
 
   prompt(
@@ -356,10 +341,6 @@ export class AcpConnection {
 
   async cancelSession(sessionId: string): Promise<void> {
     this.notify("session/cancel", { sessionId });
-  }
-
-  waitForExit(): Promise<number> {
-    return this.#exitPromise;
   }
 
   async close(signal: NodeJS.Signals = "SIGKILL"): Promise<void> {

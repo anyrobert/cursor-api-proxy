@@ -653,7 +653,7 @@ export async function handleChatCompletions(
         modelCatalogName,
         mediaBlocks,
       )
-        .then(({ code, stderr: stderrOut }) => {
+        .then(({ code, stderr: stderrOut, error }) => {
           stopKeepalive();
           const latencyMs = Date.now() - streamStart;
           reportRequestEnd(configDir);
@@ -673,6 +673,7 @@ export async function handleChatCompletions(
               remoteAddress,
               code,
               stderrOut,
+              error,
             );
             res.write(
               `data: ${JSON.stringify({
@@ -878,6 +879,7 @@ export async function handleChatCompletions(
       remoteAddress,
       out.code,
       out.stderr,
+      out.error,
     );
     json(res, 500, {
       error: { message: errMsg, code: "cursor_cli_error" },

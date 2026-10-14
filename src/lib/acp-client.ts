@@ -11,36 +11,24 @@ import { debuglog } from "node:util";
 import {
   ACP_CLIENT_CAPABILITIES,
   acpFailureText,
-  acpModelSelectionError,
-  applyAcpModelPlan,
+  configureAcpSessionModel,
   formatAcpRpcError,
-  planAcpModelSelection,
-  type AcpCatalogModel,
+  type AcpModelOptions,
+  type AcpModelPlan,
+  type AcpSessionModelState,
 } from "./acp-model.js";
 import { trackChildProcess } from "./process.js";
 import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
 import type { AcpPromptBlock } from "./media-input.js";
 
-export {
-  resolveAcpModelConfigValue,
-  planAcpModelSelection,
-  parseCliModelVariant,
-} from "./acp-model.js";
-
 const debugAcp = debuglog("cursor-api-proxy:acp");
 
-export type AcpRunOptions = {
+export type AcpRunOptions = AcpModelOptions & {
   /** Optional validated media blocks appended to the text prompt. */
   mediaBlocks?: AcpPromptBlock[];
   cwd: string;
   timeoutMs: number;
   env?: Record<string, string | undefined>;
-  /** When set, call session/set_config_option for "model" after session/new (ACP session config). */
-  model?: string;
-  /** Additional catalog names for model matching (typically `agent --list-models` display name). */
-  modelAliases?: string[];
-  /** Reject a requested model when the ACP catalog cannot match it. */
-  strictModel?: boolean;
   /** Per-request timeout in ms (default 60000). Rejects and clears pending on timeout. */
   requestTimeoutMs?: number;
   /** Spawn options (e.g. windowsVerbatimArguments for cmd.exe fallback on Windows). */
@@ -53,21 +41,26 @@ export type AcpRunOptions = {
   signal?: AbortSignal;
 };
 
-export type AcpSyncResult = {
+export type AcpStreamResult = {
   code: number;
+  /** Raw CLI stderr plus proxy diagnostics; for server logs only. */
+  stderr: string;
+  /**
+   * Why the proxy aborted the turn (model selection, an ACP JSON-RPC error,
+   * a request timeout). Never raw CLI output, so callers may show it to
+   * clients the way the tool path already does.
+   */
+  error?: string;
+};
+
+export type AcpSyncResult = AcpStreamResult & {
   /** Assistant message text only (never includes agent_thought_chunk). */
   stdout: string;
-  stderr: string;
   /**
    * Concatenated agent_thought_chunk text for this turn.
    * Present when any thought arrived; callers decide drop vs reasoning_content.
    */
   reasoning?: string;
-};
-
-export type AcpStreamResult = {
-  code: number;
-  stderr: string;
 };
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
@@ -168,7 +161,6 @@ export function extractAcpUpdateText(
 function handleAcpNotification(
   msg: AcpParsedMsg,
   opts: {
-    rawDebug?: boolean;
     stdin: NodeJS.WritableStream | null | undefined;
     onAgentTextChunk?: (text: string) => void;
     onAgentThoughtChunk?: (text: string) => void;
@@ -243,8 +235,6 @@ function handleAcpNotification(
   return false;
 }
 
-export type AcpAvailableModel = AcpCatalogModel;
-
 function appendAcpFailure(stderr: string, error: unknown): string {
   const message = acpFailureText(error);
   if (!message) return stderr;
@@ -277,7 +267,8 @@ function describeAcpExit(
   return out;
 }
 
-async function configureAcpModel(
+/** Pick the session model through the decision the tool path shares. */
+function configureAcpModel(
   stdin: NodeJS.WritableStream,
   nextId: { current: number },
   pending: Map<
@@ -290,42 +281,19 @@ async function configureAcpModel(
   >,
   requestTimeoutMs: number,
   sessionId: string,
-  requested: string | undefined,
-  availableModels: AcpAvailableModel[] | undefined,
-  aliases: readonly string[] | undefined,
-  strictModel: boolean | undefined,
-): Promise<void> {
-  if (!requested) return;
-  const plan = planAcpModelSelection(requested, availableModels, aliases);
-  if (plan.action === "missing") {
-    debugAcp(
-      "ACP model: no catalog match for display name %j",
-      requested,
-    );
-    if (strictModel && requested !== "default") {
-      throw new Error(acpModelSelectionError(requested, plan.candidates));
-    }
-    return;
-  }
-  if (plan.action === "skip") {
-    debugAcp(
-      "ACP step: session/set_config_option (model) — skipped, using session default",
-    );
-    return;
-  }
-  // Pass the public CLI id so option-level errors can name both the request
-  // and the matched ACP base row.
-  await applyAcpModelPlan(plan, (configId, value) => {
-    debugAcp("ACP step: session/set_config_option (%s)", configId);
-    return sendRequest(
+  request: AcpModelOptions,
+  session: AcpSessionModelState,
+): Promise<AcpModelPlan> {
+  return configureAcpSessionModel(request, session, (configId, value) =>
+    sendRequest(
       stdin,
       nextId,
       "session/set_config_option",
       { sessionId, configId, value },
       pending,
       requestTimeoutMs,
-    );
-  }, requested);
+    ),
+  );
 }
 
 function sendRequest(
@@ -399,6 +367,7 @@ export function runAcpSync(
     let stdoutNoise = "";
     let accumulated = "";
     let accumulatedThought = "";
+    let failure: string | undefined;
     let resolved = false;
 
     const onAbort = () => {
@@ -430,6 +399,7 @@ export function runAcpSync(
         code,
         stdout: accumulated.trim(),
         stderr: stderr.trim(),
+        ...(failure ? { error: failure } : {}),
         ...(reasoning ? { reasoning } : {}),
       });
     };
@@ -477,7 +447,6 @@ export function runAcpSync(
         }
 
         handleAcpNotification(msg, {
-          rawDebug: opts.rawDebug,
           stdin: child.stdin,
           onAgentTextChunk: (text) => {
             accumulated += text;
@@ -539,13 +508,11 @@ export function runAcpSync(
           { cwd: opts.cwd, mcpServers: [] },
           pending,
           requestTimeoutMs,
-        )) as {
-          sessionId?: string;
-          models?: { availableModels?: AcpAvailableModel[] };
-        };
+        )) as ({ sessionId?: string } & AcpSessionModelState) | undefined;
         const sessionId = sessionResult?.sessionId;
         if (!sessionId) {
-          stderr = appendAcpFailure(stderr, "ACP session/new returned no sessionId");
+          failure = "ACP session/new returned no sessionId";
+          stderr = appendAcpFailure(stderr, failure);
           finish(1);
           return;
         }
@@ -556,10 +523,8 @@ export function runAcpSync(
           pending,
           requestTimeoutMs,
           sessionId,
-          opts.model,
-          sessionResult.models?.availableModels,
-          opts.modelAliases,
-          opts.strictModel,
+          opts,
+          sessionResult,
         );
 
         debugAcp("ACP step: session/prompt");
@@ -572,6 +537,7 @@ export function runAcpSync(
         }
         finish(0);
       } catch (err) {
+        failure = acpFailureText(err) || undefined;
         stderr = appendAcpFailure(stderr, err);
         if (timeout) clearTimeout(timeout);
         if (!resolved) {
@@ -609,6 +575,7 @@ export function runAcpStream(
 
     let stderr = "";
     let stdoutNoise = "";
+    let failure: string | undefined;
     let resolved = false;
 
     const onAbort = () => {
@@ -635,7 +602,11 @@ export function runAcpStream(
         /* ignore */
       }
       killProcessTree(child, "SIGKILL");
-      resolve({ code, stderr: stderr.trim() });
+      resolve({
+        code,
+        stderr: stderr.trim(),
+        ...(failure ? { error: failure } : {}),
+      });
     };
 
     const timeout =
@@ -679,7 +650,6 @@ export function runAcpStream(
         }
 
         handleAcpNotification(msg, {
-          rawDebug: opts.rawDebug,
           stdin: child.stdin,
           onAgentTextChunk: onChunk,
         });
@@ -736,13 +706,11 @@ export function runAcpStream(
           { cwd: opts.cwd, mcpServers: [] },
           pending,
           requestTimeoutMs,
-        )) as {
-          sessionId?: string;
-          models?: { availableModels?: AcpAvailableModel[] };
-        };
+        )) as ({ sessionId?: string } & AcpSessionModelState) | undefined;
         const sessionId = sessionResult?.sessionId;
         if (!sessionId) {
-          stderr = appendAcpFailure(stderr, "ACP session/new returned no sessionId");
+          failure = "ACP session/new returned no sessionId";
+          stderr = appendAcpFailure(stderr, failure);
           finish(1);
           return;
         }
@@ -753,10 +721,8 @@ export function runAcpStream(
           pending,
           requestTimeoutMs,
           sessionId,
-          opts.model,
-          sessionResult.models?.availableModels,
-          opts.modelAliases,
-          opts.strictModel,
+          opts,
+          sessionResult,
         );
 
         debugAcp("ACP step: session/prompt");
@@ -766,6 +732,7 @@ export function runAcpStream(
         }, pending, requestTimeoutMs);
         finish(0);
       } catch (err) {
+        failure = acpFailureText(err) || undefined;
         stderr = appendAcpFailure(stderr, err);
         if (timeout) clearTimeout(timeout);
         if (!resolved) {

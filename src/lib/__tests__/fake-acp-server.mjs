@@ -2,6 +2,7 @@
  * Fake ACP server. Tool scenarios act as an MCP HTTP client so tests exercise
  * the real proxy-owned MCP transport and parked tools/call lifecycle.
  */
+import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const scenario = process.env.FAKE_ACP_SCENARIO || "";
@@ -41,11 +42,99 @@ const PARAMETER_DEFAULTS = {
   },
 };
 
+/**
+ * "real_catalog" replays a captured Cursor CLI: `--model <public id>` resolves
+ * the way the real `session/new` resolved it, unknown ids fail at startup like
+ * the CLI does, and FAKE_ACP_CURRENT_MODEL overrides the CLI's pick (e.g.
+ * "default"). Like the CLI, option values are remembered per family:
+ * set_config_option(model) returns what `--model` just resolved for that
+ * family, else the captured per-family options. The prompt answer is the JSON
+ * selection ({ model, values, calls }) the turn ran with, sent on stdout so it
+ * cannot race the JSON-RPC reply.
+ */
+const realCatalog =
+  scenario === "real_catalog"
+    ? JSON.parse(
+        readFileSync(new URL("./acp-real-catalog.json", import.meta.url), "utf8"),
+      )
+    : undefined;
+const realStored = {};
+let realOptions = [];
+const realCalls = [];
+
+function cliModelArg() {
+  const index = process.argv.indexOf("--model");
+  return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
+if (realCatalog && cliModelArg() && !realCatalog.sessions[cliModelArg()]) {
+  process.stderr.write(`Cannot use this model: ${cliModelArg()}.\n`);
+  process.exit(1);
+}
+
+function realConfigOptions() {
+  const sample = realCatalog.sessionNewSample.result.configOptions;
+  return [
+    sample.find((option) => option.id === "mode"),
+    {
+      ...sample.find((option) => option.id === "model"),
+      currentValue: selectedModel,
+    },
+    ...realOptions,
+  ];
+}
+
+function realFamilyOptions(family) {
+  realStored[family] ??= structuredClone(realCatalog.familyOptions[family] ?? []);
+  return realStored[family];
+}
+
+function realSessionNew() {
+  const requested = cliModelArg();
+  const captured = requested ? realCatalog.sessions[requested] : undefined;
+  selectedModel =
+    process.env.FAKE_ACP_CURRENT_MODEL ?? captured?.currentModelId ?? "default";
+  realOptions = realFamilyOptions(selectedModel);
+  for (const option of realOptions) {
+    option.currentValue = captured?.values[option.id] ?? option.currentValue;
+  }
+  const sample = structuredClone(realCatalog.sessionNewSample.result);
+  return {
+    ...sample,
+    sessionId: "sess-1",
+    models: { ...sample.models, currentModelId: selectedModel },
+    configOptions: realConfigOptions(),
+  };
+}
+
+function invalidParams(message) {
+  return { error: { code: -32602, message: "Invalid params", data: { message } } };
+}
+
+function realConfigResult(params) {
+  realCalls.push(`${params?.configId}=${params?.value}`);
+  if (params?.configId === "model") {
+    if (!realCatalog.familyOptions[params.value]) {
+      return invalidParams(`Invalid model value: ${params.value}`);
+    }
+    selectedModel = params.value;
+    realOptions = realFamilyOptions(params.value);
+  } else {
+    const option = realOptions.find((item) => item.id === params?.configId);
+    if (!option?.options.some((item) => item.value === params.value)) {
+      return invalidParams(`Invalid value for ${params?.configId}: ${params?.value}`);
+    }
+    option.currentValue = params.value;
+  }
+  return { result: { configOptions: realConfigOptions() } };
+}
+
 function send(message) {
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
 }
 
 function sessionNewResult() {
+  if (realCatalog) return realSessionNew();
   if (scenario === "empty_models") {
     return { sessionId: "sess-1", models: { availableModels: [] } };
   }
@@ -426,6 +515,10 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "session/set_config_option") {
+    if (realCatalog) {
+      send({ id: msg.id, ...realConfigResult(msg.params) });
+      return;
+    }
     if (
       scenario === "parameterized_models" ||
       scenario === "grok_models" ||
@@ -439,6 +532,15 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "session/prompt") {
+    if (realCatalog) {
+      const values = Object.fromEntries(
+        realOptions.map((option) => [option.id, option.currentValue]),
+      );
+      const text = JSON.stringify({ model: selectedModel, values, calls: realCalls });
+      update("agent_message_chunk", { content: { text } });
+      send({ id: msg.id, result: {} });
+      return;
+    }
     if (scenario === "process_exit") {
       setTimeout(() => process.exit(7), 10);
       return;

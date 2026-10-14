@@ -143,7 +143,8 @@ describe("AcpToolSession", () => {
 
   it("maps CLI display name to ACP model id", async () => {
     const session = createSession("display_model", undefined, {
-      modelCandidates: ["gpt-5.6-sol-high", "GPT-5.6 Sol High"],
+      model: "gpt-5.6-sol-high",
+      modelAliases: ["GPT-5.6 Sol High"],
       strictModel: true,
     });
     await session.start("Hello");
@@ -156,7 +157,8 @@ describe("AcpToolSession", () => {
 
   it("maps a cursor-prefixed Grok id onto the ACP base row", async () => {
     const session = createSession("grok_models", undefined, {
-      modelCandidates: ["cursor-grok-4.6-medium", "Grok 4.6 Medium"],
+      model: "cursor-grok-4.6-medium",
+      modelAliases: ["Grok 4.6 Medium"],
       strictModel: true,
     });
     await session.start("Hello");
@@ -169,7 +171,8 @@ describe("AcpToolSession", () => {
 
   it("names the requested public id when an option is not offered", async () => {
     const session = createSession("grok_models", undefined, {
-      modelCandidates: ["cursor-grok-4.5-xhigh", "Grok 4.5 Extra High"],
+      model: "cursor-grok-4.5-xhigh",
+      modelAliases: ["Grok 4.5 Extra High"],
       strictModel: true,
     });
     await expect(session.start("Hello")).rejects.toThrow(

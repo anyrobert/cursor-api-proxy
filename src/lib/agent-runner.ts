@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 
 import { runAcpStream, runAcpSync } from "./acp-client.js";
+import type { AcpModelOptions } from "./acp-model.js";
 import type { AcpPromptBlock } from "./media-input.js";
 import { AcpToolSession } from "./acp-tool-session.js";
 import type { BridgeConfig } from "./config.js";
@@ -20,6 +21,8 @@ export type AgentRunResult = {
   code: number;
   stdout: string;
   stderr: string;
+  /** Client-safe failure reason; set by the ACP path (see AcpStreamResult). */
+  error?: string;
 };
 
 function acpArgsWithModel(acpArgs: string[], model: string): string[] {
@@ -40,6 +43,19 @@ function acpArgsWithWorkspace(acpArgs: string[], workspaceDir: string): string[]
   const i = acpArgs.indexOf("acp");
   if (i === -1) return acpArgs;
   return [...acpArgs.slice(0, i), "--workspace", workspaceDir, ...acpArgs.slice(i)];
+}
+
+/** One model request for every ACP path, so plain and tool turns agree. */
+function acpModelOptions(
+  config: BridgeConfig,
+  model: string | undefined,
+  displayName: string | undefined,
+): AcpModelOptions {
+  return {
+    model,
+    modelAliases: displayName ? [displayName] : undefined,
+    strictModel: config.strictModel,
+  };
 }
 
 function extractModelFromCmdArgs(cmdArgs: string[]): string | undefined {
@@ -127,9 +143,7 @@ export function runAgentSync(
       cwd: workspaceDir,
       timeoutMs: config.timeoutMs,
       env: invocation.env,
-      model: invocation.model,
-      modelAliases: modelDisplayName ? [modelDisplayName] : undefined,
-      strictModel: config.strictModel,
+      ...acpModelOptions(config, invocation.model, modelDisplayName),
       requestTimeoutMs: config.timeoutMs,
       spawnOptions: config.acpSpawnOptions,
       skipAuthenticate: config.acpSkipAuthenticate,
@@ -176,7 +190,7 @@ export function runAgentStream(
   signal?: AbortSignal,
   modelDisplayName?: string,
   mediaBlocks?: AcpPromptBlock[],
-): Promise<{ code: number; stderr: string }> {
+): Promise<Omit<AgentRunResult, "stdout">> {
   if (mediaBlocks?.length && !config.useAcp) {
     removeTempDir(tempDir);
     return Promise.reject(new Error("multimodal input requires Cursor ACP mode"));
@@ -198,9 +212,7 @@ export function runAgentStream(
         cwd: workspaceDir,
         timeoutMs: config.timeoutMs,
         env: invocation.env,
-        model: invocation.model,
-        modelAliases: modelDisplayName ? [modelDisplayName] : undefined,
-        strictModel: config.strictModel,
+        ...acpModelOptions(config, invocation.model, modelDisplayName),
         requestTimeoutMs: config.timeoutMs,
         spawnOptions: config.acpSpawnOptions,
         skipAuthenticate: config.acpSkipAuthenticate,
@@ -279,11 +291,7 @@ export async function startAgentToolSession(opts: {
     skipAuthenticate: opts.config.acpSkipAuthenticate,
     rawDebug: opts.config.acpRawDebug,
     signal: opts.signal,
-    modelCandidates: [
-      invocation.model,
-      opts.modelDisplayName,
-    ].filter((value): value is string => Boolean(value)),
-    strictModel: opts.config.strictModel,
+    ...acpModelOptions(opts.config, invocation.model, opts.modelDisplayName),
     tools: opts.tools,
     requireToolCall: opts.requireToolCall,
     maxParallelToolCalls: opts.maxParallelToolCalls,
