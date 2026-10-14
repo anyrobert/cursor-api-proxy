@@ -120,6 +120,7 @@ Set `CURSOR_BRIDGE_USE_ACP=true` to receive structured client tool calls. Tool-b
 
 - Chat Completions `tools` / legacy `functions` → `message.tool_calls`; resume with `role: "tool"` and `tool_call_id`.
 - Responses flat function tools → `function_call` output items; resume with `previous_response_id` and `function_call_output`.
+- Responses `namespace` tool groups (Codex CLI) are flattened for the agent and reported back as the member's bare `name` plus `namespace`. Host-side builtins such as `web_search` are dropped, and `tool_choice: "required"` with no callable tool left returns `400`.
 - Anthropic tools with `input_schema` → `tool_use`; resume with `tool_result`.
 - Sync and streaming output, mixed text plus tools, parallel calls, multiple rounds, named/required/none choices.
 
@@ -163,6 +164,17 @@ for (const call of assistant.tool_calls ?? []) {
 }
 const final = await client.chat.completions.create({ model: "auto", messages });
 ```
+
+### Image and video input (ACP)
+
+With `CURSOR_BRIDGE_USE_ACP=true`, images are forwarded to the model as native ACP image blocks:
+
+- Chat Completions `image_url`, Responses `input_image`, and Anthropic `image` (base64 or URL sources).
+- `data:` URLs and public `https://` URLs on port 443. Remote URLs that resolve to loopback, private, link-local, or other non-public addresses are rejected, every redirect is re-checked, and downloads are capped at 10 MiB per image (40 MiB per video) with a 30 s deadline.
+- PNG, JPEG, WebP, and GIF images. MP4, QuickTime, and WebM video is sampled into up to 3 frames (about 5 s apart), which needs `ffmpeg` on the proxy host (included in the Docker image).
+- At most 12 images per request, newest first; each video counts as 3. Older images in the history become text placeholders, so long conversations keep working. Only a latest message that cannot fit on its own returns `422`.
+
+Without ACP, media stays a text placeholder in the prompt and the proxy logs a warning; the request still succeeds.
 
 ## Use as SDK in another project
 
