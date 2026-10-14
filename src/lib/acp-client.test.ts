@@ -1,8 +1,12 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  extractAcpUpdateText,
+  acpModelSelectionError,
+  applyAcpModelPlan,
   planAcpModelSelection,
+} from "./acp-model.js";
+import {
+  extractAcpUpdateText,
   resolveAcpModelConfigValue,
   runAcpStream,
   runAcpSync,
@@ -136,6 +140,140 @@ describe("resolveAcpModelConfigValue", () => {
         { modelId: "glm-5.2[reasoning=high]", name: "glm-5.2" },
       ]).action,
     ).toBe("missing");
+  });
+
+  it("resolves every public Grok reasoning and fast variant", () => {
+    // Generated from suffix rules (prefix + family + effort + optional fast),
+    // not a hard-coded map of each public id.
+    const catalog = [
+      { modelId: "default", name: "Auto" },
+      { modelId: "grok-4.5", name: "Grok 4.5" },
+      { modelId: "grok-4.6", name: "Grok 4.6" },
+      { modelId: "grok-4.7", name: "Grok 4.7" },
+    ];
+    const families: Array<[prefix: string, base: string, efforts: string[]]> = [
+      ["cursor-grok-", "grok-4.5", ["low", "medium", "high"]],
+      ["cursor-grok-", "grok-4.6", ["low", "medium", "high", "xhigh"]],
+      ["", "grok-4.7", ["low", "medium", "high", "xhigh"]],
+    ];
+    for (const [prefix, base, efforts] of families) {
+      const publicBase = prefix ? `${prefix}${base.replace(/^grok-/, "")}` : base;
+      for (const effort of efforts) {
+        for (const fast of [false, true]) {
+          const requested = `${publicBase}-${effort}${fast ? "-fast" : ""}`;
+          expect(planAcpModelSelection(requested, catalog), requested).toEqual({
+            action: "set",
+            modelId: base,
+            parameters: { effort, thinking: false, fast },
+          });
+        }
+      }
+    }
+  });
+
+  it("keeps applying options when the alias equals the base row name", () => {
+    const catalog = [{ modelId: "grok-4.5", name: "Grok 4.5" }];
+    expect(
+      planAcpModelSelection("cursor-grok-4.5-high", catalog, ["Grok 4.5"]),
+    ).toEqual({
+      action: "set",
+      modelId: "grok-4.5",
+      parameters: { effort: "high", thinking: false, fast: false },
+    });
+  });
+
+  it("prefers an exact catalog row over base plus options", () => {
+    const catalog = [
+      { modelId: "grok-4.6", name: "Grok 4.6" },
+      { modelId: "grok-4.6-medium", name: "Grok 4.6 Medium" },
+    ];
+    expect(
+      planAcpModelSelection("cursor-grok-4.6-medium", catalog),
+    ).toEqual({ action: "set", modelId: "grok-4.6-medium" });
+  });
+
+  it("keeps composer-2.5-fast as a generic base plus fast variant", () => {
+    const catalog = [
+      { modelId: "composer-2.5", name: "Composer 2.5" },
+    ];
+    expect(planAcpModelSelection("composer-2.5-fast", catalog)).toEqual({
+      action: "set",
+      modelId: "composer-2.5",
+      parameters: { effort: undefined, thinking: false, fast: true },
+    });
+  });
+
+  it("reports base candidates when no Grok row matches", () => {
+    const plan = planAcpModelSelection("cursor-grok-4.6-medium", [
+      { modelId: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+    ]);
+    expect(plan.action).toBe("missing");
+    if (plan.action === "missing") {
+      expect(plan.candidates).toContain("cursor-grok-4.6");
+      expect(plan.candidates).toContain("grok-4.6");
+    }
+  });
+});
+
+describe("acpModelSelectionError", () => {
+  it("lists the other ids that were tried", () => {
+    expect(
+      acpModelSelectionError("cursor-grok-4.6-medium", [
+        "cursor-grok-4.6-medium",
+        "grok-4.6-medium",
+        "cursor-grok-4.6",
+        "grok-4.6",
+      ]),
+    ).toBe(
+      'ACP model catalog has no match for "cursor-grok-4.6-medium" (also tried: grok-4.6-medium, cursor-grok-4.6, grok-4.6)',
+    );
+  });
+
+  it("keeps the legacy message when no candidates are supplied", () => {
+    expect(acpModelSelectionError("glm-5.2-max")).toBe(
+      'ACP model catalog has no match for "glm-5.2-max"',
+    );
+  });
+});
+
+describe("applyAcpModelPlan", () => {
+  it("maps -fast onto a catalog speed select when no boolean fast option exists", async () => {
+    const calls: Array<[string, string]> = [];
+    const requested = "cursor-grok-4.6-medium-fast";
+    const plan = planAcpModelSelection(requested, [
+      { modelId: "grok-4.6", name: "Grok 4.6" },
+    ]);
+    await applyAcpModelPlan(
+      plan,
+      async (id, value) => {
+        calls.push([id, value]);
+        if (id !== "model") return {};
+        return {
+          configOptions: [
+            { id: "model", currentValue: value },
+            {
+              id: "reasoning",
+              currentValue: "medium",
+              options: [
+                { value: "low" },
+                { value: "medium" },
+                { value: "high" },
+              ],
+            },
+            {
+              id: "speed",
+              currentValue: "normal",
+              options: [{ value: "normal" }, { value: "fast" }],
+            },
+          ],
+        };
+      },
+      requested,
+    );
+    expect(calls).toEqual([
+      ["model", "grok-4.6"],
+      ["speed", "fast"],
+    ]);
   });
 });
 
@@ -357,6 +495,116 @@ describe("runAcpSync", () => {
     });
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('does not offer reasoning "low"');
+  });
+
+  it("sets the Grok base model and normal speed for a non-fast id", async () => {
+    const result = await runAcpSync(node, [fakeServerPath], "hi", {
+      cwd,
+      timeoutMs: 5000,
+      skipAuthenticate: true,
+      model: "cursor-grok-4.6-medium",
+      strictModel: true,
+      env: { FAKE_ACP_SCENARIO: "grok_models" },
+    });
+    expect(result.code).toBe(0);
+    expect(parseSetConfigs(result.stderr)).toEqual([
+      { sessionId: "sess-1", configId: "model", value: "grok-4.6" },
+      { sessionId: "sess-1", configId: "fast", value: "false" },
+    ]);
+  });
+
+  it("sets Grok reasoning and keeps the fast default for a -fast id", async () => {
+    const result = await runAcpSync(node, [fakeServerPath], "hi", {
+      cwd,
+      timeoutMs: 5000,
+      skipAuthenticate: true,
+      model: "cursor-grok-4.6-xhigh-fast",
+      strictModel: true,
+      env: { FAKE_ACP_SCENARIO: "grok_models" },
+    });
+    expect(result.code).toBe(0);
+    expect(parseSetConfigs(result.stderr)).toEqual([
+      { sessionId: "sess-1", configId: "model", value: "grok-4.6" },
+      { sessionId: "sess-1", configId: "reasoning", value: "xhigh" },
+    ]);
+  });
+
+  it("sets Grok 4.5 low and explicit fast options", async () => {
+    const result = await runAcpSync(node, [fakeServerPath], "hi", {
+      cwd,
+      timeoutMs: 5000,
+      skipAuthenticate: true,
+      model: "cursor-grok-4.5-low-fast",
+      strictModel: true,
+      env: { FAKE_ACP_SCENARIO: "grok_models" },
+    });
+    expect(result.code).toBe(0);
+    expect(parseSetConfigs(result.stderr)).toEqual([
+      { sessionId: "sess-1", configId: "model", value: "grok-4.5" },
+      { sessionId: "sess-1", configId: "reasoning", value: "low" },
+    ]);
+  });
+
+  it("sets a per-variant catalog row by id without extra options", async () => {
+    const result = await runAcpSync(node, [fakeServerPath], "hi", {
+      cwd,
+      timeoutMs: 5000,
+      skipAuthenticate: true,
+      model: "cursor-grok-4.6-medium",
+      strictModel: true,
+      env: { FAKE_ACP_SCENARIO: "grok_variant_rows" },
+    });
+    expect(result.code).toBe(0);
+    expect(parseSetConfigs(result.stderr)).toEqual([
+      { sessionId: "sess-1", configId: "model", value: "grok-4.6-medium" },
+    ]);
+  });
+
+  it("surfaces a Grok reasoning level the ACP model does not offer", async () => {
+    const result = await runAcpSync(node, [fakeServerPath], "hi", {
+      cwd,
+      timeoutMs: 5000,
+      skipAuthenticate: true,
+      model: "cursor-grok-4.5-xhigh",
+      strictModel: true,
+      env: { FAKE_ACP_SCENARIO: "grok_models" },
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Requested public model: cursor-grok-4.5-xhigh");
+    expect(result.stderr).toContain("matched ACP base model: grok-4.5");
+    expect(result.stderr).toContain('does not offer reasoning "xhigh"');
+    expect(result.stderr).toContain("low, medium, high");
+    expect(result.stderr).toContain("advertised ACP options:");
+  });
+
+  it("reports tried base ids on a Grok catalog miss", async () => {
+    const result = await runAcpSync(node, [fakeServerPath], "hi", {
+      cwd,
+      timeoutMs: 5000,
+      skipAuthenticate: true,
+      model: "cursor-grok-4.6-medium",
+      strictModel: true,
+      env: { FAKE_ACP_SCENARIO: "parameterized_models" },
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("no match");
+    expect(result.stderr).toContain("cursor-grok-4.6");
+    expect(result.stderr).toContain("grok-4.6");
+  });
+
+  it("sets composer-2.5-fast via the fast option", async () => {
+    const result = await runAcpSync(node, [fakeServerPath], "hi", {
+      cwd,
+      timeoutMs: 5000,
+      skipAuthenticate: true,
+      model: "composer-2.5-fast",
+      strictModel: true,
+      env: { FAKE_ACP_SCENARIO: "parameterized_models" },
+    });
+    expect(result.code).toBe(0);
+    expect(parseSetConfigs(result.stderr)).toEqual([
+      { sessionId: "sess-1", configId: "model", value: "composer-2.5" },
+    ]);
   });
 });
 
