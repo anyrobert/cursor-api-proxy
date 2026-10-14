@@ -9,7 +9,7 @@
  *
  * Catalog shapes:
  * - parameterized (client advertises `_meta.parameterizedModelPicker`): one
- *   family id (`glm-5.2`, `grok-4.6`) plus reasoning/effort/thinking/fast/speed
+ *   family id (`glm-5.2`, `grok-4.6`) plus effort/thinking/fast selects
  * - legacy bracket rows (`glm-5.2[reasoning=high]`) with a single variant
  * - per-variant rows (`grok-4.6-medium`) that already encode the suffix
  */
@@ -63,6 +63,9 @@ const EFFORT_SUFFIXES = [
   "low",
   "max",
 ] as const;
+
+/** Effort/reasoning select ids seen in the ACP catalog and in bracket rows. */
+const LEVEL_OPTION_IDS = ["reasoning", "effort", "reasoning_effort"] as const;
 
 function norm(value: string): string {
   return value.trim().toLowerCase();
@@ -163,19 +166,11 @@ function variantMatchesBracket(
   params: Record<string, string>,
 ): boolean {
   if (parsed.effort) {
-    const level = params.reasoning ?? params.effort ?? params.reasoning_effort;
+    const level = LEVEL_OPTION_IDS.map((id) => params[id]).find(Boolean);
     if (!level || !effortCandidates(parsed.effort).includes(level)) return false;
   }
-  if (parsed.fast) {
-    if (params.fast !== "true") return false;
-  } else if (params.fast === "true") {
-    return false;
-  }
-  if (parsed.thinking) {
-    if (params.thinking !== "true") return false;
-  } else if (params.thinking === "true") {
-    return false;
-  }
+  if (parsed.fast !== (params.fast === "true")) return false;
+  if (parsed.thinking !== (params.thinking === "true")) return false;
   return true;
 }
 
@@ -314,29 +309,12 @@ function optionValues(option: AcpConfigOption): string[] {
     .filter(Boolean);
 }
 
-/** Pick the catalog select that represents reasoning/effort (id discovered, not hard-coded per model). */
-function isLevelOption(option: AcpConfigOption): boolean {
-  const id = norm(option.id);
-  return (
-    id === "reasoning" ||
-    id === "effort" ||
-    id === "reasoning_effort" ||
-    id.includes("reasoning") ||
-    id.includes("effort")
-  );
-}
-
-function pickLevelOption(
+function findOption(
   options: readonly AcpConfigOption[],
-  effort: string,
+  id: string,
 ): AcpConfigOption | undefined {
-  const present = options.filter(isLevelOption);
-  const candidates = effortCandidates(effort);
-  return (
-    present.find((option) =>
-      optionValues(option).some((value) => candidates.includes(norm(value))),
-    ) ?? present[0]
-  );
+  const key = norm(id);
+  return options.find((option) => norm(option.id) === key);
 }
 
 function describeAdvertised(options: readonly AcpConfigOption[]): string {
@@ -346,86 +324,53 @@ function describeAdvertised(options: readonly AcpConfigOption[]): string {
   return parts.length ? parts.join(", ") : "(none)";
 }
 
-function optionResolutionError(
-  requested: string | undefined,
-  modelId: string,
-  detail: string,
-  options: readonly AcpConfigOption[],
-): Error {
-  const publicId = requested?.trim();
-  const head = publicId
-    ? `Requested public model: ${publicId}; matched ACP base model: ${modelId}; `
-    : `ACP model ${JSON.stringify(modelId)} `;
-  return new Error(
-    `${head}${detail}; advertised ACP options: ${describeAdvertised(options)}`,
-  );
+/** A select change to send, a reason it cannot be sent, or nothing to do. */
+type OptionChange =
+  | { configId: string; value: string }
+  | { problem: string }
+  | undefined;
+
+function changeTo(option: AcpConfigOption, value: string): OptionChange {
+  return String(option.currentValue) === value
+    ? undefined
+    : { configId: option.id, value };
 }
 
-function matchingOptionValue(
-  option: AcpConfigOption,
+function effortChange(
+  options: readonly AcpConfigOption[],
   effort: string,
-): string | undefined {
-  const candidates = effortCandidates(effort);
-  return optionValues(option).find((value) => candidates.includes(norm(value)));
+): OptionChange {
+  const levels = LEVEL_OPTION_IDS.map((id) => findOption(options, id)).filter(
+    (option): option is AcpConfigOption => Boolean(option),
+  );
+  if (levels.length === 0) {
+    return { problem: "has no reasoning or effort parameter" };
+  }
+  const wanted = effortCandidates(effort);
+  for (const option of levels) {
+    const value = optionValues(option).find((item) => wanted.includes(norm(item)));
+    if (value) return changeTo(option, value);
+  }
+  const first = levels[0]!;
+  return {
+    problem: `does not offer ${first.id} ${JSON.stringify(effort)} (available: ${optionValues(first).join(", ")})`,
+  };
 }
 
-async function applyBooleanParameter(
+function booleanChange(
   options: readonly AcpConfigOption[],
-  setOption: (configId: string, value: string) => Promise<unknown>,
   id: "thinking" | "fast",
   desired: boolean,
-): Promise<void> {
-  const option = options.find((item) => item.id === id);
-  if (!option) {
-    if (desired) {
-      throw new Error(`ACP model has no ${id} parameter`);
-    }
-    return;
-  }
-  const value = desired ? "true" : "false";
+): OptionChange {
+  const option = findOption(options, id);
+  if (!option) return desired ? { problem: `has no ${id} parameter` } : undefined;
+  const value = String(desired);
   if (!optionValues(option).includes(value)) {
-    throw new Error(
-      `ACP model does not offer ${id}=${value} (available: ${optionValues(option).join(", ")})`,
-    );
+    return {
+      problem: `does not offer ${id}=${value} (available: ${optionValues(option).join(", ")})`,
+    };
   }
-  if (String(option.currentValue) === value) return;
-  await setOption(id, value);
-}
-
-const FAST_TRUE_VALUES = new Set(["true", "fast"]);
-const FAST_FALSE_VALUES = new Set(["false", "normal", "default", "standard"]);
-
-/**
- * Map the CLI `-fast` suffix onto whatever the catalog advertises: a boolean
- * `fast` select (Claude/GPT/Composer) or a `speed` select (`fast`/`normal`).
- */
-async function applyFastParameter(
-  options: readonly AcpConfigOption[],
-  setOption: (configId: string, value: string) => Promise<unknown>,
-  desired: boolean,
-): Promise<void> {
-  const booleanFast = options.find((item) => norm(item.id) === "fast");
-  if (booleanFast) {
-    await applyBooleanParameter(options, setOption, "fast", desired);
-    return;
-  }
-  const speed = options.find((item) => {
-    const id = norm(item.id);
-    return id === "speed" || id.includes("speed");
-  });
-  if (!speed) {
-    if (desired) throw new Error("has no fast or speed parameter");
-    return;
-  }
-  const wanted = desired ? FAST_TRUE_VALUES : FAST_FALSE_VALUES;
-  const value = optionValues(speed).find((item) => wanted.has(norm(item)));
-  if (!value) {
-    throw new Error(
-      `does not offer ${speed.id}=${desired ? "fast" : "normal"} (available: ${optionValues(speed).join(", ")})`,
-    );
-  }
-  if (String(speed.currentValue) === value) return;
-  await setOption(speed.id, value);
+  return changeTo(option, value);
 }
 
 export async function applyAcpModelPlan(
@@ -438,29 +383,30 @@ export async function applyAcpModelPlan(
   if (plan.action !== "set" || !plan.parameters) return;
 
   const options = readAcpConfigOptions(result);
+  const fail = (detail: string): Error => {
+    const publicId = requested?.trim();
+    const head = publicId
+      ? `Requested public model: ${publicId}; matched ACP base model: ${plan.modelId}; `
+      : `ACP model ${JSON.stringify(plan.modelId)} `;
+    return new Error(
+      `${head}${detail}; advertised ACP options: ${describeAdvertised(options)}`,
+    );
+  };
+
   const { effort, thinking, fast } = plan.parameters;
-  const fail = (detail: string): Error =>
-    optionResolutionError(requested, plan.modelId, detail, options);
-  if (effort) {
-    const option = pickLevelOption(options, effort);
-    if (!option) {
-      throw fail("has no reasoning or effort parameter");
+  const changes = [
+    effort ? effortChange(options, effort) : undefined,
+    booleanChange(options, "thinking", thinking),
+    booleanChange(options, "fast", fast),
+  ];
+  for (const change of changes) {
+    if (!change) continue;
+    if ("problem" in change) throw fail(change.problem);
+    try {
+      await setOption(change.configId, change.value);
+    } catch (error) {
+      throw fail(acpFailureText(error));
     }
-    const value = matchingOptionValue(option, effort);
-    if (!value) {
-      throw fail(
-        `does not offer ${option.id} ${JSON.stringify(effort)} (available: ${optionValues(option).join(", ")})`,
-      );
-    }
-    if (String(option.currentValue) !== value) {
-      await setOption(option.id, value);
-    }
-  }
-  try {
-    await applyBooleanParameter(options, setOption, "thinking", thinking);
-    await applyFastParameter(options, setOption, fast);
-  } catch (error) {
-    throw fail(error instanceof Error ? error.message : String(error));
   }
 }
 

@@ -2,7 +2,6 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   acpModelSelectionError,
-  applyAcpModelPlan,
   planAcpModelSelection,
 } from "./acp-model.js";
 import {
@@ -239,47 +238,6 @@ describe("acpModelSelectionError", () => {
     expect(acpModelSelectionError("glm-5.2-max")).toBe(
       'ACP model catalog has no match for "glm-5.2-max"',
     );
-  });
-});
-
-describe("applyAcpModelPlan", () => {
-  it("maps -fast onto a catalog speed select when no boolean fast option exists", async () => {
-    const calls: Array<[string, string]> = [];
-    const requested = "cursor-grok-4.6-medium-fast";
-    const plan = planAcpModelSelection(requested, [
-      { modelId: "grok-4.6", name: "Grok 4.6" },
-    ]);
-    await applyAcpModelPlan(
-      plan,
-      async (id, value) => {
-        calls.push([id, value]);
-        if (id !== "model") return {};
-        return {
-          configOptions: [
-            { id: "model", currentValue: value },
-            {
-              id: "reasoning",
-              currentValue: "medium",
-              options: [
-                { value: "low" },
-                { value: "medium" },
-                { value: "high" },
-              ],
-            },
-            {
-              id: "speed",
-              currentValue: "normal",
-              options: [{ value: "normal" }, { value: "fast" }],
-            },
-          ],
-        };
-      },
-      requested,
-    );
-    expect(calls).toEqual([
-      ["model", "grok-4.6"],
-      ["speed", "fast"],
-    ]);
   });
 });
 
