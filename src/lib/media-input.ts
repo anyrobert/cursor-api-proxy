@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { isIP } from "node:net";
+import { BlockList, isIP } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -11,6 +11,10 @@ const execFileAsync = promisify(execFile);
 const IMAGE_LIMIT = 10 * 1024 * 1024;
 const VIDEO_LIMIT = 40 * 1024 * 1024;
 const MAX_IMAGES = 12;
+/** Wall-clock budget for one remote media fetch, redirects included. */
+const FETCH_DEADLINE_MS = 30_000;
+/** Some hosts (e.g. upload.wikimedia.org) answer 403 to requests without a User-Agent. */
+const FETCH_USER_AGENT = "cursor-api-proxy-media-fetch/1.0";
 
 export type AcpPromptBlock =
   | { type: "text"; text: string }
@@ -18,52 +22,111 @@ export type AcpPromptBlock =
 
 export class MediaInputError extends Error {}
 
-function publicAddress(address: string): boolean {
-  if (isIP(address) === 4) {
-    const p = address.split(".").map(Number);
-    return !(p[0] === 0 || p[0] === 10 || p[0] === 127 || p[0] >= 224 ||
-      (p[0] === 169 && p[1] === 254) || (p[0] === 172 && p[1] >= 16 && p[1] <= 31) ||
-      (p[0] === 192 && p[1] === 168) || (p[0] === 100 && p[1] >= 64 && p[1] <= 127) ||
-      (p[0] === 192 && p[1] === 0) || (p[0] === 198 && (p[1] === 18 || p[1] === 19)));
-  }
-  if (isIP(address) === 6) {
-    const a = address.toLowerCase();
-    return !(a === "::1" || a === "::" || a.startsWith("fc") || a.startsWith("fd") ||
-      a.startsWith("fe8") || a.startsWith("fe9") || a.startsWith("fea") || a.startsWith("feb") ||
-      a.startsWith("::ffff:") || a.startsWith("2001:db8:"));
-  }
+/**
+ * Special-purpose ranges that must never be fetched: loopback, private,
+ * link-local (incl. cloud metadata), CGNAT, documentation, multicast and the
+ * IPv6 transition prefixes that embed an IPv4 address (mapped, compatible,
+ * NAT64, 6to4, Teredo), which could otherwise smuggle a private IPv4 target.
+ *
+ * Kept as two lists because a BlockList matches IPv4 addresses against IPv6
+ * rules through their mapped form, so `::ffff:0:0/96` would block all IPv4.
+ */
+const NON_PUBLIC_V4 = new BlockList();
+for (const [network, prefix] of [
+  ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8],
+  ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.0.2.0", 24],
+  ["192.88.99.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15],
+  ["198.51.100.0", 24], ["203.0.113.0", 24], ["224.0.0.0", 4], ["240.0.0.0", 4],
+] as const) {
+  NON_PUBLIC_V4.addSubnet(network, prefix, "ipv4");
+}
+const NON_PUBLIC_V6 = new BlockList();
+for (const [network, prefix] of [
+  ["::", 96], ["::ffff:0:0", 96], ["64:ff9b::", 96], ["64:ff9b:1::", 48],
+  ["100::", 64], ["2001::", 32], ["2001:db8::", 32], ["2002::", 16],
+  ["fc00::", 7], ["fe80::", 10], ["fec0::", 10], ["ff00::", 8],
+] as const) {
+  NON_PUBLIC_V6.addSubnet(network, prefix, "ipv6");
+}
+
+/** True only for a syntactically valid IP outside every non-public range. */
+export function isPublicAddress(address: string): boolean {
+  const family = isIP(address);
+  if (family === 4) return !NON_PUBLIC_V4.check(address, "ipv4");
+  if (family === 6) return !NON_PUBLIC_V6.check(address, "ipv6");
   return false;
 }
 
-async function download(raw: string, limit: number, redirects = 0): Promise<{ data: Buffer; mime: string }> {
+async function resolvePublicAddress(hostname: string): Promise<{ address: string; family: number }> {
+  // URL keeps IPv6 literals bracketed; validate literals directly instead of
+  // handing them to DNS.
+  const host = hostname.replace(/^\[(.*)\]$/, "$1");
+  const literal = isIP(host);
+  let addresses: Array<{ address: string; family: number }>;
+  if (literal) {
+    addresses = [{ address: host, family: literal }];
+  } else {
+    try {
+      addresses = await lookup(host, { all: true });
+    } catch {
+      throw new MediaInputError("media URL host could not be resolved");
+    }
+  }
+  // Reject when any record is non-public so a mixed answer cannot be used to
+  // slip a private address past the check.
+  if (!addresses.length || addresses.some((entry) => !isPublicAddress(entry.address))) {
+    throw new MediaInputError("media URL resolves to a non-public address");
+  }
+  return addresses[0];
+}
+
+async function download(
+  raw: string,
+  limit: number,
+  redirects = 0,
+  deadline = Date.now() + FETCH_DEADLINE_MS,
+): Promise<{ data: Buffer; mime: string }> {
   let url: URL;
   try { url = new URL(raw); } catch { throw new MediaInputError("media URL is invalid"); }
   if (url.protocol !== "https:" || (url.port && url.port !== "443") || url.username || url.password) {
     throw new MediaInputError("media URL must be public HTTPS on port 443");
   }
-  const addresses = await lookup(url.hostname, { all: true });
-  const selected = addresses.find((entry) => publicAddress(entry.address));
-  if (!selected || addresses.some((entry) => !publicAddress(entry.address))) {
-    throw new MediaInputError("media URL resolves to a non-public address");
-  }
-  return new Promise((resolve, reject) => {
+  const selected = await resolvePublicAddress(url.hostname);
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) throw new MediaInputError("media download timed out");
+  return new Promise((resolvePromise, rejectPromise) => {
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const resolve = (media: { data: Buffer; mime: string }) => {
+      clearTimeout(deadlineTimer);
+      resolvePromise(media);
+    };
+    const reject = (error: unknown) => {
+      clearTimeout(deadlineTimer);
+      rejectPromise(error);
+    };
     const req = request(url, {
       method: "GET",
+      // Pin the connection to the address validated above so a second DNS
+      // answer cannot rebind it to a private target.
       lookup: (_host, options, callback) => {
         if (options.all) callback(null, [selected]);
         else callback(null, selected.address, selected.family);
       },
       timeout: 15_000,
-      headers: { Accept: "image/*,video/*" },
+      headers: { Accept: "image/*,video/*", "User-Agent": FETCH_USER_AGENT },
     }, (res) => {
       if ([301, 302, 303, 307, 308].includes(res.statusCode ?? 0)) {
         const location = res.headers.location;
         res.resume();
         if (!location || redirects >= 2) { reject(new MediaInputError("media redirect limit exceeded")); return; }
-        download(new URL(location, url).href, limit, redirects + 1).then(resolve, reject);
+        download(new URL(location, url).href, limit, redirects + 1, deadline).then(resolve, reject);
         return;
       }
       if (res.statusCode !== 200) { res.resume(); reject(new MediaInputError(`media fetch returned HTTP ${res.statusCode}`)); return; }
+      if (Number(res.headers["content-length"] ?? 0) > limit) {
+        req.destroy(new MediaInputError("media exceeds size limit"));
+        return;
+      }
       const chunks: Buffer[] = [];
       let size = 0;
       res.on("data", (chunk: Buffer) => {
@@ -74,6 +137,13 @@ async function download(raw: string, limit: number, redirects = 0): Promise<{ da
       res.on("end", () => resolve({ data: Buffer.concat(chunks), mime: String(res.headers["content-type"] ?? "").split(";")[0].toLowerCase() }));
       res.on("error", reject);
     });
+    // The socket `timeout` option only fires on idle sockets, so a server that
+    // drips bytes could hold the request open indefinitely; enforce a total
+    // deadline (shared across redirects) as well.
+    deadlineTimer = setTimeout(
+      () => req.destroy(new MediaInputError("media download timed out")),
+      remainingMs,
+    );
     req.on("timeout", () => req.destroy(new MediaInputError("media download timed out")));
     req.on("error", reject);
     req.end();
