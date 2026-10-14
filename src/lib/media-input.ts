@@ -49,7 +49,10 @@ async function download(raw: string, limit: number, redirects = 0): Promise<{ da
   return new Promise((resolve, reject) => {
     const req = request(url, {
       method: "GET",
-      lookup: (_host, _options, callback) => callback(null, selected.address, selected.family),
+      lookup: (_host, options, callback) => {
+        if (options.all) callback(null, [selected]);
+        else callback(null, selected.address, selected.family);
+      },
       timeout: 15_000,
       headers: { Accept: "image/*,video/*" },
     }, (res) => {
