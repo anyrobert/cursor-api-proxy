@@ -262,11 +262,20 @@ export class AcpToolSession {
     }
     if (!plan || plan.action === "skip" || plan.action === "missing") {
       if (this.#opts.strictModel && plan?.action !== "skip") {
-        throw new Error(acpModelSelectionError(candidates[0] ?? ""));
+        throw new Error(
+          acpModelSelectionError(
+            candidates[0] ?? "",
+            plan?.action === "missing" ? plan.candidates : undefined,
+          ),
+        );
       }
       return;
     }
-    await this.#connection.configureSessionModel(this.#sessionId, plan);
+    await this.#connection.configureSessionModel(
+      this.#sessionId,
+      plan,
+      candidates[0],
+    );
   }
 
   #permissionFor(params: AcpPermissionParams): string {
