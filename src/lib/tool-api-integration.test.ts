@@ -606,7 +606,7 @@ describe("ACP tool session errors", () => {
     ).toBe(true);
   });
 
-  it("ignores host builtin tool types and rejects store=false tool loops", async () => {
+  it("ignores host builtin tool types", async () => {
     const base = await start();
     const unsupported = await post(base, "/v1/chat/completions", {
       model: "gpt-4",
@@ -631,21 +631,6 @@ describe("ACP tool session errors", () => {
       JSON.parse(unsupported.text).choices[0].message.tool_calls[0].function
         .name,
     ).toBe("weather");
-
-    const noStore = await post(base, "/v1/responses", {
-      model: "gpt-4",
-      input: "Weather?",
-      store: false,
-      tools: [
-        {
-          type: "function",
-          name: "weather",
-          parameters: { type: "object", properties: {} },
-        },
-      ],
-    });
-    expect(noStore.status).toBe(400);
-    expect(JSON.parse(noStore.text).error.code).toBe("invalid_store");
   });
 
   it("rejects tool_choice required when only builtins were sent", async () => {
@@ -668,5 +653,329 @@ describe("ACP tool session errors", () => {
       expect(error.code).toBe("invalid_tools");
       expect(error.message).toMatch(/no callable function tools/);
     }
+  });
+});
+
+const weatherTool = {
+  type: "function",
+  name: "weather",
+  description: "Get weather",
+  parameters: { type: "object", properties: { city: { type: "string" } } },
+};
+
+function userMessage(text: string) {
+  return { type: "message", role: "user", content: [{ type: "input_text", text }] };
+}
+
+/**
+ * A request shaped like Codex CLI's: the whole history every time, the same
+ * instructions, store=false and no previous_response_id.
+ */
+function transcriptTurn(input: unknown[], stream = false) {
+  return {
+    model: "gpt-4",
+    instructions: "You are a coding agent.",
+    input,
+    tools: [weatherTool],
+    tool_choice: "auto",
+    parallel_tool_calls: true,
+    store: false,
+    stream,
+  };
+}
+
+function responseFrom(reply: { status: number; text: string }, stream = false) {
+  expect(reply.status).toBe(200);
+  return stream
+    ? sseData(reply.text).find((event) => event.type === "response.completed")
+        .response
+    : JSON.parse(reply.text);
+}
+
+function functionCalls(response: any): any[] {
+  return response.output.filter((item: any) => item.type === "function_call");
+}
+
+/** The call and its result as a client records them in its history. */
+function answered(call: any, output: string) {
+  return [
+    {
+      type: "function_call",
+      id: call.id,
+      call_id: call.call_id,
+      name: call.name,
+      arguments: call.arguments,
+    },
+    { type: "function_call_output", call_id: call.call_id, output },
+  ];
+}
+
+describe.each([false, true])("Responses transcript clients stream=%s", (stream) => {
+  it("resumes a store=false turn by call_id", async () => {
+    const base = await start();
+    const question = userMessage("Weather?");
+    const first = responseFrom(
+      await post(base, "/v1/responses", transcriptTurn([question], stream)),
+      stream,
+    );
+    expect(first.store).toBe(false);
+    const [call] = functionCalls(first);
+    expect(call.name).toBe("weather");
+
+    const second = responseFrom(
+      await post(
+        base,
+        "/v1/responses",
+        transcriptTurn([question, ...answered(call, "sunny")], stream),
+      ),
+      stream,
+    );
+    expect(second.output_text).toContain("Tool result: sunny");
+    expect(second.previous_response_id).toBeNull();
+    expect(functionCalls(second)).toEqual([]);
+  });
+});
+
+describe("Responses transcript clients", () => {
+  it("skips outputs already resolved earlier in the same turn", async () => {
+    const base = await start("tool_two_round");
+    const question = userMessage("Weather twice?");
+    const first = responseFrom(
+      await post(base, "/v1/responses", transcriptTurn([question])),
+    );
+    const [callA] = functionCalls(first);
+
+    const second = responseFrom(
+      await post(
+        base,
+        "/v1/responses",
+        transcriptTurn([question, ...answered(callA, "a-out")]),
+      ),
+    );
+    const [callB] = functionCalls(second);
+    expect(callB.call_id).not.toBe(callA.call_id);
+
+    const third = responseFrom(
+      await post(
+        base,
+        "/v1/responses",
+        transcriptTurn([
+          question,
+          ...answered(callA, "a-out"),
+          ...answered(callB, "b-out"),
+        ]),
+      ),
+    );
+    expect(third.output_text).toContain("Tool result: a-out, b-out");
+  });
+
+  it("starts a new tool turn after a completed one in a full-history resend", async () => {
+    const base = await start();
+    const question = userMessage("Weather?");
+    const first = responseFrom(
+      await post(base, "/v1/responses", transcriptTurn([question])),
+    );
+    const [call] = functionCalls(first);
+    const finished = responseFrom(
+      await post(
+        base,
+        "/v1/responses",
+        transcriptTurn([question, ...answered(call, "sunny")]),
+      ),
+    );
+
+    const next = responseFrom(
+      await post(
+        base,
+        "/v1/responses",
+        transcriptTurn([
+          question,
+          ...answered(call, "sunny"),
+          ...finished.output,
+          userMessage("And tomorrow?"),
+        ]),
+      ),
+    );
+    const [nextCall] = functionCalls(next);
+    expect(nextCall.name).toBe("weather");
+    expect(nextCall.call_id).not.toBe(call.call_id);
+  });
+
+  it("does not resume a parked call from an earlier turn's output", async () => {
+    const base = await start("tool_transcript");
+    const question = userMessage("Weather?");
+    const first = responseFrom(
+      await post(base, "/v1/responses", transcriptTurn([question])),
+    );
+    const [call] = functionCalls(first);
+
+    const moved = responseFrom(
+      await post(
+        base,
+        "/v1/responses",
+        transcriptTurn([
+          question,
+          ...answered(call, "sunny"),
+          userMessage("Never mind, summarize."),
+        ]),
+      ),
+    );
+    expect(moved.output_text).toContain("Answer from transcript: sunny");
+    expect(moved.output_text).not.toContain("Tool result");
+    // A new user turn is not a rebuilt one, so it gets no continuation note.
+    expect(moved.output_text).not.toContain("[continued]");
+
+    // The new turn closed the parked session it moved past.
+    const late = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      previous_response_id: first.id,
+      input: [{ type: "function_call_output", call_id: call.call_id, output: "late" }],
+    });
+    expect(late.status).toBe(409);
+  });
+
+  it("rebuilds an unknown or expired call from the transcript", async () => {
+    const base = await start("tool_transcript");
+    const unknown = {
+      id: "fc_gone",
+      call_id: "call_gone",
+      name: "weather",
+      arguments: "{}",
+    };
+    const rebuilt = responseFrom(
+      await post(
+        base,
+        "/v1/responses",
+        transcriptTurn([userMessage("Weather?"), ...answered(unknown, "rainy")]),
+      ),
+    );
+    expect(rebuilt.output_text).toContain(
+      "[continued] Answer from transcript: rainy",
+    );
+
+    const bare = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      store: false,
+      input: [{ type: "function_call_output", call_id: "call_gone", output: "rainy" }],
+    });
+    expect(bare.status).toBe(409);
+    expect(JSON.parse(bare.text).error.code).toBe("tool_session_expired");
+  });
+
+  it("never resumes another owner's parked call", async () => {
+    const base = await start("tool_transcript");
+    const owner = { authorization: "Bearer owner-a" };
+    const intruder = { authorization: "Bearer owner-b" };
+    const question = userMessage("Weather?");
+    const first = responseFrom(
+      await post(base, "/v1/responses", transcriptTurn([question]), owner),
+    );
+    const [call] = functionCalls(first);
+
+    const replay = responseFrom(
+      await post(
+        base,
+        "/v1/responses",
+        transcriptTurn([question, ...answered(call, "stolen")]),
+        intruder,
+      ),
+    );
+    expect(replay.output_text).toContain("Answer from transcript: stolen");
+    const bare = await post(
+      base,
+      "/v1/responses",
+      {
+        model: "gpt-4",
+        store: false,
+        input: [{ type: "function_call_output", call_id: call.call_id, output: "stolen" }],
+      },
+      intruder,
+    );
+    expect(bare.status).toBe(409);
+
+    const resumed = responseFrom(
+      await post(
+        base,
+        "/v1/responses",
+        transcriptTurn([question, ...answered(call, "sunny")]),
+        owner,
+      ),
+    );
+    expect(resumed.output_text).toContain("Tool result: sunny");
+  });
+
+  it("rejects outputs that answer two different parked turns", async () => {
+    const base = await start();
+    const first = responseFrom(
+      await post(base, "/v1/responses", transcriptTurn([userMessage("Paris?")])),
+    );
+    const second = responseFrom(
+      await post(base, "/v1/responses", transcriptTurn([userMessage("London?")])),
+    );
+    const reply = await post(
+      base,
+      "/v1/responses",
+      transcriptTurn([
+        userMessage("Both?"),
+        ...answered(functionCalls(first)[0], "a"),
+        ...answered(functionCalls(second)[0], "b"),
+      ]),
+    );
+    expect(reply.status).toBe(400);
+    expect(JSON.parse(reply.text).error.code).toBe("invalid_tool_resume");
+  });
+
+  it("keeps previous_response_id resumes strict", async () => {
+    const base = await start();
+    const first = responseFrom(
+      await post(base, "/v1/responses", {
+        model: "gpt-4",
+        input: "Weather?",
+        tools: [weatherTool],
+      }),
+    );
+    const [call] = functionCalls(first);
+    const output = {
+      type: "function_call_output",
+      call_id: call.call_id,
+      output: "sunny",
+    };
+
+    const mixed = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      previous_response_id: first.id,
+      input: [userMessage("Weather?"), output],
+    });
+    expect(mixed.status).toBe(400);
+    expect(JSON.parse(mixed.text).error.code).toBe("invalid_tool_resume");
+
+    const withInstructions = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      previous_response_id: first.id,
+      instructions: "new rules",
+      input: [output],
+    });
+    expect(withInstructions.status).toBe(400);
+    expect(JSON.parse(withInstructions.text).error.code).toBe(
+      "invalid_tool_resume",
+    );
+
+    const unknown = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      previous_response_id: "resp_missing",
+      input: [output],
+    });
+    expect(unknown.status).toBe(409);
+    expect(JSON.parse(unknown.text).error.code).toBe("tool_session_expired");
+
+    const resumed = responseFrom(
+      await post(base, "/v1/responses", {
+        model: "gpt-4",
+        previous_response_id: first.id,
+        input: [output],
+      }),
+    );
+    expect(resumed.output_text).toContain("Tool result: sunny");
+    expect(resumed.previous_response_id).toBe(first.id);
   });
 });
