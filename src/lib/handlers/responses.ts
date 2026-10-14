@@ -82,14 +82,23 @@ export type ResponsesCtx = {
 
 type ResponseStatus = "in_progress" | "completed" | "failed";
 
-function functionCallItem(call: PendingClientToolCall) {
+/**
+ * A `namespace` member is reported as its bare name plus `namespace`, the
+ * shape the Responses API uses and clients such as Codex route on, even when
+ * the agent saw it under a `<namespace>__` prefix.
+ */
+function functionCallItem(
+  call: PendingClientToolCall,
+  status: "in_progress" | "completed" = "completed",
+) {
   return {
     id: call.itemId,
     type: "function_call",
-    status: "completed",
+    status,
     call_id: call.callId,
-    name: call.name,
-    arguments: call.arguments,
+    name: call.namespaced?.name ?? call.name,
+    ...(call.namespaced ? { namespace: call.namespaced.namespace } : {}),
+    arguments: status === "completed" ? call.arguments : "",
   };
 }
 
@@ -120,7 +129,7 @@ function structuredResponseObject(opts: {
     });
   }
   if (opts.result.status === "tool_calls") {
-    output.push(...opts.result.toolCalls.map(functionCallItem));
+    output.push(...opts.result.toolCalls.map((call) => functionCallItem(call)));
   }
   const inputTokens = Math.max(1, Math.round(opts.promptLength / 4));
   const outputTokens = Math.max(1, Math.round(opts.result.text.length / 4));
@@ -280,14 +289,7 @@ async function writeStructuredResponseTurn(opts: {
         writeResponseEvent(opts.res, "response.output_item.added", {
           response_id: opts.id,
           output_index: outputIndex,
-          item: {
-            id: call.itemId,
-            type: "function_call",
-            status: "in_progress",
-            call_id: call.callId,
-            name: call.name,
-            arguments: "",
-          },
+          item: functionCallItem(call, "in_progress"),
         });
         writeResponseEvent(
           opts.res,
