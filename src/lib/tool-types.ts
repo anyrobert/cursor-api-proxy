@@ -201,6 +201,30 @@ export function parseAnthropicFunctionTools(
   return out;
 }
 
+/**
+ * Names of the Anthropic-defined tools in a request (`web_search_20250305`,
+ * `bash_20250124`, `text_editor_20250124`, ...). They carry a versioned
+ * `type`, while client tools have no `type` or `custom`, and the request
+ * holds no schema or description for them.
+ */
+export function anthropicBuiltinToolNames(
+  tools?: readonly unknown[],
+): Set<string> {
+  const names = new Set<string>();
+  for (const value of tools ?? []) {
+    const tool = asRecord(value);
+    if (
+      tool &&
+      typeof tool.type === "string" &&
+      tool.type !== "custom" &&
+      typeof tool.name === "string"
+    ) {
+      names.add(tool.name);
+    }
+  }
+  return names;
+}
+
 function namedChoice(choice: unknown): string | undefined {
   const rec = asRecord(choice);
   if (!rec) return undefined;
