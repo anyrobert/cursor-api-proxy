@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  chatOnlyHomeDir,
   getChatOnlyEnvOverrides,
   linkMacKeychains,
   resolveWorkspace,
@@ -43,10 +44,11 @@ function baseConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
 }
 
 describe("getChatOnlyEnvOverrides", () => {
-  it("uses temp workspace .cursor when no auth pool dir", () => {
-    const tmp = "/tmp/cursor-proxy-abc123";
-    const o = getChatOnlyEnvOverrides(tmp);
-    expect(o.CURSOR_CONFIG_DIR).toBe(`${tmp}/.cursor`);
+  it("uses the temp home's .cursor when no auth pool dir", () => {
+    const home = "/tmp/cursor-proxy-abc123/home";
+    const o = getChatOnlyEnvOverrides(home);
+    expect(o.CURSOR_CONFIG_DIR).toBe(`${home}/.cursor`);
+    expect(o.HOME).toBe(home);
   });
 
   it("uses account pool path for CURSOR_CONFIG_DIR when provided", () => {
@@ -81,6 +83,8 @@ describe("linkMacKeychains", () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-proxy-"));
     linkMacKeychains(tempHome, realHome);
     expect(fs.existsSync(path.join(tempHome, "Library"))).toBe(false);
+    fs.rmSync(tempHome, { recursive: true, force: true });
+    fs.rmSync(realHome, { recursive: true, force: true });
   });
 });
 
@@ -90,6 +94,42 @@ describe("resolveWorkspace", () => {
     const { workspaceDir, tempDir } = resolveWorkspace(cfg, undefined);
     expect(tempDir).toBeDefined();
     expect(workspaceDir).toContain("cursor-proxy-");
+    fs.rmSync(tempDir!, { recursive: true, force: true });
+  });
+
+  it("keeps the chat-only home, config and keychain link out of the workspace", () => {
+    const cfg = baseConfig({ chatOnlyWorkspace: true });
+    const { workspaceDir, tempDir } = resolveWorkspace(cfg, undefined);
+    try {
+      expect(tempDir).toBeDefined();
+      // The agent's workspace starts empty: no Library/Keychains link, no
+      // .cursor config, nothing that leads back to the real user profile.
+      expect(fs.readdirSync(workspaceDir)).toEqual([]);
+
+      const home = chatOnlyHomeDir(workspaceDir, tempDir);
+      expect(path.relative(workspaceDir, home).startsWith("..")).toBe(true);
+      expect(fs.existsSync(path.join(home, ".cursor", "cli-config.json"))).toBe(
+        true,
+      );
+      const env = getChatOnlyEnvOverrides(home);
+      expect(env.HOME).toBe(home);
+      expect(env.CURSOR_CONFIG_DIR).toBe(path.join(home, ".cursor"));
+      const realKeychains = path.join(os.homedir(), "Library", "Keychains");
+      if (process.platform === "darwin" && fs.existsSync(realKeychains)) {
+        expect(
+          fs.lstatSync(path.join(home, "Library", "Keychains")).isSymbolicLink(),
+        ).toBe(true);
+      }
+    } finally {
+      fs.rmSync(tempDir!, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps HOME at the workspace for callers without an isolation root", () => {
+    expect(chatOnlyHomeDir("/tmp/ws")).toBe("/tmp/ws");
+    expect(chatOnlyHomeDir("/tmp/root/workspace", "/tmp/root")).toBe(
+      "/tmp/root/home",
+    );
   });
 
   it("uses real workspace when effectiveChatOnly is false despite config.chatOnlyWorkspace", () => {
