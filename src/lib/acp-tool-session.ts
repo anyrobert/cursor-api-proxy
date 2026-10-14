@@ -5,7 +5,11 @@ import {
   type AcpPermissionParams,
   type AcpSessionResult,
 } from "./acp-connection.js";
-import { resolveAcpModelConfigValue } from "./acp-client.js";
+import {
+  acpModelSelectionError,
+  planAcpModelSelection,
+  type AcpModelPlan,
+} from "./acp-model.js";
 import { ClientToolBridge } from "./client-tool-bridge.js";
 import type {
   ClientToolDefinition,
@@ -247,23 +251,22 @@ export class AcpToolSession {
     const candidates = (this.#opts.modelCandidates ?? []).filter(Boolean);
     if (candidates.length === 0) return;
     const available = session.models?.availableModels;
-    let resolved: string | undefined;
+    let plan: AcpModelPlan | undefined;
     for (const candidate of candidates) {
-      const value = resolveAcpModelConfigValue(candidate, available);
-      if (value !== "default" && value !== "default[]") {
-        resolved = value;
+      const next = planAcpModelSelection(candidate, available, candidates);
+      if (next.action === "set" || next.action === "passthrough") {
+        plan = next;
         break;
       }
+      plan ??= next;
     }
-    if (!resolved) {
-      if (this.#opts.strictModel) {
-        throw new Error(
-          `ACP model catalog has no match for ${JSON.stringify(candidates[0])}`,
-        );
+    if (!plan || plan.action === "skip" || plan.action === "missing") {
+      if (this.#opts.strictModel && plan?.action !== "skip") {
+        throw new Error(acpModelSelectionError(candidates[0] ?? ""));
       }
       return;
     }
-    await this.#connection.setSessionModel(this.#sessionId, resolved);
+    await this.#connection.configureSessionModel(this.#sessionId, plan);
   }
 
   #permissionFor(params: AcpPermissionParams): string {

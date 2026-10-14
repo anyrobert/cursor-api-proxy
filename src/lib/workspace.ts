@@ -47,6 +47,22 @@ export function getChatOnlyEnvOverrides(
   return overrides;
 }
 
+/**
+ * macOS resolves the login keychain from `$HOME/Library/Keychains`. With the temp
+ * `HOME` from chat-only mode the CLI cannot read or save its auth token there
+ * ("Not logged in" / `security` exit 154), so expose the real keychains folder.
+ */
+export function linkMacKeychains(tempHome: string, realHome = os.homedir()): void {
+  const source = path.join(realHome, "Library", "Keychains");
+  if (!fs.existsSync(source)) return;
+  try {
+    fs.mkdirSync(path.join(tempHome, "Library"), { recursive: true });
+    fs.symlinkSync(source, path.join(tempHome, "Library", "Keychains"), "dir");
+  } catch {
+    /* best effort */
+  }
+}
+
 export function resolveWorkspace(
   config: BridgeConfig,
   workspaceHeader?: string | string[] | null,
@@ -76,6 +92,9 @@ export function resolveWorkspace(
       fs.mkdirSync(path.join(tempDir, "AppData", "Local"), { recursive: true });
     } else {
       fs.mkdirSync(path.join(tempDir, ".config"), { recursive: true });
+    }
+    if (process.platform === "darwin") {
+      linkMacKeychains(tempDir);
     }
     return { workspaceDir: tempDir, tempDir };
   }

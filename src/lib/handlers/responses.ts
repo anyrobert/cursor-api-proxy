@@ -17,7 +17,7 @@ import {
 } from "../bridge-context-preamble.js";
 import type { BridgeConfig } from "../config.js";
 import type { CursorExecutionMode } from "../execution-mode.js";
-import { json, writeSseHeaders } from "../http.js";
+import { json, startSseKeepalive, writeSseHeaders } from "../http.js";
 import {
   runAgentStream,
   runAgentSync,
@@ -194,141 +194,146 @@ async function writeStructuredResponseTurn(opts: {
   }
 
   writeSseHeaders(opts.res);
-  const initial = {
-    id: opts.id,
-    object: "response",
-    created_at: opts.createdAt,
-    status: "in_progress",
-    model: opts.model,
-    output: [],
-  };
-  writeResponseEvent(opts.res, "response.created", { response: initial });
-  let textStarted = false;
-  let emittedText = "";
-  const emitText = (text: string) => {
-    if (!textStarted) {
-      textStarted = true;
-      writeResponseEvent(opts.res, "response.output_item.added", {
+  const stopKeepalive = startSseKeepalive(opts.res);
+  try {
+    const initial = {
+      id: opts.id,
+      object: "response",
+      created_at: opts.createdAt,
+      status: "in_progress",
+      model: opts.model,
+      output: [],
+    };
+    writeResponseEvent(opts.res, "response.created", { response: initial });
+    let textStarted = false;
+    let emittedText = "";
+    const emitText = (text: string) => {
+      if (!textStarted) {
+        textStarted = true;
+        writeResponseEvent(opts.res, "response.output_item.added", {
+          response_id: opts.id,
+          output_index: 0,
+          item: {
+            id: messageId,
+            type: "message",
+            status: "in_progress",
+            role: "assistant",
+            content: [],
+          },
+        });
+        writeResponseEvent(opts.res, "response.content_part.added", {
+          response_id: opts.id,
+          item_id: messageId,
+          output_index: 0,
+          content_index: 0,
+          part: { type: "output_text", text: "", annotations: [] },
+        });
+      }
+      emittedText += text;
+      writeResponseEvent(opts.res, "response.output_text.delta", {
+        response_id: opts.id,
+        item_id: messageId,
+        output_index: 0,
+        content_index: 0,
+        delta: text,
+      });
+    };
+    const result = await opts.run((event) => {
+      if (event.type === "text") emitText(event.text);
+    });
+    if (result.text.length > emittedText.length) {
+      emitText(result.text.slice(emittedText.length));
+    }
+    let outputIndex = textStarted ? 1 : 0;
+    if (textStarted) {
+      writeResponseEvent(opts.res, "response.output_text.done", {
+        response_id: opts.id,
+        item_id: messageId,
+        output_index: 0,
+        content_index: 0,
+        text: result.text,
+      });
+      writeResponseEvent(opts.res, "response.content_part.done", {
+        response_id: opts.id,
+        item_id: messageId,
+        output_index: 0,
+        content_index: 0,
+        part: { type: "output_text", text: result.text, annotations: [] },
+      });
+      writeResponseEvent(opts.res, "response.output_item.done", {
         response_id: opts.id,
         output_index: 0,
         item: {
           id: messageId,
           type: "message",
-          status: "in_progress",
+          status: "completed",
           role: "assistant",
-          content: [],
+          content: [
+            { type: "output_text", text: result.text, annotations: [] },
+          ],
         },
-      });
-      writeResponseEvent(opts.res, "response.content_part.added", {
-        response_id: opts.id,
-        item_id: messageId,
-        output_index: 0,
-        content_index: 0,
-        part: { type: "output_text", text: "", annotations: [] },
       });
     }
-    emittedText += text;
-    writeResponseEvent(opts.res, "response.output_text.delta", {
-      response_id: opts.id,
-      item_id: messageId,
-      output_index: 0,
-      content_index: 0,
-      delta: text,
-    });
-  };
-  const result = await opts.run((event) => {
-    if (event.type === "text") emitText(event.text);
-  });
-  if (result.text.length > emittedText.length) {
-    emitText(result.text.slice(emittedText.length));
-  }
-  let outputIndex = textStarted ? 1 : 0;
-  if (textStarted) {
-    writeResponseEvent(opts.res, "response.output_text.done", {
-      response_id: opts.id,
-      item_id: messageId,
-      output_index: 0,
-      content_index: 0,
-      text: result.text,
-    });
-    writeResponseEvent(opts.res, "response.content_part.done", {
-      response_id: opts.id,
-      item_id: messageId,
-      output_index: 0,
-      content_index: 0,
-      part: { type: "output_text", text: result.text, annotations: [] },
-    });
-    writeResponseEvent(opts.res, "response.output_item.done", {
-      response_id: opts.id,
-      output_index: 0,
-      item: {
-        id: messageId,
-        type: "message",
-        status: "completed",
-        role: "assistant",
-        content: [
-          { type: "output_text", text: result.text, annotations: [] },
-        ],
-      },
-    });
-  }
-  if (result.status === "tool_calls") {
-    for (const call of result.toolCalls) {
-      writeResponseEvent(opts.res, "response.output_item.added", {
-        response_id: opts.id,
-        output_index: outputIndex,
-        item: {
-          id: call.itemId,
-          type: "function_call",
-          status: "in_progress",
-          call_id: call.callId,
-          name: call.name,
-          arguments: "",
-        },
-      });
-      writeResponseEvent(
-        opts.res,
-        "response.function_call_arguments.delta",
-        {
+    if (result.status === "tool_calls") {
+      for (const call of result.toolCalls) {
+        writeResponseEvent(opts.res, "response.output_item.added", {
           response_id: opts.id,
-          item_id: call.itemId,
           output_index: outputIndex,
-          delta: call.arguments,
-        },
-      );
-      writeResponseEvent(
-        opts.res,
-        "response.function_call_arguments.done",
-        {
+          item: {
+            id: call.itemId,
+            type: "function_call",
+            status: "in_progress",
+            call_id: call.callId,
+            name: call.name,
+            arguments: "",
+          },
+        });
+        writeResponseEvent(
+          opts.res,
+          "response.function_call_arguments.delta",
+          {
+            response_id: opts.id,
+            item_id: call.itemId,
+            output_index: outputIndex,
+            delta: call.arguments,
+          },
+        );
+        writeResponseEvent(
+          opts.res,
+          "response.function_call_arguments.done",
+          {
+            response_id: opts.id,
+            item_id: call.itemId,
+            output_index: outputIndex,
+            arguments: call.arguments,
+          },
+        );
+        writeResponseEvent(opts.res, "response.output_item.done", {
           response_id: opts.id,
-          item_id: call.itemId,
           output_index: outputIndex,
-          arguments: call.arguments,
-        },
-      );
-      writeResponseEvent(opts.res, "response.output_item.done", {
-        response_id: opts.id,
-        output_index: outputIndex,
-        item: functionCallItem(call),
-      });
-      outputIndex += 1;
+          item: functionCallItem(call),
+        });
+        outputIndex += 1;
+      }
     }
+    writeResponseEvent(opts.res, "response.completed", {
+      response: structuredResponseObject({
+        body: opts.body,
+        id: opts.id,
+        createdAt: opts.createdAt,
+        model: opts.model,
+        result,
+        previousResponseId: opts.previousResponseId,
+        promptLength: opts.promptLength,
+        messageId,
+      }),
+    });
+    opts.res.write("data: [DONE]\n\n");
+    opts.res.end();
+    return result;
+  } finally {
+    stopKeepalive();
   }
-  writeResponseEvent(opts.res, "response.completed", {
-    response: structuredResponseObject({
-      body: opts.body,
-      id: opts.id,
-      createdAt: opts.createdAt,
-      model: opts.model,
-      result,
-      previousResponseId: opts.previousResponseId,
-      promptLength: opts.promptLength,
-      messageId,
-    }),
-  });
-  opts.res.write("data: [DONE]\n\n");
-  opts.res.end();
-  return result;
 }
 
 function createResponseObject(opts: {
@@ -878,6 +883,7 @@ export async function handleResponses(
     abortOnClientDisconnect(res, abortController);
 
     writeSseHeaders(res, truncatedHeaders);
+    const stopKeepalive = startSseKeepalive(res);
     res.on("error", () => {
       /* client disconnected mid-stream */
     });
@@ -975,6 +981,7 @@ export async function handleResponses(
         modelCatalogName,
       )
         .then(({ code, stderr: stderrOut }) => {
+          stopKeepalive();
           const latencyMs = Date.now() - streamStart;
           reportRequestEnd(configDir);
 
@@ -1009,6 +1016,7 @@ export async function handleResponses(
           res.end();
         })
         .catch((err) => {
+          stopKeepalive();
           reportRequestEnd(configDir);
           if (!abortController.signal.aborted) {
             reportRequestError(configDir, Date.now() - streamStart);
@@ -1053,6 +1061,7 @@ export async function handleResponses(
       modelCatalogName,
     )
       .then(({ code, stderr: stderrOut }) => {
+        stopKeepalive();
         const latencyMs = Date.now() - streamStart;
         reportRequestEnd(configDir);
 
@@ -1079,6 +1088,7 @@ export async function handleResponses(
         res.end();
       })
       .catch((err) => {
+        stopKeepalive();
         reportRequestEnd(configDir);
         if (!abortController.signal.aborted) {
           reportRequestError(configDir, Date.now() - streamStart);

@@ -231,6 +231,7 @@ describe.each([false, true])("ACP tool APIs stream=%s", (stream) => {
         ).content_block
       : payload.content.find((block: any) => block.type === "tool_use");
     expect(call.name).toBe("weather");
+    expect(call.caller).toEqual({ type: "direct" });
     if (stream) {
       expect(
         events.some(

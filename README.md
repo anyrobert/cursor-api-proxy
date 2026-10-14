@@ -110,7 +110,7 @@ The model only sees what you send: `messages`, optional tool schemas, and tool r
 
 File reads, shell commands, and directory listings only happen when your agent framework implements tools, runs them on the host, and sends outputs back in follow-up messages. The proxy does not do that for you.
 
-Optional server-side workspace: the Cursor CLI may run with a workspace directory (`CURSOR_BRIDGE_WORKSPACE`, per-request `X-Cursor-Workspace`). By default, `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=true` runs the CLI in an empty temp directory so it does not read or write your real project. The proxy also overrides `HOME`, `USERPROFILE`, and `CURSOR_CONFIG_DIR` so the agent does not load global or project rules from elsewhere. Set it to `false` if you want the CLI to see a path on the machine where the proxy runs. That is still not IDE indexing. See the env table below.
+Optional server-side workspace: the Cursor CLI may run with a workspace directory (`CURSOR_BRIDGE_WORKSPACE`, per-request `X-Cursor-Workspace`). By default, `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=true` runs the CLI in an empty temp directory so it does not read or write your real project. The proxy also overrides `HOME`, `USERPROFILE`, and `CURSOR_CONFIG_DIR` so the agent does not load global or project rules from elsewhere. On macOS the temp home links your real `~/Library/Keychains` so the CLI can still read and save its login. Set it to `false` if you want the CLI to see a path on the machine where the proxy runs. That is still not IDE indexing. See the env table below.
 
 For agents that need local context: use client-side tools (`read_file`, `run_terminal_cmd`) and pass results as tool messages; add RAG or retrieval and inject snippets into `user` content; or paste relevant files into the prompt. There is no built-in way to sync an entire workspace through the proxy today.
 
@@ -272,7 +272,7 @@ One module resolves aliases, defaults, path resolution, platform fallbacks, and 
 | `CURSOR_BRIDGE_STRICT_MODEL` | `true` | Reject a requested model when Cursor's CLI/ACP catalogs cannot match it instead of silently selecting the ACP session default. |
 | `CURSOR_BRIDGE_FORCE` | `false` | Pass `--force` to Cursor CLI |
 | `CURSOR_BRIDGE_APPROVE_MCPS` | `false` | Pass `--approve-mcps` to Cursor CLI |
-| `CURSOR_BRIDGE_TIMEOUT_MS` | `300000` | Timeout per completion and idle TTL for a parked client-tool turn (ms). |
+| `CURSOR_BRIDGE_TIMEOUT_MS` | `300000` | Timeout per completion and idle TTL for a parked client-tool turn (ms). Raise above wall-clock for long Codex/agent turns, otherwise `cursor-agent` is SIGKILLed mid-stream. |
 | `CURSOR_BRIDGE_TLS_CERT` | — | Path to TLS certificate file (e.g. Tailscale cert). Use with `CURSOR_BRIDGE_TLS_KEY` for HTTPS. |
 | `CURSOR_BRIDGE_TLS_KEY` | — | Path to TLS private key file. Use with `CURSOR_BRIDGE_TLS_CERT` for HTTPS. |
 | `CURSOR_BRIDGE_SESSIONS_LOG` | `~/.cursor-api-proxy/sessions.log` | Path to log file; each request is appended as a line (timestamp, method, path, IP, status). |
@@ -386,6 +386,8 @@ account1 on 8765, account2 on 8766, and so on.
 ## Streaming
 
 The proxy supports `stream: true` on `POST /v1/chat/completions`, `POST /v1/responses`, and `POST /v1/messages`. Chat Completions and Messages return Server-Sent Events (SSE) in OpenAI/Anthropic streaming formats. Responses uses OpenAI Responses semantic SSE events (`response.created`, `response.output_text.delta`, …). Cursor CLI emits incremental deltas plus a final full message; the proxy deduplicates output so clients receive each chunk only once.
+
+While the agent is silent (thinking / tools, no tokens yet), the proxy writes SSE comment heartbeats (`: keepalive`) every 15s so clients with idle timeouts — notably Codex CLI — do not drop the stream. Codex `stream_idle_timeout_ms` is usually unnecessary. Long turns still need `CURSOR_BRIDGE_TIMEOUT_MS` above the run wall-clock.
 
 Test streaming from repo root, with the proxy running:
 

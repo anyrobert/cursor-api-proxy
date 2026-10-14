@@ -20,7 +20,7 @@ import type { BridgeConfig } from "../config.js";
 import type { CursorExecutionMode } from "../execution-mode.js";
 import type { ModelCacheRef } from "./models.js";
 import { getCachedCursorModels } from "./models.js";
-import { json, writeSseHeaders } from "../http.js";
+import { json, startSseKeepalive, writeSseHeaders } from "../http.js";
 import { resolveModelForExecution } from "../model-map.js";
 import { normalizeModelId, toolsToSystemText } from "../openai.js";
 import {
@@ -74,6 +74,10 @@ export type AnthropicMessagesCtx = {
   toolSessions: ToolSessionRegistry;
 };
 
+// Current Anthropic SDKs model `caller` as required on tool_use blocks; the official
+// C# SDK silently drops a block that omits it.
+const DIRECT_CALLER = { type: "direct" } as const;
+
 function anthropicToolUse(call: PendingClientToolCall) {
   let input: unknown = {};
   try {
@@ -86,6 +90,7 @@ function anthropicToolUse(call: PendingClientToolCall) {
     id: call.callId,
     name: call.name,
     input,
+    caller: DIRECT_CALLER,
   };
 }
 
@@ -153,83 +158,89 @@ async function writeStructuredAnthropicTurn(opts: {
   }
 
   writeSseHeaders(opts.res);
-  writeAnthropicEvent(opts.res, "message_start", {
-    message: {
-      id: opts.id,
-      type: "message",
-      role: "assistant",
-      model: opts.model,
-      content: [],
-      stop_reason: null,
-      stop_sequence: null,
-      usage: {
-        input_tokens: Math.max(1, Math.round(opts.promptLength / 4)),
-        output_tokens: 0,
-      },
-    },
-  });
-
-  let nextIndex = 0;
-  let textIndex: number | undefined;
-  let emittedText = "";
-  const emit = (event: ToolTurnEvent) => {
-    if (event.type !== "text") return;
-    if (event.type === "text") {
-      if (textIndex === undefined) {
-        textIndex = nextIndex++;
-        writeAnthropicEvent(opts.res, "content_block_start", {
-          index: textIndex,
-          content_block: { type: "text", text: "" },
-        });
-      }
-      emittedText += event.text;
-      writeAnthropicEvent(opts.res, "content_block_delta", {
-        index: textIndex,
-        delta: { type: "text_delta", text: event.text },
-      });
-      return;
-    }
-  };
-
-  const result = await opts.run(emit);
-  if (result.text.length > emittedText.length) {
-    emit({ type: "text", text: result.text.slice(emittedText.length) });
-  }
-  if (textIndex !== undefined) {
-    writeAnthropicEvent(opts.res, "content_block_stop", { index: textIndex });
-  }
-  if (result.status === "tool_calls") {
-    for (const call of result.toolCalls) {
-      const index = nextIndex++;
-      writeAnthropicEvent(opts.res, "content_block_start", {
-        index,
-        content_block: {
-          type: "tool_use",
-          id: call.callId,
-          name: call.name,
-          input: {},
+  const stopKeepalive = startSseKeepalive(opts.res);
+  try {
+    writeAnthropicEvent(opts.res, "message_start", {
+      message: {
+        id: opts.id,
+        type: "message",
+        role: "assistant",
+        model: opts.model,
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: {
+          input_tokens: Math.max(1, Math.round(opts.promptLength / 4)),
+          output_tokens: 0,
         },
-      });
-      writeAnthropicEvent(opts.res, "content_block_delta", {
-        index,
-        delta: { type: "input_json_delta", partial_json: call.arguments },
-      });
-      writeAnthropicEvent(opts.res, "content_block_stop", { index });
+      },
+    });
+
+    let nextIndex = 0;
+    let textIndex: number | undefined;
+    let emittedText = "";
+    const emit = (event: ToolTurnEvent) => {
+      if (event.type !== "text") return;
+      if (event.type === "text") {
+        if (textIndex === undefined) {
+          textIndex = nextIndex++;
+          writeAnthropicEvent(opts.res, "content_block_start", {
+            index: textIndex,
+            content_block: { type: "text", text: "" },
+          });
+        }
+        emittedText += event.text;
+        writeAnthropicEvent(opts.res, "content_block_delta", {
+          index: textIndex,
+          delta: { type: "text_delta", text: event.text },
+        });
+        return;
+      }
+    };
+
+    const result = await opts.run(emit);
+    if (result.text.length > emittedText.length) {
+      emit({ type: "text", text: result.text.slice(emittedText.length) });
     }
+    if (textIndex !== undefined) {
+      writeAnthropicEvent(opts.res, "content_block_stop", { index: textIndex });
+    }
+    if (result.status === "tool_calls") {
+      for (const call of result.toolCalls) {
+        const index = nextIndex++;
+        writeAnthropicEvent(opts.res, "content_block_start", {
+          index,
+          content_block: {
+            type: "tool_use",
+            id: call.callId,
+            name: call.name,
+            input: {},
+            caller: DIRECT_CALLER,
+          },
+        });
+        writeAnthropicEvent(opts.res, "content_block_delta", {
+          index,
+          delta: { type: "input_json_delta", partial_json: call.arguments },
+        });
+        writeAnthropicEvent(opts.res, "content_block_stop", { index });
+      }
+    }
+    writeAnthropicEvent(opts.res, "message_delta", {
+      delta: {
+        stop_reason:
+          result.status === "tool_calls" ? "tool_use" : "end_turn",
+        stop_sequence: null,
+      },
+      usage: {
+        output_tokens: Math.max(1, Math.round(result.text.length / 4)),
+      },
+    });
+    writeAnthropicEvent(opts.res, "message_stop", {});
+    opts.res.end();
+    return result;
+  } finally {
+    stopKeepalive();
   }
-  writeAnthropicEvent(opts.res, "message_delta", {
-    delta: {
-      stop_reason:
-        result.status === "tool_calls" ? "tool_use" : "end_turn",
-      stop_sequence: null,
-    },
-    usage: {
-      output_tokens: Math.max(1, Math.round(result.text.length / 4)),
-    },
-  });
-  writeAnthropicEvent(opts.res, "message_stop", {});
-  opts.res.end();
-  return result;
 }
 
 export async function handleAnthropicMessages(
@@ -626,6 +637,7 @@ export async function handleAnthropicMessages(
 
   if (body.stream) {
     writeSseHeaders(res, truncatedHeaders);
+    const stopKeepalive = startSseKeepalive(res);
     res.on("error", () => {
       /* client disconnected mid-stream */
     });
@@ -680,6 +692,7 @@ export async function handleAnthropicMessages(
         modelCatalogName,
       )
         .then(({ code, stderr: stderrOut }) => {
+          stopKeepalive();
           const latencyMs = Date.now() - streamStart;
           reportRequestEnd(configDir);
 
@@ -723,6 +736,7 @@ export async function handleAnthropicMessages(
           res.end();
         })
         .catch((err) => {
+          stopKeepalive();
           reportRequestEnd(configDir);
           if (!abortController.signal.aborted) {
             reportRequestError(configDir, Date.now() - streamStart);
@@ -785,6 +799,7 @@ export async function handleAnthropicMessages(
       modelCatalogName,
     )
       .then(({ code, stderr: stderrOut }) => {
+        stopKeepalive();
         const latencyMs = Date.now() - streamStart;
         reportRequestEnd(configDir);
 
@@ -811,6 +826,7 @@ export async function handleAnthropicMessages(
         res.end();
       })
       .catch((err) => {
+        stopKeepalive();
         reportRequestEnd(configDir);
         if (!abortController.signal.aborted) {
           reportRequestError(configDir, Date.now() - streamStart);
