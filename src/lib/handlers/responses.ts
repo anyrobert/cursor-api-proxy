@@ -1008,7 +1008,7 @@ export async function handleResponses(
         modelCatalogName,
         mediaBlocks,
       )
-        .then(({ code, stderr: stderrOut }) => {
+        .then(({ code, stderr: stderrOut, error }) => {
           stopKeepalive();
           const latencyMs = Date.now() - streamStart;
           reportRequestEnd(configDir);
@@ -1028,6 +1028,7 @@ export async function handleResponses(
               remoteAddress,
               code,
               stderrOut,
+              error,
             );
             writeResponseEvent(res, "error", {
               error: { message: publicMsg, code: "cursor_cli_error" },
@@ -1168,6 +1169,7 @@ export async function handleResponses(
       remoteAddress,
       out.code,
       out.stderr,
+      out.error,
     );
     json(res, 500, {
       error: { message: errMsg, code: "cursor_cli_error" },
