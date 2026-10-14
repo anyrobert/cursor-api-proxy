@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  anthropicBuiltinToolNames,
   anthropicToolOutputs,
   chatToolOutputs,
   parseAnthropicFunctionTools,
@@ -202,6 +203,21 @@ describe("tool normalization", () => {
     ).toThrow(/tool_choice "any" requires a tool call/);
     expect(resolveToolChoice(builtinsOnly, "auto").tools).toEqual([]);
     expect(resolveToolChoice(builtinsOnly, "none").tools).toEqual([]);
+  });
+
+  it("names Anthropic-defined tools but not client tools", () => {
+    expect(
+      anthropicBuiltinToolNames([
+        { type: "web_search_20250305", name: "web_search", max_uses: 5 },
+        { type: "bash_20250124", name: "bash" },
+        { type: "text_editor_20250124", name: "str_replace_editor" },
+        { name: "lookup", input_schema: { type: "object" } },
+        { type: "custom", name: "custom_tool", input_schema: {} },
+        { type: "computer_20250124" },
+        null,
+      ]),
+    ).toEqual(new Set(["web_search", "bash", "str_replace_editor"]));
+    expect(anthropicBuiltinToolNames(undefined)).toEqual(new Set());
   });
 });
 

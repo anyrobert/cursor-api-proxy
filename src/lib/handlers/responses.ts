@@ -698,9 +698,7 @@ export async function handleResponses(
     config.useAcp && selectedTools.length > 0 && !resuming;
   const toolsText = structuredToolStart
     ? undefined
-    : body.tool_choice === "none"
-      ? undefined
-      : toolsToSystemText(body.tools);
+    : toolsToSystemText(selectedTools);
   const media = await prepareRequestMedia(
     Array.isArray(body.input) ? body.input : [],
     { useAcp: config.useAcp, resumesToolSession: resuming },
