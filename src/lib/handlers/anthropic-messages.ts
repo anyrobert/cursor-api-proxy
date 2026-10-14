@@ -52,6 +52,7 @@ import {
 } from "../win-cmdline-limit.js";
 import { abortOnClientDisconnect } from "../client-disconnect.js";
 import {
+  anthropicBuiltinToolNames,
   anthropicToolOutputs,
   parseAnthropicFunctionTools,
   resolveToolChoice,
@@ -329,11 +330,12 @@ export async function handleAnthropicMessages(
     config.useAcp &&
     selectedTools.length > 0 &&
     submittedToolOutputs.length === 0;
+  const builtinToolNames = anthropicBuiltinToolNames(body.tools);
   const toolsText = structuredToolStart
     ? undefined
-    : body.tool_choice?.type === "none"
-      ? undefined
-      : toolsToSystemText(body.tools);
+    : toolsToSystemText(
+        selectedTools.filter((tool) => !builtinToolNames.has(tool.name)),
+      );
   const cleanSystemText =
     typeof cleanSystem === "string"
       ? cleanSystem
@@ -343,7 +345,14 @@ export async function handleAnthropicMessages(
           )
           .map((part: { type?: string; text?: string }) => part.text ?? "")
           .join("\n");
-  const systemWithTools = [cleanSystemText, toolsText, toolInstruction]
+  // Like Chat and Responses, only a structured ACP turn can satisfy the
+  // tool_choice instruction; in a text prompt it would demand a call that
+  // nothing returns.
+  const systemWithTools = [
+    cleanSystemText,
+    toolsText,
+    structuredToolStart ? toolInstruction : undefined,
+  ]
     .filter(Boolean)
     .join("\n\n");
   if (body.max_tokens == null || typeof body.max_tokens !== "number") {

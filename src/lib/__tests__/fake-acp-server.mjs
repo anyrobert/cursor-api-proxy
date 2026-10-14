@@ -334,7 +334,23 @@ async function callTool(server, sessionId, tool, index) {
   return response.result?.content?.[0]?.text ?? "";
 }
 
-async function runToolPrompt() {
+async function runToolPrompt(params) {
+  if (scenario === "tool_transcript") {
+    // A session rebuilt from a transcript answers from the "Tool:" lines it
+    // was given; a resumed session would report "Tool result:" instead.
+    // "[continued]" marks a prompt that says those calls already ran.
+    const prompt = params?.prompt?.[0]?.text ?? "";
+    const results = [...prompt.matchAll(/^Tool: (.*)$/gm)].map((m) => m[1]);
+    if (results.length > 0) {
+      const continued = prompt.includes("already ran") ? "[continued] " : "";
+      update("agent_message_chunk", {
+        content: {
+          text: `${continued}Answer from transcript: ${results.join(", ")}`,
+        },
+      });
+      return;
+    }
+  }
   const { server, sessionId } = await connectMcp();
   const listed = await mcpPost(server, "tools/list", {}, sessionId);
   const tools = listed.result?.tools ?? [];
@@ -530,7 +546,7 @@ rl.on("line", (line) => {
       return;
     }
     const operation = isToolScenario()
-      ? runToolPrompt()
+      ? runToolPrompt(msg.params)
       : scenario === "builtin_permission"
         ? runBuiltinPermissionPrompt()
         : Promise.resolve().then(async () => {

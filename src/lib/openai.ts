@@ -1,3 +1,5 @@
+import type { ClientToolDefinition } from "./tool-types.js";
+
 export type OpenAiChatCompletionRequest = {
   model?: string;
   /** Cursor CLI mode override: agent | ask | plan */
@@ -163,58 +165,89 @@ export function responsesInputToMessages(
 }
 
 /**
- * The definition to render for one request tool, or undefined to leave it
- * out. Chat tools wrap it in `function`. Anthropic client tools (no `type`,
- * or `custom`) and Responses freeform `custom` tools are their own
- * definition. Any other type is a Responses `namespace` group or a host-side
- * builtin (`web_search`, `file_search`, `web_search_20250305`,
- * `bash_20250124`, ...) the model cannot call through this prompt, and an
- * entry without a name would only render as `Function: undefined`.
+ * Opens the CLI-mode tool block. Only ACP turns model output into client
+ * tool calls, so here the tools are context and nothing parses a call the
+ * model writes out.
  */
-function systemTextDefinition(tool: any): any {
-  const fn =
-    tool?.type === "function"
-      ? tool.function
-      : tool?.type == null || tool.type === "custom"
-        ? tool
-        : undefined;
-  return typeof fn?.name === "string" ? fn : undefined;
+const TOOLS_TEXT_HEADER =
+  "Tools defined by the client, for reference only. You cannot call them in this mode, so answer without them and do not write out calls to them.";
+
+/**
+ * Character budget for the tool entries, which every request repeats. Small
+ * tool sets fit whole, but in full Codex's 17 tools take about 19K
+ * characters and Claude Code's 23 about 64K. 8K (about 2K tokens) still
+ * fits a brief entry for some 35 tools and keeps the block from crowding
+ * argv prompt limits: on Windows the proxy keeps only the prompt's tail, so
+ * the system prompt and this block are cut first.
+ */
+const TOOLS_TEXT_BUDGET = 8_000;
+
+/** Longest description a tool listed without its schema keeps. */
+const BRIEF_DESCRIPTION_MAX = 200;
+
+function fullToolEntry(tool: ClientToolDefinition): string {
+  const description = tool.description?.trim();
+  return [
+    `Function: ${tool.name}`,
+    ...(description ? [`Description: ${description}`] : []),
+    `Parameters: ${JSON.stringify(tool.inputSchema)}`,
+  ].join("\n");
+}
+
+function briefToolEntry(tool: ClientToolDefinition): string {
+  const description = tool.description?.replace(/\s+/g, " ").trim();
+  if (!description) return `Function: ${tool.name}`;
+  const short =
+    description.length > BRIEF_DESCRIPTION_MAX
+      ? `${description.slice(0, BRIEF_DESCRIPTION_MAX - 1).trimEnd()}…`
+      : description;
+  return `Function: ${tool.name}\nDescription: ${short}`;
 }
 
 /**
- * Serialise tool/function schemas into a text block for the system prompt.
- * This allows the model to be aware of available tools even though we can't
- * return tool_call deltas natively.
+ * Describe the request's tools in a CLI-mode prompt, where the model can
+ * see them but not call them.
+ *
+ * Takes the parsed definitions, so every API renders alike: Chat and flat
+ * Responses functions, legacy `functions`, namespace members under their
+ * flattened names, and Anthropic `input_schema`. Host-side builtins and
+ * namespace groups never reach it, and `tool_choice` has already narrowed
+ * the list.
+ *
+ * The entries stay within TOOLS_TEXT_BUDGET. Every tool first gets a brief
+ * entry (name and a description cut to BRIEF_DESCRIPTION_MAX) while those
+ * fit, and the rest are only counted. Leftover budget then upgrades brief
+ * entries, in request order, to the full description and JSON schema, so a
+ * set that fits whole renders in full.
  */
 export function toolsToSystemText(
-  tools?: any[],
-  functions?: any[],
+  tools: readonly ClientToolDefinition[],
 ): string | undefined {
-  const defs: any[] = [];
-
-  if (tools && tools.length > 0) {
-    for (const t of tools) {
-      const fn = systemTextDefinition(t);
-      if (fn) defs.push(fn);
-    }
+  if (tools.length === 0) return undefined;
+  const briefs = tools.map(briefToolEntry);
+  // Each entry costs its length plus the newline that joins it.
+  let used = 0;
+  let listed = 0;
+  while (
+    listed < briefs.length &&
+    used + briefs[listed].length + 1 <= TOOLS_TEXT_BUDGET
+  ) {
+    used += briefs[listed].length + 1;
+    listed += 1;
   }
-  if (functions && functions.length > 0) {
-    defs.push(...functions);
+  const entries = briefs.slice(0, listed).map((brief, index) => {
+    const full = fullToolEntry(tools[index]);
+    const extra = full.length - brief.length;
+    if (used + extra > TOOLS_TEXT_BUDGET) return brief;
+    used += extra;
+    return full;
+  });
+  const omitted = tools.length - listed;
+  if (omitted > 0) {
+    const noun = omitted === 1 ? "tool" : "tools";
+    entries.push(`(${omitted} more ${noun} not listed)`);
   }
-
-  if (defs.length === 0) return undefined;
-
-  const lines = [
-    "Available tools (respond with a JSON object to call one):",
-    "",
-    ...defs.map((fn) => {
-      const params = fn.parameters
-        ? JSON.stringify(fn.parameters, null, 2)
-        : "{}";
-      return `Function: ${fn.name}\nDescription: ${fn.description ?? ""}\nParameters: ${params}`;
-    }),
-  ];
-  return lines.join("\n");
+  return [TOOLS_TEXT_HEADER, "", ...entries].join("\n");
 }
 
 export function buildPromptFromMessages(messages: any[]): string {

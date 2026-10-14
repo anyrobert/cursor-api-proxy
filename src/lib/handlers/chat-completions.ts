@@ -313,9 +313,7 @@ export async function handleChatCompletions(
     submittedToolOutputs.length === 0;
   const toolsText = structuredToolStart
     ? undefined
-    : body.tool_choice === "none"
-      ? undefined
-      : toolsToSystemText(body.tools, body.functions);
+    : toolsToSystemText(selectedTools);
   const resumesToolSession = config.useAcp && submittedToolOutputs.length > 0;
   const media = await prepareRequestMedia(cleanMessages, {
     useAcp: config.useAcp,

@@ -156,6 +156,12 @@ export function logTrafficResponse(
   console.log(hr("─", 60));
 }
 
+/** One step of a client-tool ACP turn: parked, resumed, rebuilt, closed. */
+export function logToolSession(verbose: boolean, message: string): void {
+  if (!verbose) return;
+  console.log(`${ts()} ${C.bold}${C.yellow}TOOL${C.reset} ${message}`);
+}
+
 export function logModelResolution(
   verbose: boolean,
   decision: ModelResolutionDecision,

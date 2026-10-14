@@ -128,6 +128,72 @@ export class ToolSessionRegistry {
     );
   }
 
+  /**
+   * The parked session a resent transcript continues, for clients that send
+   * their history instead of a `previous_response_id`. Returns it with the
+   * subset of `callIds` still waiting on it; ids parked nowhere for this
+   * owner (answered earlier in the turn, from a finished turn, expired, or
+   * another owner's) are skipped. Undefined when none is parked.
+   *
+   * Call ids are 122-bit random UUIDs that only their owner has seen, so a
+   * match cannot be guessed across owners any more than a response id.
+   */
+  findPendingCalls(
+    api: ToolApi,
+    ownerKey: string,
+    callIds: readonly string[],
+  ): { record: ToolSessionRecord; callIds: string[] } | undefined {
+    this.#sweep();
+    const matches = new Map<ToolSessionRecord, string[]>();
+    for (const callId of callIds) {
+      const record = this.#parkedCall(api, ownerKey, callId);
+      if (!record) continue;
+      const ids = matches.get(record) ?? [];
+      ids.push(callId);
+      matches.set(record, ids);
+    }
+    if (matches.size > 1) {
+      throw new ToolSessionError(
+        "function_call_output items answer calls from different tool turns",
+        400,
+        "invalid_tool_resume",
+      );
+    }
+    for (const [record, ids] of matches) return { record, callIds: ids };
+    return undefined;
+  }
+
+  /**
+   * Close this owner's parked sessions still waiting on any of `callIds`.
+   * A client that resends its transcript and starts a new turn has moved
+   * past those calls, so their agents would only idle until the TTL and
+   * count against the per-owner session limit.
+   */
+  async closeSuperseded(
+    api: ToolApi,
+    ownerKey: string,
+    callIds: readonly string[],
+  ): Promise<number> {
+    const waitsOn = (record: ToolSessionRecord) =>
+      !record.session.closed &&
+      callIds.some((callId) => record.session.hasCall(callId));
+    const stale = [...this.#records].filter(
+      (record) =>
+        record.api === api && record.ownerKey === ownerKey && waitsOn(record),
+    );
+    const closed = await Promise.all(
+      stale.map((record) =>
+        record.mutex.run(async () => {
+          if (!waitsOn(record)) return false;
+          this.remove(record);
+          await record.session.close().catch(() => undefined);
+          return true;
+        }),
+      ),
+    );
+    return closed.filter(Boolean).length;
+  }
+
   findByResponseId(
     ownerKey: string,
     responseId: string,
@@ -214,5 +280,23 @@ export class ToolSessionRegistry {
     for (const record of this.#records) {
       if (record.session.closed) this.remove(record);
     }
+  }
+
+  #parkedCall(
+    api: ToolApi,
+    ownerKey: string,
+    callId: string,
+  ): ToolSessionRecord | undefined {
+    for (const record of this.#records) {
+      if (
+        record.api === api &&
+        record.ownerKey === ownerKey &&
+        !record.session.closed &&
+        record.session.hasCall(callId)
+      ) {
+        return record;
+      }
+    }
+    return undefined;
   }
 }

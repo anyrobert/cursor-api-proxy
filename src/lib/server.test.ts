@@ -43,6 +43,7 @@ vi.mock("./request-log.js", () => ({
   logTrafficRequest: vi.fn(),
   logTrafficResponse: vi.fn(),
   logModelResolution: vi.fn(),
+  logToolSession: vi.fn(),
   logAgentError: vi.fn().mockReturnValue("agent error"),
   appendSessionLine: vi.fn(),
   logAccountAssigned: vi.fn(),
@@ -618,6 +619,124 @@ describe("startBridgeServer", () => {
       } finally {
         warn.mockRestore();
       }
+    });
+  });
+
+  describe("tool prompt without ACP", () => {
+    const header =
+      "Tools defined by the client, for reference only. You cannot call them in this mode, so answer without them and do not write out calls to them.";
+    const weather = {
+      name: "get_weather",
+      description: "Current weather",
+      parameters: { type: "object", properties: { city: { type: "string" } } },
+    };
+    const time = {
+      name: "get_time",
+      parameters: { type: "object", properties: {} },
+    };
+    // Each API sends get_weather and get_time in its own shape, next to
+    // builtins and groups that must stay out of the prompt.
+    const apis = [
+      {
+        path: "/v1/chat/completions",
+        none: "none",
+        named: { type: "function", function: { name: "get_time" } },
+        body: (extra: object) => ({
+          model: "claude-3-opus",
+          messages: [{ role: "user", content: "Weather?" }],
+          tools: [{ type: "function", function: weather }],
+          functions: [time],
+          ...extra,
+        }),
+      },
+      {
+        path: "/v1/responses",
+        none: "none",
+        named: { type: "function", name: "get_time" },
+        body: (extra: object) => ({
+          model: "claude-3-opus",
+          input: "Weather?",
+          tools: [
+            { type: "web_search" },
+            { type: "function", ...weather },
+            {
+              type: "namespace",
+              name: "mcp__clock",
+              tools: [{ type: "function", ...time }],
+            },
+          ],
+          ...extra,
+        }),
+      },
+      {
+        path: "/v1/messages",
+        none: { type: "none" },
+        named: { type: "tool", name: "get_time" },
+        body: (extra: object) => ({
+          model: "claude-3-opus",
+          max_tokens: 100,
+          messages: [{ role: "user", content: "Weather?" }],
+          tools: [
+            { type: "web_search_20250305", name: "web_search", max_uses: 3 },
+            {
+              name: weather.name,
+              description: weather.description,
+              input_schema: weather.parameters,
+            },
+            { name: time.name, input_schema: time.parameters },
+          ],
+          ...extra,
+        }),
+      },
+    ];
+
+    async function agentPrompt(path: string, body: unknown): Promise<string> {
+      const runMock = vi.mocked(run);
+      runMock.mockClear();
+      const started = startBridgeServer({
+        version: "1.0.0",
+        config: createTestConfig({ promptViaStdin: true }),
+      });
+      servers.push(...started);
+      await new Promise<void>((resolve) =>
+        started[0].on("listening", () => resolve()),
+      );
+      const reply = await fetchServer(started[0], path, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      expect(reply.status, reply.body).toBe(200);
+      expect(runMock).toHaveBeenCalledTimes(1);
+      return String(runMock.mock.calls[0][2]?.stdinContent);
+    }
+
+    it.each(apis)("$path lists the client tools for reference only", async ({ path, body }) => {
+      const prompt = await agentPrompt(path, body({}));
+      expect(prompt).toContain(
+        [
+          header,
+          "",
+          "Function: get_weather",
+          "Description: Current weather",
+          'Parameters: {"type":"object","properties":{"city":{"type":"string"}}}',
+          "Function: get_time",
+          'Parameters: {"type":"object","properties":{}}',
+        ].join("\n"),
+      );
+      expect(prompt).not.toMatch(/web_search|mcp__clock|JSON object/);
+    });
+
+    it.each(apis)("$path lists no tools for tool_choice none", async ({ path, body, none }) => {
+      const prompt = await agentPrompt(path, body({ tool_choice: none }));
+      expect(prompt).not.toContain("Function:");
+      expect(prompt).not.toContain("Tools defined by the client");
+    });
+
+    it.each(apis)("$path lists only the named tool and demands no call", async ({ path, body, named }) => {
+      const prompt = await agentPrompt(path, body({ tool_choice: named }));
+      expect(prompt).toContain(`${header}\n\nFunction: get_time\n`);
+      expect(prompt).not.toContain("get_weather");
+      expect(prompt).not.toContain("You must call");
     });
   });
 

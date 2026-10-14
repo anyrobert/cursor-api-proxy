@@ -110,16 +110,18 @@ The model only sees what you send: `messages`, optional tool schemas, and tool r
 
 File reads, shell commands, and directory listings only happen when your agent framework implements tools, runs them on the host, and sends outputs back in follow-up messages. The proxy does not do that for you.
 
-Optional server-side workspace: the Cursor CLI may run with a workspace directory (`CURSOR_BRIDGE_WORKSPACE`, per-request `X-Cursor-Workspace`). By default, `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=true` runs the CLI in an empty temp directory so it does not read or write your real project. The proxy also overrides `HOME`, `USERPROFILE`, and `CURSOR_CONFIG_DIR` so the agent does not load global or project rules from elsewhere. On macOS the temp home links your real `~/Library/Keychains` so the CLI can still read and save its login. Set it to `false` if you want the CLI to see a path on the machine where the proxy runs. That is still not IDE indexing. See the env table below.
+Optional server-side workspace: the Cursor CLI may run with a workspace directory (`CURSOR_BRIDGE_WORKSPACE`, per-request `X-Cursor-Workspace`). By default, `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=true` runs the CLI in an empty temp directory so it does not read or write your real project. The proxy also overrides `HOME`, `USERPROFILE`, and `CURSOR_CONFIG_DIR` so the agent does not load global or project rules from elsewhere. That temp home is a separate directory next to the empty workspace, never inside it. On macOS it links your real `~/Library/Keychains` so the CLI can still read and save its login, and keeping it outside the workspace keeps that link out of anything the agent lists, searches, or edits as the project. Set it to `false` if you want the CLI to see a path on the machine where the proxy runs. That is still not IDE indexing. See the env table below.
 
 For agents that need local context: use client-side tools (`read_file`, `run_terminal_cmd`) and pass results as tool messages; add RAG or retrieval and inject snippets into `user` content; or paste relevant files into the prompt. There is no built-in way to sync an entire workspace through the proxy today.
 
 ### Client tool passthrough (ACP)
 
+Without ACP (the default CLI mode), responses never contain tool calls. The proxy lists the request's function tools in the prompt for reference only and tells the model it cannot call them. Large tool sets are trimmed to about 8,000 characters: each tool gets its name and a description of up to 200 characters while they fit (any beyond that are only counted), and full schemas fill the space left, in request order.
+
 Set `CURSOR_BRIDGE_USE_ACP=true` to receive structured client tool calls. Tool-bearing requests require a Cursor ACP build that advertises HTTP MCP support. The proxy supports:
 
 - Chat Completions `tools` / legacy `functions` → `message.tool_calls`; resume with `role: "tool"` and `tool_call_id`.
-- Responses flat function tools → `function_call` output items; resume with `previous_response_id` and `function_call_output`.
+- Responses flat function tools → `function_call` output items; resume with `previous_response_id` and `function_call_output`, or resend the whole conversation with the `function_call_output` items appended and no `previous_response_id` (Codex CLI does this with `store: false`).
 - Responses `namespace` tool groups (Codex CLI) are flattened for the agent and reported back as the member's bare `name` plus `namespace`. Host-side builtins such as `web_search` are dropped, and `tool_choice: "required"` with no callable tool left returns `400`.
 - Anthropic tools with `input_schema` → `tool_use`; resume with `tool_result`.
 - Sync and streaming output, mixed text plus tools, parallel calls, multiple rounds, named/required/none choices.
@@ -130,6 +132,7 @@ Tool loops are stateful and in-process:
 
 - Keep the same proxy process alive between the call and its result.
 - Submit results before `CURSOR_BRIDGE_TIMEOUT_MS`. Expiration, restart, unknown IDs, or wrong API-key owner return HTTP `409`.
+- Responses requests without `previous_response_id` are matched on `call_id` instead: only the `function_call_output` items after the latest user message resume a parked call, so outputs from finished turns stay history. If none of them is parked (expired, restarted, another API-key owner), the proxy starts a new ACP session from the conversation you sent, which already holds the tool results, instead of returning `409`. Outputs sent with no user message still return `409`. A new user turn also closes any parked call that the conversation has moved past.
 - Parallel results may arrive together or incrementally. The original account/profile and temporary workspace stay attached until the turn finishes.
 - A client disconnect while a turn is active cancels the ACP child and removes temporary state.
 - Responses API objects remain externally `completed` while an internal ACP turn waits for `function_call_output`.

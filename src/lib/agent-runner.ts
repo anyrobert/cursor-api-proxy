@@ -8,7 +8,7 @@ import type { BridgeConfig } from "./config.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
 import { run, runStreaming } from "./process.js";
 import type { ClientToolDefinition } from "./tool-types.js";
-import { getChatOnlyEnvOverrides } from "./workspace.js";
+import { chatOnlyHomeDir, getChatOnlyEnvOverrides } from "./workspace.js";
 import { readKeychainToken, writeCachedToken } from "./token-cache.js";
 
 function cacheTokenForAccount(configDir?: string): void {
@@ -77,6 +77,7 @@ function acpInvocation(
   effectiveChatOnly: boolean,
   cmdArgs: string[],
   configDir?: string,
+  tempDir?: string,
 ): {
   args: string[];
   env: Record<string, string | undefined>;
@@ -89,11 +90,28 @@ function acpInvocation(
   args = acpArgsWithMode(args, mode);
   const env = { ...config.acpEnv };
   if (effectiveChatOnly) {
-    Object.assign(env, getChatOnlyEnvOverrides(workspaceDir, configDir));
+    Object.assign(
+      env,
+      getChatOnlyEnvOverrides(chatOnlyHomeDir(workspaceDir, tempDir), configDir),
+    );
   } else if (configDir) {
     env.CURSOR_CONFIG_DIR = configDir;
   }
   return { args, env, model };
+}
+
+/**
+ * Remove a chat-only request's isolation root once its run settles, failed
+ * or aborted runs included, so no temp home (with its keychain link) is
+ * left behind. `rmSync` unlinks symlinks without following them.
+ */
+function removeTempDir(tempDir?: string): void {
+  if (!tempDir) return;
+  try {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  } catch {
+    /* best effort */
+  }
 }
 
 export function runAgentSync(
@@ -109,6 +127,7 @@ export function runAgentSync(
   mediaBlocks?: AcpPromptBlock[],
 ): Promise<AgentRunResult> {
   if (mediaBlocks?.length && !config.useAcp) {
+    removeTempDir(tempDir);
     return Promise.reject(new Error("multimodal input requires Cursor ACP mode"));
   }
   if (config.useAcp && typeof stdinPrompt === "string") {
@@ -118,6 +137,7 @@ export function runAgentSync(
       effectiveChatOnly,
       cmdArgs,
       configDir,
+      tempDir,
     );
     return runAcpSync(config.acpCommand, invocation.args, stdinPrompt, {
       cwd: workspaceDir,
@@ -130,20 +150,15 @@ export function runAgentSync(
       rawDebug: config.acpRawDebug,
       signal,
       mediaBlocks,
-    }).then((out) => {
-      cacheTokenForAccount(configDir);
-      if (tempDir) {
-        try {
-          fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch {
-          /* ignore */
-        }
-      }
-      return out;
-    });
+    })
+      .then((out) => {
+        cacheTokenForAccount(configDir);
+        return out;
+      })
+      .finally(() => removeTempDir(tempDir));
   }
   const runEnvOverrides = effectiveChatOnly
-    ? getChatOnlyEnvOverrides(workspaceDir, configDir)
+    ? getChatOnlyEnvOverrides(chatOnlyHomeDir(workspaceDir, tempDir), configDir)
     : undefined;
   return run(config.agentBin, cmdArgs, {
     cwd: workspaceDir,
@@ -153,17 +168,12 @@ export function runAgentSync(
     envOverrides: runEnvOverrides,
     configDir,
     signal,
-  }).then((out) => {
-    cacheTokenForAccount(configDir);
-    if (tempDir) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-    }
-    return out;
-  });
+  })
+    .then((out) => {
+      cacheTokenForAccount(configDir);
+      return out;
+    })
+    .finally(() => removeTempDir(tempDir));
 }
 
 export type StreamLineHandler = (line: string) => void;
@@ -182,6 +192,7 @@ export function runAgentStream(
   mediaBlocks?: AcpPromptBlock[],
 ): Promise<Omit<AgentRunResult, "stdout">> {
   if (mediaBlocks?.length && !config.useAcp) {
+    removeTempDir(tempDir);
     return Promise.reject(new Error("multimodal input requires Cursor ACP mode"));
   }
   if (config.useAcp && typeof stdinPrompt === "string") {
@@ -191,6 +202,7 @@ export function runAgentStream(
       effectiveChatOnly,
       cmdArgs,
       configDir,
+      tempDir,
     );
     return runAcpStream(
       config.acpCommand,
@@ -209,20 +221,15 @@ export function runAgentStream(
         mediaBlocks,
       },
       onLine,
-    ).then((result) => {
-      cacheTokenForAccount(configDir);
-      if (tempDir) {
-        try {
-          fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch {
-          /* ignore */
-        }
-      }
-      return result;
-    });
+    )
+      .then((result) => {
+        cacheTokenForAccount(configDir);
+        return result;
+      })
+      .finally(() => removeTempDir(tempDir));
   }
   const streamEnvOverrides = effectiveChatOnly
-    ? getChatOnlyEnvOverrides(workspaceDir, configDir)
+    ? getChatOnlyEnvOverrides(chatOnlyHomeDir(workspaceDir, tempDir), configDir)
     : undefined;
   return runStreaming(config.agentBin, cmdArgs, {
     cwd: workspaceDir,
@@ -233,17 +240,12 @@ export function runAgentStream(
     envOverrides: streamEnvOverrides,
     configDir,
     signal,
-  }).then((result) => {
-    cacheTokenForAccount(configDir);
-    if (tempDir) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-    }
-    return result;
-  });
+  })
+    .then((result) => {
+      cacheTokenForAccount(configDir);
+      return result;
+    })
+    .finally(() => removeTempDir(tempDir));
 }
 
 export async function startAgentToolSession(opts: {
@@ -270,19 +272,14 @@ export async function startAgentToolSession(opts: {
     opts.effectiveChatOnly,
     opts.cmdArgs,
     opts.configDir,
+    opts.tempDir,
   );
   let cleaned = false;
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
     cacheTokenForAccount(opts.configDir);
-    if (opts.tempDir) {
-      try {
-        fs.rmSync(opts.tempDir, { recursive: true, force: true });
-      } catch {
-        // best effort
-      }
-    }
+    removeTempDir(opts.tempDir);
   };
   const session = new AcpToolSession({
     command: opts.config.acpCommand,
