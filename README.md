@@ -116,6 +116,8 @@ For agents that need local context: use client-side tools (`read_file`, `run_ter
 
 ### Client tool passthrough (ACP)
 
+Without ACP (the default CLI mode), responses never contain tool calls. The proxy lists the request's function tools in the prompt for reference only and tells the model it cannot call them. Large tool sets are trimmed to about 8,000 characters: each tool gets its name and a description of up to 200 characters while they fit (any beyond that are only counted), and full schemas fill the space left, in request order.
+
 Set `CURSOR_BRIDGE_USE_ACP=true` to receive structured client tool calls. Tool-bearing requests require a Cursor ACP build that advertises HTTP MCP support. The proxy supports:
 
 - Chat Completions `tools` / legacy `functions` → `message.tool_calls`; resume with `role: "tool"` and `tool_call_id`.
