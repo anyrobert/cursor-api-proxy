@@ -14,6 +14,7 @@ import {
   configureAcpSessionModel,
   formatAcpRpcError,
   type AcpModelOptions,
+  type AcpModelPlan,
   type AcpSessionModelState,
 } from "./acp-model.js";
 import { trackChildProcess } from "./process.js";
@@ -282,7 +283,7 @@ function configureAcpModel(
   sessionId: string,
   request: AcpModelOptions,
   session: AcpSessionModelState,
-): Promise<unknown> {
+): Promise<AcpModelPlan> {
   return configureAcpSessionModel(request, session, (configId, value) =>
     sendRequest(
       stdin,
