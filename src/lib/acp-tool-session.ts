@@ -8,6 +8,7 @@ import {
 import {
   acpModelSelectionError,
   planAcpModelSelection,
+  type AcpModelOptions,
   type AcpModelPlan,
 } from "./acp-model.js";
 import { ClientToolBridge } from "./client-tool-bridge.js";
@@ -39,7 +40,7 @@ export type ToolTurnResult =
       stderr: string;
     };
 
-export type AcpToolSessionOptions = {
+export type AcpToolSessionOptions = AcpModelOptions & {
   command: string;
   args: readonly string[];
   cwd: string;
@@ -49,8 +50,6 @@ export type AcpToolSessionOptions = {
   skipAuthenticate?: boolean;
   rawDebug?: boolean;
   signal?: AbortSignal;
-  modelCandidates?: string[];
-  strictModel?: boolean;
   tools: readonly ClientToolDefinition[];
   requireToolCall?: boolean;
   maxParallelToolCalls?: number;
@@ -249,7 +248,10 @@ export class AcpToolSession {
 
   async #setModel(session: AcpSessionResult): Promise<void> {
     if (!this.#connection || !this.#sessionId) return;
-    const candidates = (this.#opts.modelCandidates ?? []).filter(Boolean);
+    const candidates = [
+      this.#opts.model,
+      ...(this.#opts.modelAliases ?? []),
+    ].filter((value): value is string => Boolean(value));
     if (candidates.length === 0) return;
     const available = session.models?.availableModels;
     let plan: AcpModelPlan | undefined;

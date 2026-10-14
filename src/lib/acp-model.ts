@@ -34,6 +34,19 @@ export type AcpConfigOption = {
   options?: Array<{ value?: string }>;
 };
 
+/**
+ * The model request. Both ACP paths take these fields in their options and
+ * pass them through unchanged, so they always decide on the same inputs.
+ */
+export type AcpModelOptions = {
+  /** Public CLI id (`agent --list-models`); also spawned as `agent acp --model`. */
+  model?: string;
+  /** Extra catalog names, typically the `agent --list-models` display name. */
+  modelAliases?: readonly string[];
+  /** Fail when neither the ACP catalog nor the CLI yields a model. */
+  strictModel?: boolean;
+};
+
 export const ACP_CLIENT_CAPABILITIES = {
   fs: { readTextFile: false, writeTextFile: false },
   terminal: false,
