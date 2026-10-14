@@ -373,7 +373,7 @@ export async function handleAnthropicMessages(
   }
   const mediaBlocks = media.blocks;
   const prompt = buildPromptFromAnthropicMessages(
-    cleanMessages,
+    media.items,
     systemWithTools as AnthropicMessagesRequest["system"],
   );
 

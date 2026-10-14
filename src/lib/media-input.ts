@@ -10,7 +10,10 @@ import { request } from "node:https";
 const execFileAsync = promisify(execFile);
 const IMAGE_LIMIT = 10 * 1024 * 1024;
 const VIDEO_LIMIT = 40 * 1024 * 1024;
+/** Images forwarded per request; older media stays a transcript placeholder. */
 const MAX_IMAGES = 12;
+/** Frames sampled per video; each video reserves this many of the image slots. */
+const MAX_VIDEO_FRAMES = 3;
 /** Wall-clock budget for one remote media fetch, redirects included. */
 const FETCH_DEADLINE_MS = 30_000;
 /** Some hosts (e.g. upload.wikimedia.org) answer 403 to requests without a User-Agent. */
@@ -20,7 +23,7 @@ export type AcpPromptBlock =
   | { type: "text"; text: string }
   | { type: "image"; mimeType: string; data: string };
 
-export class MediaInputError extends Error {}
+class MediaInputError extends Error {}
 
 /**
  * Special-purpose ranges that must never be fetched: loopback, private,
@@ -191,7 +194,7 @@ async function videoFrames(data: Buffer, mime: string): Promise<AcpPromptBlock[]
     try {
       await execFileAsync("ffmpeg", ["-nostdin", "-hide_banner", "-loglevel", "error",
         "-protocol_whitelist", "file", "-f", demuxer, "-i", input,
-        "-vf", "fps=1/5:round=up,scale=768:-2:force_original_aspect_ratio=decrease", "-frames:v", "3",
+        "-vf", "fps=1/5:round=up,scale=768:-2:force_original_aspect_ratio=decrease", "-frames:v", String(MAX_VIDEO_FRAMES),
         join(dir, "frame-%02d.jpg")], { timeout: 20_000, maxBuffer: 64 * 1024 });
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
@@ -201,9 +204,9 @@ async function videoFrames(data: Buffer, mime: string): Promise<AcpPromptBlock[]
     }
     const files = (await readdir(dir)).filter((name) => name.startsWith("frame-")).sort();
     if (!files.length) throw new MediaInputError("video has no decodable frames");
-    const blocks: AcpPromptBlock[] = [{ type: "text", text: `[Video: ${files.length} sampled frames, approximately five seconds apart]` }];
-    for (const file of files) blocks.push(imageBlock(await readFile(join(dir, file)), "image/jpeg"));
-    return blocks;
+    const frames: AcpPromptBlock[] = [];
+    for (const file of files) frames.push(imageBlock(await readFile(join(dir, file)), "image/jpeg"));
+    return frames;
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
 
@@ -229,8 +232,14 @@ function warnMediaWithoutAcp(count: number): void {
   );
 }
 
-export type PreparedMedia =
-  | { ok: true; blocks: AcpPromptBlock[] }
+export type PreparedMedia<T> =
+  | {
+      ok: true;
+      /** Blocks to append after the text prompt, each led by its label. */
+      blocks: AcpPromptBlock[];
+      /** The request items with forwarded media replaced by transcript labels. */
+      items: T[];
+    }
   | { ok: false; error: string };
 
 /**
@@ -241,52 +250,132 @@ export type PreparedMedia =
  * logged for the request. A resumed ACP tool session already received its
  * media with the opening prompt, so nothing is fetched or decoded again.
  */
-export async function prepareRequestMedia(
-  items: readonly unknown[],
+export async function prepareRequestMedia<T>(
+  items: readonly T[],
   opts: { useAcp: boolean; resumesToolSession: boolean },
-): Promise<PreparedMedia> {
+): Promise<PreparedMedia<T>> {
   if (!opts.useAcp) {
     const count = items.reduce<number>(
       (total, item) => total + contentParts(item).filter((part) => mediaKind(part)).length,
       0,
     );
     if (count) warnMediaWithoutAcp(count);
-    return { ok: true, blocks: [] };
+    return { ok: true, blocks: [], items: [...items] };
   }
-  if (opts.resumesToolSession) return { ok: true, blocks: [] };
+  if (opts.resumesToolSession) return { ok: true, blocks: [], items: [...items] };
   try {
-    return { ok: true, blocks: await mediaPromptBlocks(items) };
+    return { ok: true, ...(await attachRecentMedia(items)) };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "invalid media input" };
   }
 }
 
-/** Resolve media before invoking Cursor so unsupported media can never return a text-only 200. */
-export async function mediaPromptBlocks(items: readonly unknown[]): Promise<AcpPromptBlock[]> {
-  const result: AcpPromptBlock[] = [];
-  for (const item of items) {
-    for (const part of contentParts(item) as any[]) {
-      const type = mediaKind(part);
-      if (type === "image") {
-        const source = part.image_url ?? part.url ?? part.source;
-        const raw = typeof source === "string" ? source : source?.url ??
-          (source?.type === "base64" && source?.data && source?.media_type
-            ? `data:${source.media_type};base64,${source.data}` : undefined);
-        if (typeof raw !== "string") throw new MediaInputError("image block has no supported source");
-        const media = await loadMedia(raw, IMAGE_LIMIT);
-        result.push(imageBlock(media.data, media.mime));
-      } else if (type === "video") {
-        const source = part.video_url ?? part.url ?? part.source;
-        const raw = typeof source === "string" ? source : source?.url ??
-          (source?.data && source?.media_type ? `data:${source.media_type};base64,${source.data}` : undefined);
-        if (typeof raw !== "string") throw new MediaInputError("video block has no supported source");
-        const media = await loadMedia(raw, VIDEO_LIMIT);
-        result.push(...await videoFrames(media.data, media.mime));
-      }
-      if (result.filter((block) => block.type === "image").length > MAX_IMAGES) {
-        throw new MediaInputError("too many media frames (maximum 12 images)");
-      }
+type MediaRef = { item: number; part: Record<string, any>; kind: MediaKind };
+
+const slotsFor = (kind: MediaKind) => (kind === "video" ? MAX_VIDEO_FRAMES : 1);
+
+/** Responses input items may omit the role; they then count as user messages. */
+function isUserItem(item: unknown): boolean {
+  if (!item || typeof item !== "object") return false;
+  const { role, type } = item as { role?: unknown; type?: unknown };
+  if (typeof role === "string") return role === "user";
+  return type !== "function_call" && type !== "function_call_output";
+}
+
+/**
+ * Forwards the most recent media that fits in MAX_IMAGES image slots, in
+ * conversation order. Clients resend the whole history every turn, so older
+ * media becomes a text placeholder instead of failing the request; only a
+ * latest user message that cannot fit on its own is rejected.
+ *
+ * Every forwarded attachment is numbered. Its block in the prompt is led by
+ * "[Image 3 of 5]" and its spot in the transcript says "[Image 3 of 5
+ * attached below]", so the model can tie an image to the turn it came from.
+ */
+async function attachRecentMedia<T>(
+  items: readonly T[],
+): Promise<{ blocks: AcpPromptBlock[]; items: T[] }> {
+  const refs: MediaRef[] = [];
+  items.forEach((item, index) => {
+    for (const part of contentParts(item)) {
+      const kind = mediaKind(part);
+      if (kind) refs.push({ item: index, part: part as Record<string, any>, kind });
+    }
+  });
+  if (!refs.length) return { blocks: [], items: [...items] };
+
+  let latestUser = -1;
+  items.forEach((item, index) => {
+    if (isUserItem(item)) latestUser = index;
+  });
+  const latestSlots = refs
+    .filter((ref) => ref.item === latestUser)
+    .reduce((total, ref) => total + slotsFor(ref.kind), 0);
+  if (latestSlots > MAX_IMAGES) {
+    throw new MediaInputError(
+      `the latest message has more media than one request can carry (at most ${MAX_IMAGES} images; each video counts as ${MAX_VIDEO_FRAMES})`,
+    );
+  }
+
+  let first = refs.length;
+  let used = 0;
+  while (first > 0 && used + slotsFor(refs[first - 1].kind) <= MAX_IMAGES) {
+    first -= 1;
+    used += slotsFor(refs[first].kind);
+  }
+
+  const placeholders = new Map<unknown, string>();
+  for (const ref of refs.slice(0, first)) {
+    placeholders.set(
+      ref.part,
+      `[Earlier ${ref.kind} not attached: a request carries at most ${MAX_IMAGES} images]`,
+    );
+  }
+  const attached = refs.slice(first);
+  const blocks: AcpPromptBlock[] = [];
+  for (const [index, ref] of attached.entries()) {
+    const label = `${ref.kind === "video" ? "Video" : "Image"} ${index + 1} of ${attached.length}`;
+    placeholders.set(ref.part, `[${label} attached below]`);
+    if (ref.kind === "image") {
+      blocks.push({ type: "text", text: `[${label}]` }, await resolveImage(ref.part));
+    } else {
+      const frames = await resolveVideo(ref.part);
+      blocks.push(
+        { type: "text", text: `[${label}: ${frames.length} sampled frames, approximately five seconds apart]` },
+        ...frames,
+      );
     }
   }
-  return result;
+
+  const rewritten = items.map((item) => {
+    const parts = contentParts(item);
+    if (!parts.some((part) => placeholders.has(part))) return item;
+    return {
+      ...item,
+      content: parts.map((part) => {
+        const text = placeholders.get(part);
+        return text === undefined ? part : { type: "text", text };
+      }),
+    };
+  });
+  return { blocks, items: rewritten };
+}
+
+async function resolveImage(part: Record<string, any>): Promise<AcpPromptBlock> {
+  const source = part.image_url ?? part.url ?? part.source;
+  const raw = typeof source === "string" ? source : source?.url ??
+    (source?.type === "base64" && source?.data && source?.media_type
+      ? `data:${source.media_type};base64,${source.data}` : undefined);
+  if (typeof raw !== "string") throw new MediaInputError("image block has no supported source");
+  const media = await loadMedia(raw, IMAGE_LIMIT);
+  return imageBlock(media.data, media.mime);
+}
+
+async function resolveVideo(part: Record<string, any>): Promise<AcpPromptBlock[]> {
+  const source = part.video_url ?? part.url ?? part.source;
+  const raw = typeof source === "string" ? source : source?.url ??
+    (source?.data && source?.media_type ? `data:${source.media_type};base64,${source.data}` : undefined);
+  if (typeof raw !== "string") throw new MediaInputError("video block has no supported source");
+  const media = await loadMedia(raw, VIDEO_LIMIT);
+  return videoFrames(media.data, media.mime);
 }

@@ -13,7 +13,7 @@ vi.mock("node:child_process", () => ({ execFile: execFileMock }));
 vi.mock("node:dns/promises", () => ({ lookup: lookupMock }));
 vi.mock("node:https", () => ({ request: requestMock }));
 
-import { isPublicAddress, mediaPromptBlocks, MediaInputError } from "./media-input.js";
+import { isPublicAddress, prepareRequestMedia } from "./media-input.js";
 
 const redPng = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR4nO3NMQEAAAjDMMC/ZzDBvlRA01vZJvwHAAAAAAAAAAAAbx2jxAE/i2AjOgAAAABJRU5ErkJggg==";
 
@@ -79,6 +79,15 @@ function serve(onEnd: (req: FakeRequest) => void): FakeRequest[] {
 
 const imagePart = (url: string) => [{ content: [{ type: "image_url", image_url: { url } }] }];
 
+/** Runs the ACP media path and surfaces a rejected request as a thrown error. */
+async function forward(items: unknown[]) {
+  const media = await prepareRequestMedia(items, { useAcp: true, resumesToolSession: false });
+  if (!media.ok) throw new Error(media.error);
+  return media;
+}
+
+const blocksFor = async (items: unknown[]) => (await forward(items)).blocks;
+
 beforeEach(() => {
   execFileMock.mockReset();
   lookupMock.mockReset();
@@ -89,37 +98,44 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("mediaPromptBlocks", () => {
+describe("prepareRequestMedia with ACP", () => {
   it("preserves OpenAI image bytes for ACP instead of reducing them to text", async () => {
-    const blocks = await mediaPromptBlocks([{ role: "user", content: [
+    const media = await forward([{ role: "user", content: [
       { type: "text", text: "What color?" },
       { type: "image_url", image_url: { url: `data:image/png;base64,${redPng}` } },
     ] }]);
-    expect(blocks).toEqual([{ type: "image", mimeType: "image/png", data: redPng }]);
+    expect(media.blocks).toEqual([
+      { type: "text", text: "[Image 1 of 1]" },
+      { type: "image", mimeType: "image/png", data: redPng },
+    ]);
+    expect(media.items).toEqual([{ role: "user", content: [
+      { type: "text", text: "What color?" },
+      { type: "text", text: "[Image 1 of 1 attached below]" },
+    ] }]);
   });
 
   it("accepts Anthropic base64 image blocks", async () => {
-    const blocks = await mediaPromptBlocks([{ role: "user", content: [
+    const blocks = await blocksFor([{ role: "user", content: [
       { type: "image", source: { type: "base64", media_type: "image/png", data: redPng } },
     ] }]);
-    expect(blocks[0]).toMatchObject({ type: "image", mimeType: "image/png", data: redPng });
+    expect(blocks[1]).toMatchObject({ type: "image", mimeType: "image/png", data: redPng });
   });
 
   it("rejects private media URLs before Cursor is invoked", async () => {
-    await expect(mediaPromptBlocks([{ content: [
+    await expect(blocksFor([{ content: [
       { type: "image_url", image_url: { url: "http://127.0.0.1/secret" } },
-    ] }])).rejects.toBeInstanceOf(MediaInputError);
+    ] }])).rejects.toThrow("media URL must be public HTTPS on port 443");
   });
 
   it("does not silently accept missing video media", async () => {
-    await expect(mediaPromptBlocks([{ content: [
+    await expect(blocksFor([{ content: [
       { type: "video_url", video_url: {} },
     ] }])).rejects.toThrow("video block has no supported source");
   });
 
   it("rejects an oversized data URL before decoding it", async () => {
     const huge = "A".repeat(15 * 1024 * 1024);
-    await expect(mediaPromptBlocks(imagePart(`data:image/png;base64,${huge}`)))
+    await expect(blocksFor(imagePart(`data:image/png;base64,${huge}`)))
       .rejects.toThrow("media exceeds size limit");
   });
 });
@@ -153,7 +169,7 @@ describe("remote media fetch", () => {
     "https://169.254.169.254/latest/meta-data/",
     "https://0x7f000001/x.png",
   ])("rejects IP literal %s without DNS or a connection", async (url) => {
-    await expect(mediaPromptBlocks(imagePart(url)))
+    await expect(blocksFor(imagePart(url)))
       .rejects.toThrow("media URL resolves to a non-public address");
     expect(lookupMock).not.toHaveBeenCalled();
     expect(requestMock).not.toHaveBeenCalled();
@@ -164,15 +180,15 @@ describe("remote media fetch", () => {
       { address: "93.184.215.14", family: 4 },
       { address: "10.0.0.1", family: 4 },
     ]);
-    await expect(mediaPromptBlocks(imagePart("https://mixed.example/x.png")))
+    await expect(blocksFor(imagePart("https://mixed.example/x.png")))
       .rejects.toThrow("media URL resolves to a non-public address");
     expect(requestMock).not.toHaveBeenCalled();
   });
 
   it("reports unresolvable hosts as a media error", async () => {
     lookupMock.mockRejectedValue(Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" }));
-    await expect(mediaPromptBlocks(imagePart("https://nope.example/x.png")))
-      .rejects.toThrow(new MediaInputError("media URL host could not be resolved"));
+    await expect(blocksFor(imagePart("https://nope.example/x.png")))
+      .rejects.toThrow("media URL host could not be resolved");
   });
 
   it("pins the validated address and identifies itself with a User-Agent", async () => {
@@ -180,8 +196,8 @@ describe("remote media fetch", () => {
     const requests = serve((req) =>
       req.respond(200, { "content-type": "image/png; charset=binary" }, [Buffer.from(redPng, "base64")]),
     );
-    const blocks = await mediaPromptBlocks(imagePart("https://img.example/red.png"));
-    expect(blocks).toEqual([{ type: "image", mimeType: "image/png", data: redPng }]);
+    const blocks = await blocksFor(imagePart("https://img.example/red.png"));
+    expect(blocks).toEqual([{ type: "text", text: "[Image 1 of 1]" }, { type: "image", mimeType: "image/png", data: redPng }]);
     const { options } = requests[0];
     expect(options.headers["User-Agent"]).toMatch(/cursor-api-proxy/);
     const pinned = vi.fn();
@@ -194,7 +210,7 @@ describe("remote media fetch", () => {
       .mockResolvedValueOnce([{ address: "93.184.215.14", family: 4 }])
       .mockResolvedValueOnce([{ address: "127.0.0.1", family: 4 }]);
     serve((req) => req.respond(302, { location: "https://internal.example/x.png" }));
-    await expect(mediaPromptBlocks(imagePart("https://img.example/red.png")))
+    await expect(blocksFor(imagePart("https://img.example/red.png")))
       .rejects.toThrow("media URL resolves to a non-public address");
     expect(requestMock).toHaveBeenCalledTimes(1);
   });
@@ -204,7 +220,7 @@ describe("remote media fetch", () => {
     serve((req) =>
       req.respond(200, { "content-type": "image/png", "content-length": String(11 * 1024 * 1024) }, [Buffer.alloc(1)]),
     );
-    await expect(mediaPromptBlocks(imagePart("https://img.example/big.png")))
+    await expect(blocksFor(imagePart("https://img.example/big.png")))
       .rejects.toThrow("media exceeds size limit");
   });
 
@@ -212,7 +228,7 @@ describe("remote media fetch", () => {
     lookupMock.mockResolvedValue([{ address: "93.184.215.14", family: 4 }]);
     const chunk = Buffer.alloc(6 * 1024 * 1024);
     const requests = serve((req) => req.respond(200, { "content-type": "image/png" }, [chunk, chunk, chunk]));
-    await expect(mediaPromptBlocks(imagePart("https://img.example/big.png")))
+    await expect(blocksFor(imagePart("https://img.example/big.png")))
       .rejects.toThrow("media exceeds size limit");
     expect(requests[0].destroyed).toBe(true);
   });
@@ -221,7 +237,7 @@ describe("remote media fetch", () => {
     vi.useFakeTimers();
     lookupMock.mockResolvedValue([{ address: "93.184.215.14", family: 4 }]);
     serve((req) => req.respond(200, { "content-type": "image/png" }, [Buffer.alloc(1)], true));
-    const pending = mediaPromptBlocks(imagePart("https://slow.example/drip.png"));
+    const pending = blocksFor(imagePart("https://slow.example/drip.png"));
     const assertion = expect(pending).rejects.toThrow("media download timed out");
     await vi.advanceTimersByTimeAsync(30_000);
     await assertion;
@@ -246,9 +262,9 @@ describe("video frame sampling", () => {
     ["video/webm", "matroska"],
   ])("pins the %s demuxer to %s and keeps ffmpeg off the network", async (mime, demuxer) => {
     ffmpegWritesOneFrame();
-    const blocks = await mediaPromptBlocks(videoPart(mime));
+    const blocks = await blocksFor(videoPart(mime));
     expect(blocks).toEqual([
-      { type: "text", text: "[Video: 1 sampled frames, approximately five seconds apart]" },
+      { type: "text", text: "[Video 1 of 1: 1 sampled frames, approximately five seconds apart]" },
       { type: "image", mimeType: "image/jpeg", data: Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64") },
     ]);
     const [cmd, args] = execFileMock.mock.calls[0] as [string, string[]];
@@ -259,7 +275,7 @@ describe("video frame sampling", () => {
   });
 
   it("rejects video MIME types without a pinned demuxer before running ffmpeg", async () => {
-    await expect(mediaPromptBlocks(videoPart("video/x-msvideo")))
+    await expect(blocksFor(videoPart("video/x-msvideo")))
       .rejects.toThrow("unsupported video MIME type");
     expect(execFileMock).not.toHaveBeenCalled();
   });
@@ -268,7 +284,112 @@ describe("video frame sampling", () => {
     execFileMock.mockImplementation((_cmd: string, _args: string[], _opts: unknown, cb: (error: Error) => void) => {
       cb(Object.assign(new Error("spawn ffmpeg ENOENT"), { code: "ENOENT" }));
     });
-    await expect(mediaPromptBlocks(videoPart("video/mp4")))
+    await expect(blocksFor(videoPart("video/mp4")))
       .rejects.toThrow("video input requires ffmpeg on the proxy host");
+  });
+});
+
+describe("media history cap", () => {
+  /** A data URL whose decoded bytes name the image, so ordering is checkable. */
+  const tagged = (tag: string) => ({
+    type: "image_url",
+    image_url: { url: `data:image/png;base64,${Buffer.from(tag).toString("base64")}` },
+  });
+  const decoded = (blocks: Array<{ type: string; data?: string }>) =>
+    blocks.filter((block) => block.type === "image").map((block) => Buffer.from(block.data!, "base64").toString());
+  const texts = (items: Array<{ content?: unknown }>) =>
+    items.flatMap((item) => (Array.isArray(item.content) ? item.content : []))
+      .filter((part: any) => part.type === "text")
+      .map((part: any) => part.text as string);
+
+  /** Seven user turns with two images each, oldest first; the oldest URL is unfetchable. */
+  const fourteenImageHistory = () => Array.from({ length: 7 }, (_, turn) => [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: `turn ${turn}` },
+        turn === 0
+          ? { type: "image_url", image_url: { url: "https://127.0.0.1/expired.png" } }
+          : tagged(`img-${turn * 2}`),
+        tagged(`img-${turn * 2 + 1}`),
+      ],
+    },
+    { role: "assistant", content: `answer ${turn}` },
+  ]).flat();
+
+  it("forwards only the 12 most recent images and never fetches older ones", async () => {
+    const media = await forward(fourteenImageHistory());
+    expect(decoded(media.blocks)).toEqual(
+      Array.from({ length: 12 }, (_, index) => `img-${index + 2}`),
+    );
+    expect(media.blocks.at(-2)).toEqual({ type: "text", text: "[Image 12 of 12]" });
+    expect(lookupMock).not.toHaveBeenCalled();
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+
+  it("labels the transcript so each attached image maps back to its turn", async () => {
+    const media = await forward(fourteenImageHistory());
+    const labels = texts(media.items as Array<{ content?: unknown }>).filter((text) => text.startsWith("["));
+    expect(labels.slice(0, 2)).toEqual([
+      "[Earlier image not attached: a request carries at most 12 images]",
+      "[Earlier image not attached: a request carries at most 12 images]",
+    ]);
+    expect(labels.slice(2)).toEqual(
+      Array.from({ length: 12 }, (_, index) => `[Image ${index + 1} of 12 attached below]`),
+    );
+    expect(media.items.at(-1)).toEqual({ role: "assistant", content: "answer 6" });
+  });
+
+  it("still rejects a latest message that cannot fit on its own", async () => {
+    const latest = [{ role: "user", content: Array.from({ length: 13 }, (_, index) => tagged(`img-${index}`)) }];
+    await expect(forward(latest)).rejects.toThrow(
+      "the latest message has more media than one request can carry (at most 12 images; each video counts as 3)",
+    );
+  });
+
+  it("counts a video as three images and leaves an older one unattached without decoding it", async () => {
+    const items = [
+      { role: "user", content: [{ type: "video_url", video_url: { url: `data:video/mp4;base64,${Buffer.from("clip").toString("base64")}` } }] },
+      { role: "user", content: Array.from({ length: 10 }, (_, index) => tagged(`img-${index}`)) },
+    ];
+    const media = await forward(items);
+    expect(decoded(media.blocks)).toHaveLength(10);
+    expect(texts(media.items as Array<{ content?: unknown }>)[0]).toBe(
+      "[Earlier video not attached: a request carries at most 12 images]",
+    );
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards a video that fits beside the newer images", async () => {
+    execFileMock.mockImplementation((_cmd: string, args: string[], _opts: unknown, cb: (error: Error | null, out?: unknown) => void) => {
+      for (const frame of ["01", "02", "03"]) {
+        writeFileSync(args[args.length - 1].replace("%02d", frame), Buffer.from(`frame-${frame}`));
+      }
+      cb(null, { stdout: "", stderr: "" });
+    });
+    const items = [
+      { role: "user", content: [{ type: "video_url", video_url: { url: `data:video/mp4;base64,${Buffer.from("clip").toString("base64")}` } }] },
+      { role: "user", content: Array.from({ length: 9 }, (_, index) => tagged(`img-${index}`)) },
+    ];
+    const media = await forward(items);
+    expect(media.blocks[0]).toEqual({
+      type: "text",
+      text: "[Video 1 of 10: 3 sampled frames, approximately five seconds apart]",
+    });
+    expect(decoded(media.blocks)).toHaveLength(12);
+    expect(texts(media.items as Array<{ content?: unknown }>)[0]).toBe("[Video 1 of 10 attached below]");
+  });
+
+  it("leaves items untouched and resolves nothing without ACP", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const items = fourteenImageHistory();
+      const media = await prepareRequestMedia(items, { useAcp: false, resumesToolSession: false });
+      expect(media).toEqual({ ok: true, blocks: [], items });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain("14 image/video part(s)");
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

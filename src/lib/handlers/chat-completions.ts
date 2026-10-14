@@ -316,13 +316,6 @@ export async function handleChatCompletions(
     : body.tool_choice === "none"
       ? undefined
       : toolsToSystemText(body.tools, body.functions);
-  const messagesWithTools = [
-    ...(toolInstruction && structuredToolStart
-      ? [{ role: "system", content: toolInstruction }]
-      : []),
-    ...(toolsText ? [{ role: "system", content: toolsText }] : []),
-    ...cleanMessages,
-  ];
   const resumesToolSession = config.useAcp && submittedToolOutputs.length > 0;
   const media = await prepareRequestMedia(cleanMessages, {
     useAcp: config.useAcp,
@@ -339,6 +332,14 @@ export async function handleChatCompletions(
     return;
   }
   const mediaBlocks = media.blocks;
+  const messagesWithTools = [
+    ...(toolInstruction && structuredToolStart
+      ? [{ role: "system", content: toolInstruction }]
+      : []),
+    ...(toolsText ? [{ role: "system", content: toolsText }] : []),
+    // Forwarded media is replaced by its "[Image n of N attached below]" label.
+    ...media.items,
+  ];
   const prompt = buildPromptFromMessages(messagesWithTools);
 
   const trafficMessages: TrafficMessage[] = cleanMessages.map((m: any) => {

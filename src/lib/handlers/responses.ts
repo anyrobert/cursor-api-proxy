@@ -554,7 +554,6 @@ export async function handleResponses(
   const id = `resp_${randomUUID().replace(/-/g, "")}`;
   const createdAt = Math.floor(Date.now() / 1000);
 
-  const cleanMessages = sanitizeMessages(responsesInputToMessages(body));
   const structuredToolStart =
     config.useAcp &&
     selectedTools.length > 0 &&
@@ -575,13 +574,6 @@ export async function handleResponses(
     : body.tool_choice === "none"
       ? undefined
       : toolsToSystemText(body.tools);
-  const messagesWithTools = [
-    ...(toolInstruction && structuredToolStart
-      ? [{ role: "system", content: toolInstruction }]
-      : []),
-    ...(toolsText ? [{ role: "system", content: toolsText }] : []),
-    ...cleanMessages,
-  ];
   const media = await prepareRequestMedia(
     Array.isArray(body.input) ? body.input : [],
     {
@@ -600,6 +592,19 @@ export async function handleResponses(
     return;
   }
   const mediaBlocks = media.blocks;
+  // Forwarded media is replaced by its "[Image n of N attached below]" label.
+  const cleanMessages = sanitizeMessages(
+    responsesInputToMessages(
+      Array.isArray(body.input) ? { ...body, input: media.items } : body,
+    ),
+  );
+  const messagesWithTools = [
+    ...(toolInstruction && structuredToolStart
+      ? [{ role: "system", content: toolInstruction }]
+      : []),
+    ...(toolsText ? [{ role: "system", content: toolsText }] : []),
+    ...cleanMessages,
+  ];
   const prompt = buildPromptFromMessages(messagesWithTools);
 
   const trafficMessages: TrafficMessage[] = cleanMessages.map((m: any) => ({
