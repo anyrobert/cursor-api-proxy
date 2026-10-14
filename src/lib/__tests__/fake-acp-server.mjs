@@ -45,10 +45,12 @@ const PARAMETER_DEFAULTS = {
 /**
  * "real_catalog" replays a captured Cursor CLI: `--model <public id>` resolves
  * the way the real `session/new` resolved it, unknown ids fail at startup like
- * the CLI does, and set_config_option(model) returns the captured per-family
- * options. FAKE_ACP_CURRENT_MODEL overrides the CLI's pick (e.g. "default").
- * The prompt answer is the JSON selection ({ model, values, calls }) the turn
- * ran with, sent on stdout so it cannot race the JSON-RPC reply.
+ * the CLI does, and FAKE_ACP_CURRENT_MODEL overrides the CLI's pick (e.g.
+ * "default"). Like the CLI, option values are remembered per family:
+ * set_config_option(model) returns what `--model` just resolved for that
+ * family, else the captured per-family options. The prompt answer is the JSON
+ * selection ({ model, values, calls }) the turn ran with, sent on stdout so it
+ * cannot race the JSON-RPC reply.
  */
 const realCatalog =
   scenario === "real_catalog"
@@ -56,6 +58,7 @@ const realCatalog =
         readFileSync(new URL("./acp-real-catalog.json", import.meta.url), "utf8"),
       )
     : undefined;
+const realStored = {};
 let realOptions = [];
 const realCalls = [];
 
@@ -82,7 +85,8 @@ function realConfigOptions() {
 }
 
 function realFamilyOptions(family) {
-  return structuredClone(realCatalog.familyOptions[family] ?? []);
+  realStored[family] ??= structuredClone(realCatalog.familyOptions[family] ?? []);
+  return realStored[family];
 }
 
 function realSessionNew() {
@@ -90,10 +94,10 @@ function realSessionNew() {
   const captured = requested ? realCatalog.sessions[requested] : undefined;
   selectedModel =
     process.env.FAKE_ACP_CURRENT_MODEL ?? captured?.currentModelId ?? "default";
-  realOptions = realFamilyOptions(selectedModel).map((option) => ({
-    ...option,
-    currentValue: captured?.values[option.id] ?? option.currentValue,
-  }));
+  realOptions = realFamilyOptions(selectedModel);
+  for (const option of realOptions) {
+    option.currentValue = captured?.values[option.id] ?? option.currentValue;
+  }
   const sample = structuredClone(realCatalog.sessionNewSample.result);
   return {
     ...sample,

@@ -56,7 +56,11 @@ function aliases(id: string): string[] {
   return [catalog.listModels[id]!];
 }
 
-/** Apply a plan against the captured CLI and return the final selection. */
+/**
+ * Apply a plan against the captured CLI and return the final selection. Like
+ * the real CLI, option values are remembered per family, so re-selecting the
+ * family `--model` resolved returns the values it resolved.
+ */
 async function simulate(
   id: string,
   plan: AcpModelPlan,
@@ -64,12 +68,13 @@ async function simulate(
   const session = realSession(id);
   let model = session.models!.currentModelId!;
   let options = structuredClone(session.configOptions!);
+  const stored: Record<string, AcpConfigOption[]> = { [model]: options };
   const calls: string[] = [];
   await applyAcpModelPlan(plan, session.configOptions!, async (configId, value) => {
     calls.push(`${configId}=${value}`);
     if (configId === "model") {
       model = value;
-      options = structuredClone(catalog.familyOptions[value] ?? []);
+      options = stored[value] ??= structuredClone(catalog.familyOptions[value] ?? []);
     } else {
       options.find((option) => option.id === configId)!.currentValue = value;
     }
@@ -110,7 +115,7 @@ describe("decideAcpModel with the real ACP catalog", () => {
     },
   );
 
-  it("resolves every listed public id to the model the CLI selected", async () => {
+  it("resolves every listed public id to the model and options the CLI selected", async () => {
     const failures: string[] = [];
     for (const id of publicIds) {
       const session = realSession(id);
@@ -129,9 +134,7 @@ describe("decideAcpModel with the real ACP catalog", () => {
         if (final.model !== cliModel) {
           failures.push(`${id}: ${final.model} != ${cliModel}`);
         }
-        for (const configId of final.calls.map((call) => call.split("=")[0]!)) {
-          if (configId === "model") continue;
-          const cli = catalog.sessions[id]!.values[configId];
+        for (const [configId, cli] of Object.entries(catalog.sessions[id]!.values)) {
           if (final.values[configId] !== cli) {
             failures.push(`${id}: ${configId}=${final.values[configId]} != ${cli}`);
           }
@@ -296,12 +299,14 @@ describe("ACP client and tool paths", () => {
     });
   });
 
-  it("re-select the Grok base row and options for cursor-grok-4.6-medium", async () => {
-    expect(await clientPath("cursor-grok-4.6-medium")).toMatchObject({
+  it("re-select the Grok base row for cursor-grok-4.6-medium", async () => {
+    // Matches the live CLI: re-selecting grok-4.6 returns the effort and
+    // fast values `--model` just resolved, so no option call follows.
+    expect(await clientPath("cursor-grok-4.6-medium")).toEqual({
       ok: true,
       model: "grok-4.6",
       values: { effort: "medium", fast: "false" },
-      calls: ["model=grok-4.6", "effort=medium", "fast=false"],
+      calls: ["model=grok-4.6"],
     });
   });
 
