@@ -21,6 +21,8 @@ export type AgentRunResult = {
   code: number;
   stdout: string;
   stderr: string;
+  /** Client-safe failure reason; set by the ACP path (see AcpStreamResult). */
+  error?: string;
 };
 
 function acpArgsWithModel(acpArgs: string[], model: string): string[] {
@@ -178,7 +180,7 @@ export function runAgentStream(
   signal?: AbortSignal,
   modelDisplayName?: string,
   mediaBlocks?: AcpPromptBlock[],
-): Promise<{ code: number; stderr: string }> {
+): Promise<Omit<AgentRunResult, "stdout">> {
   if (mediaBlocks?.length && !config.useAcp) {
     return Promise.reject(new Error("multimodal input requires Cursor ACP mode"));
   }

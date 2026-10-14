@@ -198,7 +198,8 @@ export function appendSessionLine(
 
 /**
  * Log an agent execution error to console and sessions log.
- * Returns the error message for use in API responses.
+ * Returns the message for the API response: `reason` when the proxy knows
+ * why the run failed (never raw CLI stderr), else a generic line.
  */
 export function logAgentError(
   logPath: string,
@@ -207,6 +208,7 @@ export function logAgentError(
   remoteAddress: string,
   exitCode: number,
   stderr: string,
+  reason?: string,
 ): string {
   const errMsg = `Cursor CLI failed (exit ${exitCode}): ${stderr.trim()}`;
   console.error(`[${new Date().toISOString()}] Agent error: ${errMsg}`);
@@ -219,5 +221,8 @@ export function logAgentError(
   } catch {
     /* ignore */
   }
-  return `The Cursor agent process exited with code ${exitCode}. See server logs for details.`;
+  return (
+    reason?.trim() ||
+    `The Cursor agent process exited with code ${exitCode}. See server logs for details.`
+  );
 }

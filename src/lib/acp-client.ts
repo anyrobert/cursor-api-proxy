@@ -40,21 +40,26 @@ export type AcpRunOptions = AcpModelOptions & {
   signal?: AbortSignal;
 };
 
-export type AcpSyncResult = {
+export type AcpStreamResult = {
   code: number;
+  /** Raw CLI stderr plus proxy diagnostics; for server logs only. */
+  stderr: string;
+  /**
+   * Why the proxy aborted the turn (model selection, an ACP JSON-RPC error,
+   * a request timeout). Never raw CLI output, so callers may show it to
+   * clients the way the tool path already does.
+   */
+  error?: string;
+};
+
+export type AcpSyncResult = AcpStreamResult & {
   /** Assistant message text only (never includes agent_thought_chunk). */
   stdout: string;
-  stderr: string;
   /**
    * Concatenated agent_thought_chunk text for this turn.
    * Present when any thought arrived; callers decide drop vs reasoning_content.
    */
   reasoning?: string;
-};
-
-export type AcpStreamResult = {
-  code: number;
-  stderr: string;
 };
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
@@ -361,6 +366,7 @@ export function runAcpSync(
     let stdoutNoise = "";
     let accumulated = "";
     let accumulatedThought = "";
+    let failure: string | undefined;
     let resolved = false;
 
     const onAbort = () => {
@@ -392,6 +398,7 @@ export function runAcpSync(
         code,
         stdout: accumulated.trim(),
         stderr: stderr.trim(),
+        ...(failure ? { error: failure } : {}),
         ...(reasoning ? { reasoning } : {}),
       });
     };
@@ -503,7 +510,8 @@ export function runAcpSync(
         )) as ({ sessionId?: string } & AcpSessionModelState) | undefined;
         const sessionId = sessionResult?.sessionId;
         if (!sessionId) {
-          stderr = appendAcpFailure(stderr, "ACP session/new returned no sessionId");
+          failure = "ACP session/new returned no sessionId";
+          stderr = appendAcpFailure(stderr, failure);
           finish(1);
           return;
         }
@@ -528,6 +536,7 @@ export function runAcpSync(
         }
         finish(0);
       } catch (err) {
+        failure = acpFailureText(err) || undefined;
         stderr = appendAcpFailure(stderr, err);
         if (timeout) clearTimeout(timeout);
         if (!resolved) {
@@ -565,6 +574,7 @@ export function runAcpStream(
 
     let stderr = "";
     let stdoutNoise = "";
+    let failure: string | undefined;
     let resolved = false;
 
     const onAbort = () => {
@@ -591,7 +601,11 @@ export function runAcpStream(
         /* ignore */
       }
       killProcessTree(child, "SIGKILL");
-      resolve({ code, stderr: stderr.trim() });
+      resolve({
+        code,
+        stderr: stderr.trim(),
+        ...(failure ? { error: failure } : {}),
+      });
     };
 
     const timeout =
@@ -694,7 +708,8 @@ export function runAcpStream(
         )) as ({ sessionId?: string } & AcpSessionModelState) | undefined;
         const sessionId = sessionResult?.sessionId;
         if (!sessionId) {
-          stderr = appendAcpFailure(stderr, "ACP session/new returned no sessionId");
+          failure = "ACP session/new returned no sessionId";
+          stderr = appendAcpFailure(stderr, failure);
           finish(1);
           return;
         }
@@ -716,6 +731,7 @@ export function runAcpStream(
         }, pending, requestTimeoutMs);
         finish(0);
       } catch (err) {
+        failure = acpFailureText(err) || undefined;
         stderr = appendAcpFailure(stderr, err);
         if (timeout) clearTimeout(timeout);
         if (!resolved) {

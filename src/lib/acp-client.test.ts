@@ -370,6 +370,9 @@ describe("runAcpSync", () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("no match");
     expect(result.stderr).toContain("glm-5.2-max");
+    expect(result.error).toBe(
+      'ACP model catalog has no match for "glm-5.2-max" (also tried: glm-5.2); the Cursor CLI did not select a model for it either (session model: none)',
+    );
   });
 
   it("sets parameterized family and variant options", async () => {
@@ -446,6 +449,8 @@ describe("runAcpSync", () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("Error: Authentication required.");
     expect(result.stderr).toContain("ACP child exited with code 1");
+    // Raw CLI output stays in the server-side stderr only.
+    expect(result.error).toBeUndefined();
   });
 
   it("surfaces an unavailable reasoning level", async () => {
@@ -638,6 +643,7 @@ describe("runAcpStream", () => {
     }, (t) => chunks.push(t));
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("Internal error");
+    expect(result.error).toBe("Internal error");
   });
 
   it("reports why the child exited before answering (stream)", async () => {
