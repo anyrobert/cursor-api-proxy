@@ -202,6 +202,68 @@ describe.each([false, true])("ACP tool APIs stream=%s", (stream) => {
     expect(JSON.parse(follow.text).output_text).toContain("Tool result: sunny");
   });
 
+  it("reports namespaced Responses calls under their client namespace", async () => {
+    const base = await start("tool_parallel");
+    const search = {
+      type: "function",
+      name: "search",
+      parameters: { type: "object", properties: { query: { type: "string" } } },
+    };
+    const initial = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      stream,
+      input: "Search both",
+      tools: [
+        { type: "namespace", name: "mcp__docs", tools: [search] },
+        { type: "namespace", name: "mcp__wiki", tools: [search] },
+        { type: "web_search" },
+      ],
+    });
+    expect(initial.status).toBe(200);
+    const events = stream ? sseData(initial.text) : [];
+    const payload = stream
+      ? events.find((event) => event.type === "response.completed").response
+      : JSON.parse(initial.text);
+    const calls = payload.output.filter(
+      (item: any) => item.type === "function_call",
+    );
+    expect(
+      calls.map((call: any) => [call.namespace, call.name]).sort(),
+    ).toEqual([
+      ["mcp__docs", "search"],
+      ["mcp__wiki", "search"],
+    ]);
+    if (stream) {
+      const added = events
+        .filter(
+          (event) =>
+            event.type === "response.output_item.added" &&
+            event.item.type === "function_call",
+        )
+        .map((event) => [event.item.namespace, event.item.name])
+        .sort();
+      expect(added).toEqual([
+        ["mcp__docs", "search"],
+        ["mcp__wiki", "search"],
+      ]);
+    }
+
+    const follow = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      stream: false,
+      previous_response_id: payload.id,
+      input: calls.map((call: any) => ({
+        type: "function_call_output",
+        call_id: call.call_id,
+        output: `${call.namespace}-hit`,
+      })),
+    });
+    expect(follow.status).toBe(200);
+    expect(JSON.parse(follow.text).output_text).toContain(
+      "Tool result: mcp__docs-hit, mcp__wiki-hit",
+    );
+  });
+
   it("round-trips Anthropic tool_use blocks", async () => {
     const base = await start();
     const initial = await post(base, "/v1/messages", {

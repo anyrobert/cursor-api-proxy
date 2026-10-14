@@ -1,7 +1,16 @@
+/** A member of a Responses `namespace` tool group, as the client named it. */
+export type NamespacedToolName = {
+  namespace: string;
+  name: string;
+};
+
 export type ClientToolDefinition = {
+  /** Unique name the agent sees; may carry a `<namespace>__` prefix. */
   name: string;
   description?: string;
   inputSchema: Record<string, unknown>;
+  /** Client-side identity of a flattened `namespace` member. */
+  namespaced?: NamespacedToolName;
 };
 
 export type ClientToolOutput = {
@@ -13,8 +22,10 @@ export type ClientToolOutput = {
 export type PendingClientToolCall = {
   callId: string;
   itemId: string;
+  /** Agent-visible tool name (see ClientToolDefinition.name). */
   name: string;
   arguments: string;
+  namespaced?: NamespacedToolName;
 };
 
 export type ResolvedToolChoice = {
@@ -71,13 +82,55 @@ function functionDefinition(
   };
 }
 
+function pushNamespaceMembers(
+  out: ClientToolDefinition[],
+  seen: Set<string>,
+  topLevelNames: ReadonlySet<string>,
+  group: Record<string, unknown>,
+): void {
+  const namespace = typeof group.name === "string" ? group.name.trim() : "";
+  const members = Array.isArray(group.tools) ? group.tools : [];
+  for (const member of members) {
+    const nested = asRecord(member);
+    if (!nested || nested.type !== "function") continue;
+    const definition = functionDefinition(nested);
+    if (!namespace) {
+      pushUnique(out, seen, definition);
+      continue;
+    }
+    const bare = definition.name;
+    if (
+      out.some(
+        (tool) =>
+          tool.namespaced?.namespace === namespace &&
+          tool.namespaced.name === bare,
+      )
+    ) {
+      throw new Error(`Duplicate function tool name: ${namespace}.${bare}`);
+    }
+    pushUnique(out, seen, {
+      ...definition,
+      name:
+        topLevelNames.has(bare) || seen.has(bare)
+          ? `${namespace}__${bare}`
+          : bare,
+      namespaced: { namespace, name: bare },
+    });
+  }
+}
+
 /**
  * Parse OpenAI Chat Completions (`function` wrapper), Responses (flat
  * function), and legacy Chat `functions` definitions.
  *
- * `namespace` groups are flattened into their member functions, with a
- * namespace prefix when the bare name collides. Host-side builtin types
- * (`web_search`) are dropped; the Cursor CLI cannot execute them.
+ * Responses `namespace` groups are flattened into their member functions.
+ * A member keeps its bare name unless a top-level function or an earlier
+ * member already uses it, in which case it becomes `<namespace>__<name>`.
+ * Either way `namespaced` records the client's own (namespace, name) so
+ * calls can be reported back the way the client declared them.
+ *
+ * Host-side builtin types (`web_search`, `file_search`, ...) are dropped;
+ * the agent cannot execute them.
  */
 export function parseOpenAiFunctionTools(
   tools?: readonly unknown[],
@@ -85,28 +138,31 @@ export function parseOpenAiFunctionTools(
 ): ClientToolDefinition[] {
   const out: ClientToolDefinition[] = [];
   const seen = new Set<string>();
-
-  for (const value of tools ?? []) {
+  const records = (tools ?? []).map((value) => {
     const tool = asRecord(value);
     if (!tool) throw new Error("Invalid tool definition");
-    if (tool.type === "namespace") {
-      const namespace = typeof tool.name === "string" ? tool.name : "";
-      const members = Array.isArray(tool.tools) ? tool.tools : [];
-      for (const member of members) {
-        const nested = asRecord(member);
-        if (!nested || nested.type !== "function") continue;
-        const definition = functionDefinition(nested);
-        if (seen.has(definition.name) && namespace) {
-          definition.name = `${namespace}__${definition.name}`;
-        }
-        pushUnique(out, seen, definition);
-      }
-      continue;
+    return tool;
+  });
+
+  // Reserve top-level names up front so a top-level function keeps its bare
+  // name even when a colliding namespace group is listed before it.
+  const topLevelNames = new Set<string>();
+  for (const tool of records) {
+    if (tool.type !== "function") continue;
+    const name = (asRecord(tool.function) ?? tool).name;
+    if (typeof name === "string") topLevelNames.add(name);
+  }
+  for (const value of functions ?? []) {
+    const name = asRecord(value)?.name;
+    if (typeof name === "string") topLevelNames.add(name);
+  }
+
+  for (const tool of records) {
+    if (tool.type === "function") {
+      pushUnique(out, seen, functionDefinition(tool));
+    } else if (tool.type === "namespace") {
+      pushNamespaceMembers(out, seen, topLevelNames, tool);
     }
-    if (tool.type !== "function") {
-      continue;
-    }
-    pushUnique(out, seen, functionDefinition(tool));
   }
 
   for (const value of functions ?? []) {

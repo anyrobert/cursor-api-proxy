@@ -40,6 +40,16 @@ const LOOPBACK_ADDRESSES = new Set([
   "::ffff:127.0.0.1",
 ]);
 
+function pendingView(call: ParkedCall): PendingClientToolCall {
+  return {
+    callId: call.callId,
+    itemId: call.itemId,
+    name: call.name,
+    arguments: call.arguments,
+    ...(call.namespaced ? { namespaced: call.namespaced } : {}),
+  };
+}
+
 function safeTokenEqual(actual: string, expected: string): boolean {
   const a = Buffer.from(actual);
   const b = Buffer.from(expected);
@@ -54,8 +64,7 @@ function safeTokenEqual(actual: string, expected: string): boolean {
 export class ClientToolBridge {
   readonly serverName: string;
 
-  readonly #definitions: ClientToolDefinition[];
-  readonly #definitionNames: Set<string>;
+  readonly #definitions: ReadonlyMap<string, ClientToolDefinition>;
   readonly #token = randomBytes(32).toString("base64url");
   readonly #path = `/mcp/${randomUUID()}`;
   readonly #mcp: Server;
@@ -69,8 +78,7 @@ export class ClientToolBridge {
   #totalCalls = 0;
 
   constructor(definitions: readonly ClientToolDefinition[]) {
-    this.#definitions = [...definitions];
-    this.#definitionNames = new Set(definitions.map((tool) => tool.name));
+    this.#definitions = new Map(definitions.map((tool) => [tool.name, tool]));
     this.serverName = `cursor-api-proxy-${randomUUID().slice(0, 8)}`;
 
     this.#mcp = new Server(
@@ -85,7 +93,7 @@ export class ClientToolBridge {
     this.#mcp.setRequestHandler(ListToolsRequestSchema, async () => {
       this.#listed = true;
       return {
-        tools: this.#definitions.map((tool) => ({
+        tools: [...this.#definitions.values()].map((tool) => ({
           name: tool.name,
           ...(tool.description ? { description: tool.description } : {}),
           inputSchema: tool.inputSchema,
@@ -95,7 +103,8 @@ export class ClientToolBridge {
 
     this.#mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
-      if (!this.#definitionNames.has(name)) {
+      const definition = this.#definitions.get(name);
+      if (!definition) {
         throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${name}`);
       }
       if (this.#closed) {
@@ -121,6 +130,9 @@ export class ClientToolBridge {
           itemId,
           name,
           arguments: argumentsJson,
+          ...(definition.namespaced
+            ? { namespaced: definition.namespaced }
+            : {}),
           exposed: false,
           resolve,
           reject,
@@ -207,25 +219,13 @@ export class ClientToolBridge {
   }
 
   pendingCalls(): PendingClientToolCall[] {
-    return [...this.#pending.values()].map(
-      ({ callId, itemId, name, arguments: args }) => ({
-        callId,
-        itemId,
-        name,
-        arguments: args,
-      }),
-    );
+    return [...this.#pending.values()].map(pendingView);
   }
 
   unexposedCalls(): PendingClientToolCall[] {
     return [...this.#pending.values()]
       .filter((call) => !call.exposed)
-      .map(({ callId, itemId, name, arguments: args }) => ({
-        callId,
-        itemId,
-        name,
-        arguments: args,
-      }));
+      .map(pendingView);
   }
 
   markExposed(callIds: readonly string[]): void {

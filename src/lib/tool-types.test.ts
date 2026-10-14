@@ -88,6 +88,7 @@ describe("tool normalization", () => {
         name: "close_agent",
         description: "Close an agent.",
         inputSchema: { type: "object", properties: { id: {} } },
+        namespaced: { namespace: "multi_agent_v1", name: "close_agent" },
       },
     ]);
   });
@@ -106,11 +107,50 @@ describe("tool normalization", () => {
         tools: [{ type: "function", name: "search" }],
       },
     ]);
-    expect(tools.map((tool) => tool.name)).toEqual([
-      "search",
-      "mcp__docs__search",
-      "mcp__wiki__search",
+    expect(
+      tools.map((tool) => ({ name: tool.name, namespaced: tool.namespaced })),
+    ).toEqual([
+      { name: "search", namespaced: undefined },
+      {
+        name: "mcp__docs__search",
+        namespaced: { namespace: "mcp__docs", name: "search" },
+      },
+      {
+        name: "mcp__wiki__search",
+        namespaced: { namespace: "mcp__wiki", name: "search" },
+      },
     ]);
+  });
+
+  it("keeps a top-level function's bare name when a namespace lists it first", () => {
+    const tools = parseOpenAiFunctionTools([
+      {
+        type: "namespace",
+        name: "mcp__docs",
+        tools: [{ type: "function", name: "search" }],
+      },
+      { type: "function", name: "search" },
+    ]);
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "mcp__docs__search",
+      "search",
+    ]);
+    expect(tools[1].namespaced).toBeUndefined();
+  });
+
+  it("rejects a namespace member declared twice", () => {
+    expect(() =>
+      parseOpenAiFunctionTools([
+        {
+          type: "namespace",
+          name: "mcp__docs",
+          tools: [
+            { type: "function", name: "search" },
+            { type: "function", name: "search" },
+          ],
+        },
+      ]),
+    ).toThrow(/Duplicate function tool name: mcp__docs\.search/);
   });
 
   it("ignores empty or malformed namespace groups", () => {
