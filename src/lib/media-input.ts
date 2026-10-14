@@ -165,7 +165,7 @@ async function loadMedia(raw: string, limit: number): Promise<{ data: Buffer; mi
 }
 
 function imageBlock(data: Buffer, mime: string): AcpPromptBlock {
-  if (!mime.startsWith("image/") || !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(mime)) {
+  if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(mime)) {
     throw new MediaInputError("unsupported image MIME type");
   }
   return { type: "image", mimeType: mime, data: data.toString("base64") };
