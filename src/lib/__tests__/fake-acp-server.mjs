@@ -13,6 +13,8 @@ let selectedModel = "default";
 const parameterValues = {};
 
 const PARAMETERIZED_MODELS = ["default", "glm-5.2", "claude-opus-5", "gpt-5.6-sol", "composer-2.5"];
+const GROK_MODELS = ["default", "grok-4.5", "grok-4.6"];
+const GROK_VARIANT_ROWS = ["default", "grok-4.6", "grok-4.6-medium"];
 const PARAMETER_DEFAULTS = {
   "glm-5.2": {
     reasoning: { current: "high", values: ["high", "max"] },
@@ -27,6 +29,14 @@ const PARAMETER_DEFAULTS = {
     fast: { current: "false", values: ["false", "true"] },
   },
   "composer-2.5": {
+    fast: { current: "true", values: ["false", "true"] },
+  },
+  "grok-4.5": {
+    reasoning: { current: "medium", values: ["low", "medium", "high"] },
+    fast: { current: "true", values: ["false", "true"] },
+  },
+  "grok-4.6": {
+    reasoning: { current: "medium", values: ["low", "medium", "high", "xhigh"] },
     fast: { current: "true", values: ["false", "true"] },
   },
 };
@@ -59,6 +69,30 @@ function sessionNewResult() {
             modelId: "gpt-5.6-sol[reasoning=high]",
             name: "GPT-5.6 Sol High",
           },
+        ],
+      },
+    };
+  }
+  if (scenario === "grok_models") {
+    return {
+      sessionId: "sess-1",
+      models: {
+        availableModels: [
+          { modelId: "default", name: "Auto" },
+          { modelId: "grok-4.5", name: "Grok 4.5" },
+          { modelId: "grok-4.6", name: "Grok 4.6" },
+        ],
+      },
+    };
+  }
+  if (scenario === "grok_variant_rows") {
+    return {
+      sessionId: "sess-1",
+      models: {
+        availableModels: [
+          { modelId: "default", name: "Auto" },
+          { modelId: "grok-4.6", name: "Grok 4.6" },
+          { modelId: "grok-4.6-medium", name: "Grok 4.6 Medium" },
         ],
       },
     };
@@ -261,8 +295,14 @@ async function runBuiltinPermissionPrompt() {
 }
 
 function parameterizedConfigResult(params) {
+  const models =
+    scenario === "grok_models"
+      ? GROK_MODELS
+      : scenario === "grok_variant_rows"
+        ? GROK_VARIANT_ROWS
+        : PARAMETERIZED_MODELS;
   if (params?.configId === "model") {
-    if (!PARAMETERIZED_MODELS.includes(params.value)) {
+    if (!models.includes(params.value)) {
       return {
         error: {
           code: -32602,
@@ -291,7 +331,7 @@ function parameterizedConfigResult(params) {
     {
       id: "model",
       currentValue: selectedModel,
-      options: PARAMETERIZED_MODELS.map((value) => ({ value })),
+      options: models.map((value) => ({ value })),
     },
     ...Object.entries(specs).map(([id, spec]) => ({
       id,
@@ -370,7 +410,11 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "session/set_config_option") {
-    if (scenario === "parameterized_models") {
+    if (
+      scenario === "parameterized_models" ||
+      scenario === "grok_models" ||
+      scenario === "grok_variant_rows"
+    ) {
       const outcome = parameterizedConfigResult(msg.params);
       send({ id: msg.id, ...outcome });
       return;
