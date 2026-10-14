@@ -300,7 +300,7 @@ async function configureAcpModel(
       requested,
     );
     if (strictModel && requested !== "default") {
-      throw new Error(acpModelSelectionError(requested));
+      throw new Error(acpModelSelectionError(requested, plan.candidates));
     }
     return;
   }
@@ -310,6 +310,8 @@ async function configureAcpModel(
     );
     return;
   }
+  // Pass the public CLI id so option-level errors can name both the request
+  // and the matched ACP base row.
   await applyAcpModelPlan(plan, (configId, value) => {
     debugAcp("ACP step: session/set_config_option (%s)", configId);
     return sendRequest(
@@ -320,7 +322,7 @@ async function configureAcpModel(
       pending,
       requestTimeoutMs,
     );
-  });
+  }, requested);
 }
 
 function sendRequest(
