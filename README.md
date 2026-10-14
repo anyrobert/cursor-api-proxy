@@ -119,7 +119,7 @@ For agents that need local context: use client-side tools (`read_file`, `run_ter
 Set `CURSOR_BRIDGE_USE_ACP=true` to receive structured client tool calls. Tool-bearing requests require a Cursor ACP build that advertises HTTP MCP support. The proxy supports:
 
 - Chat Completions `tools` / legacy `functions` → `message.tool_calls`; resume with `role: "tool"` and `tool_call_id`.
-- Responses flat function tools → `function_call` output items; resume with `previous_response_id` and `function_call_output`.
+- Responses flat function tools → `function_call` output items; resume with `previous_response_id` and `function_call_output`, or resend the whole conversation with the `function_call_output` items appended and no `previous_response_id` (Codex CLI does this with `store: false`).
 - Responses `namespace` tool groups (Codex CLI) are flattened for the agent and reported back as the member's bare `name` plus `namespace`. Host-side builtins such as `web_search` are dropped, and `tool_choice: "required"` with no callable tool left returns `400`.
 - Anthropic tools with `input_schema` → `tool_use`; resume with `tool_result`.
 - Sync and streaming output, mixed text plus tools, parallel calls, multiple rounds, named/required/none choices.
@@ -130,6 +130,7 @@ Tool loops are stateful and in-process:
 
 - Keep the same proxy process alive between the call and its result.
 - Submit results before `CURSOR_BRIDGE_TIMEOUT_MS`. Expiration, restart, unknown IDs, or wrong API-key owner return HTTP `409`.
+- Responses requests without `previous_response_id` are matched on `call_id` instead: only the `function_call_output` items after the latest user message resume a parked call, so outputs from finished turns stay history. If none of them is parked (expired, restarted, another API-key owner), the proxy starts a new ACP session from the conversation you sent, which already holds the tool results, instead of returning `409`. Outputs sent with no user message still return `409`. A new user turn also closes any parked call that the conversation has moved past.
 - Parallel results may arrive together or incrementally. The original account/profile and temporary workspace stay attached until the turn finishes.
 - A client disconnect while a turn is active cancels the ACP child and removes temporary state.
 - Responses API objects remain externally `completed` while an internal ACP turn waits for `function_call_output`.
