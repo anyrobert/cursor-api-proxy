@@ -271,7 +271,11 @@ export class AcpToolSession {
       }
       return;
     }
-    await this.#connection.configureSessionModel(this.#sessionId, plan);
+    await this.#connection.configureSessionModel(
+      this.#sessionId,
+      plan,
+      candidates[0],
+    );
   }
 
   #permissionFor(params: AcpPermissionParams): string {

@@ -277,7 +277,15 @@ export class AcpConnection {
     await this.configureSessionModel(sessionId, { action: "set", modelId: value });
   }
 
-  async configureSessionModel(sessionId: string, plan: AcpModelPlan): Promise<void> {
+  /**
+   * `requested` is the public CLI id; when set, option-level failures name
+   * both the request and the matched ACP base row.
+   */
+  async configureSessionModel(
+    sessionId: string,
+    plan: AcpModelPlan,
+    requested?: string,
+  ): Promise<void> {
     await applyAcpModelPlan(plan, async (configId, value) => {
       debugAcp("ACP step: session/set_config_option (%s)", configId);
       return this.request("session/set_config_option", {
@@ -285,7 +293,7 @@ export class AcpConnection {
         configId,
         value,
       });
-    });
+    }, requested);
   }
 
   prompt(

@@ -154,6 +154,29 @@ describe("AcpToolSession", () => {
     );
   });
 
+  it("maps a cursor-prefixed Grok id onto the ACP base row", async () => {
+    const session = createSession("grok_models", undefined, {
+      modelCandidates: ["cursor-grok-4.6-medium", "Grok 4.6 Medium"],
+      strictModel: true,
+    });
+    await session.start("Hello");
+    const result = await session.collect();
+    expect(result.status).toBe("completed");
+    const stderr = result.status === "completed" ? result.stderr : "";
+    expect(stderr).toContain('"configId":"model","value":"grok-4.6"');
+    expect(stderr).toContain('"configId":"fast","value":"false"');
+  });
+
+  it("names the requested public id when an option is not offered", async () => {
+    const session = createSession("grok_models", undefined, {
+      modelCandidates: ["cursor-grok-4.5-xhigh", "Grok 4.5 Extra High"],
+      strictModel: true,
+    });
+    await expect(session.start("Hello")).rejects.toThrow(
+      'Requested public model: cursor-grok-4.5-xhigh; matched ACP base model: grok-4.5; does not offer reasoning "xhigh"',
+    );
+  });
+
   it("expires parked tool turns after the configured TTL", async () => {
     const session = createSession("tool_call", undefined, {
       timeoutMs: 100,
