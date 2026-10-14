@@ -537,4 +537,26 @@ describe("ACP tool session errors", () => {
     expect(noStore.status).toBe(400);
     expect(JSON.parse(noStore.text).error.code).toBe("invalid_store");
   });
+
+  it("rejects tool_choice required when only builtins were sent", async () => {
+    const base = await start();
+    const responses = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      input: "Search",
+      tool_choice: "required",
+      tools: [{ type: "web_search" }],
+    });
+    const chat = await post(base, "/v1/chat/completions", {
+      model: "gpt-4",
+      messages: [{ role: "user", content: "Search" }],
+      tool_choice: "required",
+      tools: [{ type: "web_search" }],
+    });
+    for (const reply of [responses, chat]) {
+      expect(reply.status).toBe(400);
+      const error = JSON.parse(reply.text).error;
+      expect(error.code).toBe("invalid_tools");
+      expect(error.message).toMatch(/no callable function tools/);
+    }
+  });
 });

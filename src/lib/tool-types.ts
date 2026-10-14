@@ -233,6 +233,13 @@ export function resolveToolChoice(
     resolved = [tool];
     instruction = `You must call the ${selected} tool.`;
   } else if (required) {
+    if (tools.length === 0) {
+      throw new Error(
+        `tool_choice "${typeof choice === "string" ? choice : "any"}" requires a tool call, ` +
+          "but the request has no callable function tools " +
+          "(host-side builtins such as web_search are not supported)",
+      );
+    }
     instruction = "You must call at least one available tool.";
   }
 

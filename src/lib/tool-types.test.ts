@@ -189,6 +189,18 @@ describe("tool normalization", () => {
       resolveToolChoice(tools, { type: "tool", name: "missing" }),
     ).toThrow(/Unknown/);
   });
+
+  it("rejects a required tool_choice when no callable tool is left", () => {
+    const builtinsOnly = parseOpenAiFunctionTools([{ type: "web_search" }]);
+    expect(() => resolveToolChoice(builtinsOnly, "required")).toThrow(
+      /tool_choice "required" requires a tool call, but the request has no callable function tools/,
+    );
+    expect(() =>
+      resolveToolChoice([], { type: "any" }, { anthropic: true }),
+    ).toThrow(/tool_choice "any" requires a tool call/);
+    expect(resolveToolChoice(builtinsOnly, "auto").tools).toEqual([]);
+    expect(resolveToolChoice(builtinsOnly, "none").tools).toEqual([]);
+  });
 });
 
 describe("tool output correlation", () => {
