@@ -2,7 +2,8 @@
  * Fake ACP server. Tool scenarios act as an MCP HTTP client so tests exercise
  * the real proxy-owned MCP transport and parked tools/call lifecycle.
  */
-import { closeSync, readFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync } from "node:fs";
+import { devNull } from "node:os";
 import { createInterface } from "node:readline";
 
 const scenario = process.env.FAKE_ACP_SCENARIO || "";
@@ -493,6 +494,10 @@ rl.on("line", (line) => {
       // session/new until the pipe reader is already gone.
       rl.close();
       closeSync(0);
+      // Keep fd 0 taken. Otherwise libuv can reuse it for an internal handle
+      // and abort when closing it ("Assertion failed: (fd > STDERR_FILENO)"
+      // on macOS), so the child dies before the parent ever sees EPIPE.
+      openSync(devNull, "r");
       setTimeout(() => process.exit(1), 200);
     }
     send({
