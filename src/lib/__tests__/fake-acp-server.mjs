@@ -2,7 +2,7 @@
  * Fake ACP server. Tool scenarios act as an MCP HTTP client so tests exercise
  * the real proxy-owned MCP transport and parked tools/call lifecycle.
  */
-import { readFileSync } from "node:fs";
+import { closeSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const scenario = process.env.FAKE_ACP_SCENARIO || "";
@@ -488,6 +488,13 @@ rl.on("line", (line) => {
   }
 
   if (msg.method === "initialize") {
+    if (scenario === "closed_stdin_after_initialize") {
+      // Close before acknowledging initialize, so the parent cannot write
+      // session/new until the pipe reader is already gone.
+      rl.close();
+      closeSync(0);
+      setTimeout(() => process.exit(1), 200);
+    }
     send({
       id: msg.id,
       result: {

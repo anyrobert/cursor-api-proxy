@@ -214,6 +214,11 @@ export class AcpConnection {
       this.#spawnError = error;
       this.#failPending(error);
     });
+    this.child.stdin?.on("error", (error) => {
+      this.#spawnError = error;
+      this.#failPending(error);
+      void this.close();
+    });
     this.child.once("close", (code) => {
       this.#closed = true;
       this.#lineReader.close();

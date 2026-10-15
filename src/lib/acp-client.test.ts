@@ -242,6 +242,18 @@ describe("acpModelSelectionError", () => {
 });
 
 describe("runAcpSync", () => {
+  it("returns an error instead of crashing when the ACP child closes stdin", async () => {
+    const result = await runAcpSync(node, [fakeServerPath], "test prompt", {
+      cwd,
+      timeoutMs: 2000,
+      requestTimeoutMs: 1000,
+      skipAuthenticate: true,
+      env: { FAKE_ACP_SCENARIO: "closed_stdin_after_initialize" },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("EPIPE");
+  });
+
   it("returns stdout content from session/update agent_message_chunk", async () => {
     const resultPromise = runAcpSync(node, [fakeServerPath], "test prompt", {
       cwd,
