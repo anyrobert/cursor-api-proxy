@@ -49,6 +49,11 @@ afterEach(async () => {
 });
 
 describe("AcpToolSession", () => {
+  it("fails a request without crashing the proxy when ACP stdin closes", async () => {
+    const session = createSession("closed_stdin_after_initialize");
+    await expect(session.start("Use weather")).rejects.toThrow(/EPIPE/);
+  });
+
   it("attaches private HTTP MCP and parks tools/call", async () => {
     const session = createSession("tool_call");
     await session.start("Use weather");

@@ -420,6 +420,17 @@ export function runAcpSync(
       { resolve: (value: unknown) => void; reject: (err: Error) => void; timerId?: ReturnType<typeof setTimeout> }
     >();
 
+    // A CLI that exits while an ACP request is being written emits EPIPE on
+    // stdin, not on the ChildProcess. Without this listener Node terminates
+    // the entire proxy instead of failing just the affected request.
+    child.stdin?.on("error", (err: Error) => {
+      if (resolved) return;
+      failure = acpFailureText(err) || undefined;
+      stderr = appendAcpFailure(stderr, err);
+      if (timeout) clearTimeout(timeout);
+      finish(1);
+    });
+
     const rl = readline.createInterface({ input: child.stdout! });
     rl.on("line", (line: string) => {
       try {
@@ -622,6 +633,14 @@ export function runAcpStream(
       number,
       { resolve: (value: unknown) => void; reject: (err: Error) => void; timerId?: ReturnType<typeof setTimeout> }
     >();
+
+    child.stdin?.on("error", (err: Error) => {
+      if (resolved) return;
+      failure = acpFailureText(err) || undefined;
+      stderr = appendAcpFailure(stderr, err);
+      if (timeout) clearTimeout(timeout);
+      finish(1);
+    });
 
     const rl = readline.createInterface({ input: child.stdout! });
     rl.on("line", (line: string) => {
