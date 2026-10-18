@@ -162,6 +162,13 @@ describe("SSE keepalive e2e (CLI stream)", () => {
     expect(status).toBe(200);
     expect(text).toMatch(/: keepalive\r?\n\r?\n/);
     expect(text).toContain("chat.completion.chunk");
+    // OpenAI streaming: first contentful delta announces role=assistant
+    // https://platform.openai.com/docs/guides/streaming-responses
+    expect(text).toContain('"role":"assistant"');
+    const roleIdx = text.indexOf('"role":"assistant"');
+    const contentIdx = text.indexOf('"content":"Hello"');
+    expect(roleIdx).toBeGreaterThanOrEqual(0);
+    expect(contentIdx).toBeGreaterThan(roleIdx);
     expect(text).toContain("data: [DONE]");
   });
 
