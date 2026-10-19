@@ -624,6 +624,21 @@ export async function handleChatCompletions(
     res.on("error", () => {
       /* client disconnected mid-stream */
     });
+    res.write(
+      `data: ${JSON.stringify({
+        id,
+        object: "chat.completion.chunk",
+        created,
+        model: displayModel,
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant", content: "" },
+            finish_reason: null,
+          },
+        ],
+      })}\n\n`,
+    );
 
     if (config.useAcp && typeof promptForAgent === "string") {
       let accumulated = "";
