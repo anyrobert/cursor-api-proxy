@@ -108,6 +108,17 @@ async function postStream(base: string, path: string, body: unknown) {
   };
 }
 
+function chatDeltas(text: string): Record<string, unknown>[] {
+  return text
+    .split(/\r?\n\r?\n/)
+    .filter((event) => event.startsWith("data: {"))
+    .map((event) => JSON.parse(event.slice("data: ".length)))
+    .filter((event) => event.object === "chat.completion.chunk")
+    .map((event) => event.choices[0].delta);
+}
+
+const ASSISTANT_ROLE_DELTA = { role: "assistant", content: "" };
+
 function mockSlowCliStream() {
   vi.mocked(runStreaming).mockImplementation(async (_cmd, _args, opts) => {
     await new Promise((resolve) => setTimeout(resolve, AGENT_SILENCE_MS));
@@ -161,14 +172,26 @@ describe("SSE keepalive e2e (CLI stream)", () => {
     });
     expect(status).toBe(200);
     expect(text).toMatch(/: keepalive\r?\n\r?\n/);
-    expect(text).toContain("chat.completion.chunk");
-    // OpenAI streaming: first contentful delta announces role=assistant
-    // https://platform.openai.com/docs/guides/streaming-responses
-    expect(text).toContain('"role":"assistant"');
-    const roleIdx = text.indexOf('"role":"assistant"');
-    const contentIdx = text.indexOf('"content":"Hello"');
-    expect(roleIdx).toBeGreaterThanOrEqual(0);
-    expect(contentIdx).toBeGreaterThan(roleIdx);
+    expect(chatDeltas(text).slice(0, 2)).toEqual([
+      ASSISTANT_ROLE_DELTA,
+      { content: "Hello" },
+    ]);
+    expect(text).toContain("data: [DONE]");
+  });
+
+  it("opens /v1/chat/completions with the assistant role when the agent emits no text", async () => {
+    vi.mocked(runStreaming).mockImplementationOnce(async (_cmd, _args, opts) => {
+      opts.onLine?.(JSON.stringify({ type: "result", subtype: "success" }));
+      return { code: 0, stderr: "" };
+    });
+    const base = await start(baseConfig());
+    const { status, text } = await postStream(base, "/v1/chat/completions", {
+      model: "claude-3-opus",
+      messages: [{ role: "user", content: "Hi" }],
+      stream: true,
+    });
+    expect(status).toBe(200);
+    expect(chatDeltas(text)).toEqual([ASSISTANT_ROLE_DELTA, {}]);
     expect(text).toContain("data: [DONE]");
   });
 
@@ -222,7 +245,28 @@ describe("SSE keepalive e2e (ACP structured stream)", () => {
     });
     expect(status).toBe(200);
     expect(text).toMatch(/: keepalive\r?\n\r?\n/);
-    expect(text).toContain("Hello from fake ACP");
+    expect(chatDeltas(text).slice(0, 2)).toEqual([
+      ASSISTANT_ROLE_DELTA,
+      { content: "Hello from fake ACP" },
+    ]);
+    expect(text).toContain("data: [DONE]");
+  });
+
+  it("opens ACP chat completions with the assistant role when the agent exits before any text", async () => {
+    const base = await start(
+      baseConfig({
+        useAcp: true,
+        acpEnv: { FAKE_ACP_SCENARIO: "process_exit" },
+      }),
+    );
+    const { status, text } = await postStream(base, "/v1/chat/completions", {
+      model: "gpt-4",
+      messages: [{ role: "user", content: "Hi" }],
+      stream: true,
+    });
+    expect(status).toBe(200);
+    expect(chatDeltas(text)).toEqual([ASSISTANT_ROLE_DELTA]);
+    expect(text).toContain('"code":"cursor_cli_error"');
     expect(text).toContain("data: [DONE]");
   });
 

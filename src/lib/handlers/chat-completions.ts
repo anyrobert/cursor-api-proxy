@@ -624,41 +624,30 @@ export async function handleChatCompletions(
     res.on("error", () => {
       /* client disconnected mid-stream */
     });
+    res.write(
+      `data: ${JSON.stringify({
+        id,
+        object: "chat.completion.chunk",
+        created,
+        model: displayModel,
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant", content: "" },
+            finish_reason: null,
+          },
+        ],
+      })}\n\n`,
+    );
 
     if (config.useAcp && typeof promptForAgent === "string") {
       let accumulated = "";
-      let sentAssistantRole = false;
       runAgentStream(
         config,
         workspaceDir,
         effectiveChatOnly,
         cmdArgs,
         (chunk) => {
-          if (!sentAssistantRole) {
-            sentAssistantRole = true;
-            // OpenAI chat streaming: first delta is a role token, then content.
-            // https://platform.openai.com/docs/guides/streaming-responses
-            // ("When you stream a chat completion... The delta field can hold a
-            // role token, content token, or nothing." — example starts with
-            // { role: 'assistant', content: '', refusal: null })
-            // Schema: ChatCompletionChunk.choices[].delta.role
-            // https://platform.openai.com/docs/api-reference/chat/streaming
-            res.write(
-              `data: ${JSON.stringify({
-                id,
-                object: "chat.completion.chunk",
-                created,
-                model: displayModel,
-                choices: [
-                  {
-                    index: 0,
-                    delta: { role: "assistant", content: "" },
-                    finish_reason: null,
-                  },
-                ],
-              })}\n\n`,
-            );
-          }
           accumulated += chunk;
           res.write(
             `data: ${JSON.stringify({
@@ -768,28 +757,8 @@ export async function handleChatCompletions(
     }
 
     let accumulated = "";
-    let sentAssistantRole = false;
     const parseLine = createStreamParser(
       (text) => {
-        if (!sentAssistantRole) {
-          sentAssistantRole = true;
-          // See OpenAI streaming guide + ChatCompletionChunk.delta.role above.
-          res.write(
-            `data: ${JSON.stringify({
-              id,
-              object: "chat.completion.chunk",
-              created,
-              model: displayModel,
-              choices: [
-                {
-                  index: 0,
-                  delta: { role: "assistant", content: "" },
-                  finish_reason: null,
-                },
-              ],
-            })}\n\n`,
-          );
-        }
         accumulated += text;
         res.write(
           `data: ${JSON.stringify({
