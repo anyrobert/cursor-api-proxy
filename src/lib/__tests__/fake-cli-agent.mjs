@@ -36,6 +36,7 @@ const runs = {
   exit_silent: () => ["", SECRET_STDERR, 1],
   // Cursor's answer once the account's plan is used up (#65).
   plan_limit: () => [answer(["Upgrade your ", "plan to continue"]), "", 0],
+  payment_method: () => [answer(["Add a payment ", "method to continue"]), "", 0],
   plan_limit_stderr: () => ["", "Error: Upgrade your plan to continue\n", 1],
   // Real answers that start like the plan-limit reply.
   upgrade_mention: () => [

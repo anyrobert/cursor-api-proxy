@@ -1,16 +1,20 @@
 /**
- * Cursor's plan limit (#65). Once an account has used up its plan for a
- * model, the agent does not fail: it "answers" with this text and exits 0.
- * It was seen for claude and gpt model ids while grok and composer still
- * answered, so the limit is per model, not per account.
+ * Cursor's plan-limit replies (#65). Once an account may no longer use a
+ * model (its plan is used up, or it needs a payment method), the agent does
+ * not fail: it "answers" with one of these and exits 0. They were seen for
+ * claude and gpt model ids while grok and composer still answered, so the
+ * limit is per model, not per account.
  */
-export const PLAN_LIMIT_REPLY = "Upgrade your plan to continue";
+export const PLAN_LIMIT_REPLIES = [
+  "Upgrade your plan to continue",
+  "Add a payment method to continue",
+] as const;
 
 export const PLAN_LIMIT_CODE = "cursor_plan_limit";
 
 export const PLAN_LIMIT_MESSAGE =
-  `The Cursor account hit its plan limit for this model (Cursor answered "${PLAN_LIMIT_REPLY}"). ` +
-  "Retry later or with another model or account, or upgrade the Cursor plan.";
+  "The Cursor account hit its plan limit for this model: Cursor answered with a plan or billing notice instead of a reply. " +
+  "Retry later or with another model or account, or check the account's Cursor plan and payment method.";
 
 /**
  * How long the account pool rests an account that hit the plan limit. A
@@ -22,32 +26,35 @@ export const PLAN_LIMIT_MESSAGE =
  */
 export const PLAN_LIMIT_PENALTY_MS = 15 * 60_000;
 
-const PHRASE = PLAN_LIMIT_REPLY.toLowerCase();
+const PHRASES = PLAN_LIMIT_REPLIES.map((reply) => reply.toLowerCase());
 
 function normalize(text: string): string {
   return text.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 /**
- * Whether an answer is the plan-limit reply and nothing else (case, spacing
+ * Whether an answer is one plan-limit reply and nothing else (case, spacing
  * and closing punctuation aside). Strict on purpose: an answer that merely
  * mentions upgrading a plan is still an answer.
  */
 export function isPlanLimitReply(text: string): boolean {
   const answer = normalize(text);
-  return (
-    answer.startsWith(PHRASE) && /^[.!]*$/.test(answer.slice(PHRASE.length))
+  return PHRASES.some(
+    (phrase) =>
+      answer.startsWith(phrase) && /^[.!]*$/.test(answer.slice(phrase.length)),
   );
 }
 
-/** Whether diagnostics (CLI stderr, an ACP error) carry the reply anywhere. */
+/** Whether diagnostics (CLI stderr, an ACP error) carry a reply anywhere. */
 export function mentionsPlanLimit(diagnostics: string | undefined): boolean {
-  return !!diagnostics && normalize(diagnostics).includes(PHRASE);
+  if (!diagnostics) return false;
+  const text = normalize(diagnostics);
+  return PHRASES.some((phrase) => text.includes(phrase));
 }
 
 /**
- * Whether a finished run hit the plan limit: its whole answer is the reply,
- * or the run failed or answered nothing and its diagnostics carry it.
+ * Whether a finished run hit the plan limit: its whole answer is a reply,
+ * or the run failed or answered nothing and its diagnostics carry one.
  */
 export function hitPlanLimit(run: {
   text: string;
@@ -68,11 +75,11 @@ export class PlanLimitError extends Error {
 }
 
 /**
- * Holds streamed text back while the answer so far could still become the
- * plan-limit reply, so the reply never reaches a client as content. The
- * first text that rules it out releases everything held, and from then on
- * text passes straight through: one compare of a string no longer than the
- * reply per chunk until then, nothing after.
+ * Holds streamed text back while the answer so far could still become a
+ * plan-limit reply, so no reply reaches a client as content. The first
+ * text that rules them all out releases everything held, and from then on
+ * text passes straight through: a compare per reply of a string no longer
+ * than the replies per chunk until then, nothing after.
  */
 export class PlanLimitHoldback {
   #held = "";
@@ -93,13 +100,16 @@ export class PlanLimitHoldback {
     return held;
   }
 
-  /** Whether everything pushed so far, none of it shown, is the reply. */
+  /** Whether everything pushed so far, none of it shown, is a reply. */
   get heldReply(): boolean {
     return !this.#released && isPlanLimitReply(this.#held);
   }
 
   #couldBeReply(): boolean {
     const sofar = this.#held.replace(/\s+/g, " ").trimStart().toLowerCase();
-    return PHRASE.startsWith(sofar) || isPlanLimitReply(sofar);
+    return (
+      PHRASES.some((phrase) => phrase.startsWith(sofar)) ||
+      isPlanLimitReply(sofar)
+    );
   }
 }

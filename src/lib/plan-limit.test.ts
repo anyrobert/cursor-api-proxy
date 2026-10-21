@@ -13,6 +13,8 @@ describe("isPlanLimitReply", () => {
     "Upgrade your plan to continue.",
     "Upgrade your plan to continue!",
     "  upgrade YOUR plan\nto   continue \n",
+    "Add a payment method to continue",
+    "add a PAYMENT method  to continue.\n",
   ])("matches the whole reply %j", (text) => {
     expect(isPlanLimitReply(text)).toBe(true);
   });
@@ -26,6 +28,9 @@ describe("isPlanLimitReply", () => {
     'Your paywall should say "Upgrade your plan to continue".',
     "Upgrade your plan to continue?",
     "Upgrade your plan to continue...!?",
+    "Add a payment method",
+    "Add a payment method to continue checkout in your Stripe form.",
+    "To fix the checkout, add a payment method to continue.",
   ])("leaves the answer %j alone", (text) => {
     expect(isPlanLimitReply(text)).toBe(false);
   });
@@ -35,6 +40,7 @@ describe("mentionsPlanLimit", () => {
   it("finds the reply anywhere in diagnostics", () => {
     expect(mentionsPlanLimit("Internal error: Upgrade your plan to continue")).toBe(true);
     expect(mentionsPlanLimit("error: UPGRADE YOUR PLAN\nTO CONTINUE")).toBe(true);
+    expect(mentionsPlanLimit("Internal error: Add a payment method to continue")).toBe(true);
   });
 
   it("ignores other diagnostics", () => {
@@ -75,11 +81,27 @@ function stream(holdback: PlanLimitHoldback, chunks: string[]): string[] {
 }
 
 describe("PlanLimitHoldback", () => {
-  it("shows nothing of the reply, however it is split", () => {
-    const reply = "Upgrade your plan to continue.";
-    const holdback = new PlanLimitHoldback();
-    expect(stream(holdback, [...reply]).join("")).toBe("");
-    expect(holdback.heldReply).toBe(true);
+  it.each(["Upgrade your plan to continue.", "Add a payment method to continue"])(
+    "shows nothing of %j, however it is split",
+    (reply) => {
+      const holdback = new PlanLimitHoldback();
+      expect(stream(holdback, [...reply]).join("")).toBe("");
+      expect(holdback.heldReply).toBe(true);
+    },
+  );
+
+  it("holds a reply split across chunks and releases a near-miss", () => {
+    const reply = new PlanLimitHoldback();
+    expect(stream(reply, ["Add a pay", "ment method ", "to continue"])).toEqual(["", "", ""]);
+    expect(reply.heldReply).toBe(true);
+
+    const nearMiss = new PlanLimitHoldback();
+    expect(stream(nearMiss, ["Add a pay", "ment method ", "in Settings"])).toEqual([
+      "",
+      "",
+      "Add a payment method in Settings",
+    ]);
+    expect(nearMiss.heldReply).toBe(false);
   });
 
   it("releases the held text as soon as the answer rules the reply out", () => {

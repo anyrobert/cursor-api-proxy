@@ -466,8 +466,13 @@ function expectPlanLimitStream(api: Api, text: string): void {
 }
 
 describe("Cursor plan limit, CLI mode (#65)", () => {
-  it.each(APIS)("%s answers 429 cursor_plan_limit instead of the reply", async (api) => {
-    vi.stubEnv("FAKE_CLI_SCENARIO", "plan_limit");
+  // Each fake CLI scenario answers with one of Cursor's plan-limit replies.
+  const REPLY_CASES = APIS.flatMap((api) =>
+    (["plan_limit", "payment_method"] as const).map((scenario) => [api, scenario] as const),
+  );
+
+  it.each(REPLY_CASES)("%s answers 429 cursor_plan_limit instead of the %s reply", async (api, scenario) => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", scenario);
     const base = await start();
     const [path, body] = PLAIN_REQUESTS[api];
     const { status, text } = await post(base, path, body);
@@ -478,8 +483,8 @@ describe("Cursor plan limit, CLI mode (#65)", () => {
     );
   });
 
-  it.each(APIS)("%s stream holds the reply back and ends with the error", async (api) => {
-    vi.stubEnv("FAKE_CLI_SCENARIO", "plan_limit");
+  it.each(REPLY_CASES)("%s stream holds the %s reply back and ends with the error", async (api, scenario) => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", scenario);
     const base = await start();
     const [path, body] = PLAIN_REQUESTS[api];
     const { status, text } = await post(base, path, { ...body, stream: true });
