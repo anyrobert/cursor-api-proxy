@@ -56,11 +56,12 @@ const OUT_OF_PLAN_ERRORS = [
 ];
 
 /**
- * An ActionRequiredError line about money or the plan. Other user actions
- * (log in, say) raise the same error class, so the line must say which.
+ * An ActionRequiredError line about money. Other user actions (log in,
+ * approve a plan in plan mode, say) raise the same error class, so the line
+ * must say which; "plan" alone is too broad for that.
  */
 const ACTION_REQUIRED_PLAN =
-  /ActionRequiredError:.*\b(balance|credits?|plan|payment|billing)\b/i;
+  /ActionRequiredError:.*\b(balance|credits?|payment|billing)\b/i;
 
 /**
  * Whether diagnostics (CLI stderr, an ACP error) carry a plan-limit reply

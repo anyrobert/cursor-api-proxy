@@ -69,6 +69,7 @@ describe("mentionsPlanLimit", () => {
   it.each([
     "ActionRequiredError: Please log in to continue (run `agent login`)",
     "ActionRequiredError: Accept the new terms of service",
+    "ActionRequiredError: Approve the plan before the agent continues",
     // The keywords outside the ActionRequiredError line do not count.
     "ActionRequiredError: Please log in\nYour plan: Pro",
     "Error: credits endpoint unreachable",
