@@ -18,6 +18,8 @@ import { startBridgeServer } from "./server.js";
 
 // Issue #94: every /v1/responses streaming event carries `sequence_number`,
 // 0 for the first event of a response and one more for each event after it.
+// Issue #103: `output_text` events and content parts carry the fields the
+// OpenAI types require, `logprobs` and `annotations`, as empty lists.
 
 vi.mock("./cursor-cli.js", () => ({
   listCursorCliModels: vi.fn().mockResolvedValue([{ id: "gpt-4", name: "gpt-4" }]),
@@ -383,4 +385,92 @@ describe("Responses stream sequence numbers (#94)", () => {
       },
     );
   });
+});
+
+/** An `output_text` content part with no citations or log probabilities. */
+const outputTextPart = (text: unknown = expect.any(String)) => ({
+  type: "output_text",
+  text,
+  annotations: [],
+  logprobs: [],
+});
+
+/** The output_text parts of a response's message items. */
+function messageParts(response: any): any[] {
+  return response.output
+    .filter((item: any) => item.type === "message")
+    .flatMap((item: any) => item.content);
+}
+
+/**
+ * Asserts the output_text fields of a text stream: `logprobs` on every
+ * delta and done event, and both lists on every output_text part the
+ * stream announces, closes or completes with.
+ */
+function expectOutputTextFields(events: any[]): void {
+  const deltas = events.filter((e) => e.type === "response.output_text.delta");
+  const done = events.filter((e) => e.type === "response.output_text.done");
+  expect(deltas.length).toBeGreaterThan(0);
+  expect(done).toHaveLength(1);
+  for (const event of [...deltas, ...done]) {
+    expect(event.logprobs).toEqual([]);
+  }
+  const { text } = done[0];
+  expect(text).not.toBe("");
+
+  const partEvents = events.filter((e) => e.type.startsWith("response.content_part."));
+  expect(partEvents.map((event) => event.part)).toEqual([
+    outputTextPart(""),
+    outputTextPart(text),
+  ]);
+  const itemDone = events.find(
+    (e) => e.type === "response.output_item.done" && e.item.type === "message",
+  );
+  expect(itemDone.item.content).toEqual([outputTextPart(text)]);
+  expect(messageParts(completedResponse(events))).toEqual([outputTextPart(text)]);
+}
+
+describe("Responses output_text fields (#103)", () => {
+  it("fills them on a CLI agent's text stream", async () => {
+    const text = await streamResponse(await start(), { input: "Hi" });
+    expectOutputTextFields(sequencedEvents(text));
+  });
+
+  it("fills them on an ACP agent's text stream", async () => {
+    const text = await streamResponse(await startAcp(), { input: "Hi" });
+    expectOutputTextFields(sequencedEvents(text));
+  });
+
+  it("fills them on an ACP tool turn's text before its call", async () => {
+    const base = await startAcp("tool_call");
+    const text = await streamResponse(base, {
+      input: "Use the tools",
+      tools: [weatherTool],
+    });
+    expectOutputTextFields(sequencedEvents(text));
+  });
+
+  it.each<[string, Partial<BridgeConfig>, Record<string, unknown>]>([
+    ["a CLI agent's", {}, {}],
+    ["an ACP agent's", { useAcp: true }, {}],
+    [
+      "an ACP tool turn's",
+      { useAcp: true, acpEnv: { FAKE_ACP_SCENARIO: "tool_call" } },
+      { tools: [weatherTool] },
+    ],
+  ])(
+    "fills them on %s non-streamed response",
+    async (_kind, overrides, request) => {
+      const base = await start(overrides);
+      const response = await fetch(`${base}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-4", input: "Hi", ...request }),
+      });
+      expect(response.status).toBe(200);
+      const body: any = await response.json();
+      expect(messageParts(body)).toEqual([outputTextPart(body.output_text)]);
+      expect(body.output_text).not.toBe("");
+    },
+  );
 });

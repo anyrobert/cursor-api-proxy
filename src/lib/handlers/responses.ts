@@ -225,6 +225,15 @@ async function classifyTranscriptTurn(
   return { kind: turnOutputs.length > 0 ? "rebuild" : "new" };
 }
 
+/**
+ * An `output_text` content part. The agent reports no citations or token
+ * log probabilities, so both lists are empty rather than missing, which
+ * clients that parse OpenAI's types expect (#103).
+ */
+function outputTextPart(text: string) {
+  return { type: "output_text", text, annotations: [], logprobs: [] };
+}
+
 function structuredResponseObject(opts: {
   body: OpenAiResponsesRequest;
   id: string;
@@ -242,13 +251,7 @@ function structuredResponseObject(opts: {
       type: "message",
       status: "completed",
       role: "assistant",
-      content: [
-        {
-          type: "output_text",
-          text: opts.result.text,
-          annotations: [],
-        },
-      ],
+      content: [outputTextPart(opts.result.text)],
     });
   }
   if (opts.result.status === "tool_calls") {
@@ -357,7 +360,7 @@ async function writeStructuredResponseTurn(
           item_id: messageId,
           output_index: 0,
           content_index: 0,
-          part: { type: "output_text", text: "", annotations: [] },
+          part: outputTextPart(""),
         });
       }
       emittedText += text;
@@ -367,6 +370,7 @@ async function writeStructuredResponseTurn(
         output_index: 0,
         content_index: 0,
         delta: text,
+        logprobs: [],
       });
     };
     const result = await opts.run((event) => {
@@ -383,13 +387,14 @@ async function writeStructuredResponseTurn(
         output_index: 0,
         content_index: 0,
         text: result.text,
+        logprobs: [],
       });
       events.write("response.content_part.done", {
         response_id: opts.id,
         item_id: messageId,
         output_index: 0,
         content_index: 0,
-        part: { type: "output_text", text: result.text, annotations: [] },
+        part: outputTextPart(result.text),
       });
       events.write("response.output_item.done", {
         response_id: opts.id,
@@ -399,9 +404,7 @@ async function writeStructuredResponseTurn(
           type: "message",
           status: "completed",
           role: "assistant",
-          content: [
-            { type: "output_text", text: result.text, annotations: [] },
-          ],
+          content: [outputTextPart(result.text)],
         },
       });
     }
@@ -509,13 +512,7 @@ function createOutputItem(itemId: string, status: ResponseStatus, text: string) 
     type: "message",
     status,
     role: "assistant",
-    content: [
-      {
-        type: "output_text",
-        text,
-        annotations: [],
-      },
-    ],
+    content: [outputTextPart(text)],
   };
 }
 
@@ -1072,7 +1069,7 @@ export async function handleResponses(
         item_id: itemId,
         output_index: 0,
         content_index: 0,
-        part: { type: "output_text", text: "", annotations: [] },
+        part: outputTextPart(""),
       });
     };
     await streamPlainTurn(
@@ -1100,6 +1097,7 @@ export async function handleResponses(
             output_index: 0,
             content_index: 0,
             delta,
+            logprobs: [],
           });
         },
         complete: (text) => {
@@ -1111,6 +1109,7 @@ export async function handleResponses(
             output_index: 0,
             content_index: 0,
             text,
+            logprobs: [],
           });
           events.write("response.content_part.done", {
             response_id: id,
