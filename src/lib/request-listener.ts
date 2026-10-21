@@ -89,6 +89,26 @@ function describeThrown(error: unknown): {
   return { failure: INTERNAL_FAILURE, detail: String(error) };
 }
 
+/**
+ * The failure for a model API body that is not JSON, which makes the
+ * handler throw on its first line. That is the client's mistake, so it gets
+ * a 400 with the parser's reason, which quotes only the body. The listener
+ * checks this only after a handler threw, so a good body is parsed once.
+ */
+function invalidJsonBody(rawBody: string): AgentFailure | undefined {
+  try {
+    JSON.parse(rawBody || "{}");
+    return undefined;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      status: 400,
+      code: "invalid_json",
+      message: `Could not parse the request body as JSON: ${reason}`,
+    };
+  }
+}
+
 export function createRequestListener(
   opts: BridgeServerOptions,
   runtime: BridgeRequestRuntime,
@@ -113,6 +133,7 @@ export function createRequestListener(
     const method = req.method ?? "?";
     const pathname = url.pathname;
     const api = method === "POST" ? MODEL_APIS.get(pathname) : undefined;
+    let rawBody: string | undefined;
 
     // Skip request logging for the admin dashboard's own traffic
     // (status/log/stats polls, asset loads, control actions). These are
@@ -171,8 +192,8 @@ export function createRequestListener(
       }
 
       if (api) {
-        const raw = await readBody(req);
-        await api.handle(req, res, apiCtx, raw, method, pathname, remoteAddress);
+        rawBody = await readBody(req);
+        await api.handle(req, res, apiCtx, rawBody, method, pathname, remoteAddress);
         return;
       }
 
@@ -198,19 +219,23 @@ export function createRequestListener(
         json(res, 404, { error: { message: "Not found", code: "not_found" } });
       }
     } catch (err) {
-      const { failure, detail, stack } = describeThrown(err);
-      console.error(
-        `[${new Date().toISOString()}] Proxy error (${failure.code}): ${detail}`,
-      );
-      if (stack) console.error(stack);
-      appendSessionError(
-        config.sessionsLogPath,
-        method,
-        pathname,
-        remoteAddress,
-        failure.code,
-        detail,
-      );
+      let failure = rawBody === undefined ? undefined : invalidJsonBody(rawBody);
+      if (!failure) {
+        const thrown = describeThrown(err);
+        failure = thrown.failure;
+        console.error(
+          `[${new Date().toISOString()}] Proxy error (${failure.code}): ${thrown.detail}`,
+        );
+        if (thrown.stack) console.error(thrown.stack);
+        appendSessionError(
+          config.sessionsLogPath,
+          method,
+          pathname,
+          remoteAddress,
+          failure.code,
+          thrown.detail,
+        );
+      }
       if (!res.headersSent) {
         const errorBody = api?.errorBody ?? proxyErrorBody;
         json(res, failure.status, errorBody(failure));

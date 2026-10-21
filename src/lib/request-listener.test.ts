@@ -101,12 +101,14 @@ const API_REQUESTS = {
 
 type Api = keyof typeof API_REQUESTS;
 
-/** The body each API's clients parse, for a 500 with `code` and `message`. */
-function serverErrorBody(api: Api, code: string, message: string) {
+/** The error body each API's clients parse, for a 400 or a 500. */
+function errorBody(api: Api, status: 400 | 500, code: string, message: unknown) {
   if (api === "anthropic") {
-    return { type: "error", error: { type: "api_error", message, code } };
+    const type = status === 400 ? "invalid_request_error" : "api_error";
+    return { type: "error", error: { type, message, code } };
   }
-  return { error: { message, type: "server_error", param: null, code } };
+  const type = status === 400 ? "invalid_request_error" : "server_error";
+  return { error: { message, type, param: null, code } };
 }
 
 async function post(
@@ -147,7 +149,7 @@ describe("model check that fails", () => {
 
         expect(status).toBe(500);
         expect(JSON.parse(text)).toEqual(
-          serverErrorBody(api, "cursor_cli_error", MODEL_CHECK_FAILED),
+          errorBody(api, 500, "cursor_cli_error", MODEL_CHECK_FAILED),
         );
         expect(text).not.toContain(workDir);
         expect(text).not.toContain("secret-models-detail");
@@ -192,7 +194,7 @@ describe("model check that fails", () => {
 
     expect(status).toBe(500);
     expect(JSON.parse(text)).toEqual(
-      serverErrorBody("anthropic", "cursor_cli_error", MODEL_CHECK_FAILED),
+      errorBody("anthropic", 500, "cursor_cli_error", MODEL_CHECK_FAILED),
     );
     expect(text).not.toContain(workDir);
     expect(consoleErrors()).toContain(missing);
@@ -222,10 +224,36 @@ describe("agent that cannot be started on a sync turn", () => {
       const { status, text } = await post(base, api);
 
       expect(status).toBe(500);
-      expect(JSON.parse(text)).toEqual(serverErrorBody(api, "internal_error", INTERNAL));
+      expect(JSON.parse(text)).toEqual(errorBody(api, 500, "internal_error", INTERNAL));
       expect(text).not.toContain(workDir);
       expect(consoleErrors()).toContain(missingAcp);
       expect(sessionsLogText()).toContain(" internal_error ");
+    },
+  );
+});
+
+describe("model API body that is not JSON", () => {
+  it.each(["chat", "responses", "anthropic"] as const)(
+    "%s answers 400 invalid_json in the API's shape",
+    async (api) => {
+      const base = await start({ agentBin: join(workDir, "no-such-agent") });
+      const [path] = API_REQUESTS[api];
+      const response = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: '{"model": "auto",',
+      });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual(
+        errorBody(
+          api,
+          400,
+          "invalid_json",
+          expect.stringMatching(/^Could not parse the request body as JSON: \S/),
+        ),
+      );
+      expect(consoleErrors()).not.toContain("Proxy error");
     },
   );
 });
