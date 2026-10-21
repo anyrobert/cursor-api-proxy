@@ -109,6 +109,24 @@ describe("AcpToolSession", () => {
     expect(session.bridge.totalCalls).toBe(1);
   });
 
+  it("tells the agent to use the caller's tools, not its own (#68)", async () => {
+    const session = createSession("echo_prompt", undefined, {
+      args: [fakeMcpClientAgentPath],
+      env: { FAKE_ACP_MCP_SCENARIO: "echo_prompt" },
+    });
+    await session.start("User: run `echo first_turn_ok`\n\nAssistant:");
+    const result = await session.collect();
+    expect(result.status).toBe("completed");
+    expect(result.text).toMatch(
+      new RegExp(
+        `^Tool use: .*the MCP server "${session.bridge.serverName}" \\(weather\\)\\..*built-in tools .* disabled`,
+      ),
+    );
+    expect(result.text).toMatch(
+      /do not call them\.\n\nUser: run `echo first_turn_ok`\n\nAssistant:$/,
+    );
+  });
+
   it("batches parallel tool calls", async () => {
     const session = createSession("tool_parallel", [
       {

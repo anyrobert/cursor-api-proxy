@@ -2,6 +2,7 @@
  * Fake Cursor ACP agent whose tool calls go through the MCP SDK client, the
  * client the real agent bundles, so tests get its real timeout and
  * notifications/cancelled behaviour. FAKE_ACP_MCP_SCENARIO picks the turn:
+ * - "echo_prompt": answers with the prompt text it was sent
  * - "retry_on_timeout": calls the first tool with a FAKE_ACP_MCP_TIMEOUT_MS
  *   MCP timeout and, like the model does, retries the same call after each
  *   timeout; answers "Tool result: <output> (attempt <n>)"
@@ -79,7 +80,11 @@ async function retryOnTimeout() {
   throw new Error(`Tool call timed out ${MAX_ATTEMPTS} times`);
 }
 
-async function runPrompt() {
+async function runPrompt(params) {
+  if (scenario === "echo_prompt") {
+    say(params?.prompt?.[0]?.text ?? "");
+    return;
+  }
   if (scenario === "retry_on_timeout") {
     await retryOnTimeout();
     return;
@@ -106,7 +111,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     return;
   }
   if (msg.method === "session/prompt") {
-    runPrompt().then(
+    runPrompt(msg.params).then(
       () => send({ id: msg.id, result: { stopReason: "end_turn" } }),
       (error) =>
         send({
