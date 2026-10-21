@@ -400,6 +400,40 @@ async function runBuiltinPermissionPrompt() {
   update("agent_message_chunk", { content: { text: "Builtin handled" } });
 }
 
+/**
+ * Ask the documented cursor/* blocking requests. The answer text is the JSON
+ * of each reply, sent on stdout so it cannot race the JSON-RPC reply.
+ */
+async function runCursorExtensionsPrompt() {
+  const requests = [
+    [
+      "cursor/ask_question",
+      {
+        toolCallId: "ask-1",
+        questions: [
+          {
+            id: "q1",
+            prompt: "Which?",
+            options: [
+              { id: "a", label: "A" },
+              { id: "b", label: "B" },
+            ],
+          },
+        ],
+      },
+    ],
+    [
+      "cursor/create_plan",
+      { toolCallId: "plan-1", plan: "# Plan", todos: [] },
+    ],
+  ];
+  const answers = {};
+  for (const [method, params] of requests) {
+    answers[method] = await askClient(method, params);
+  }
+  update("agent_message_chunk", { content: { text: JSON.stringify(answers) } });
+}
+
 function parameterizedConfigResult(params) {
   const models =
     scenario === "grok_models"
@@ -452,6 +486,20 @@ function isToolScenario() {
   return scenario.startsWith("tool_");
 }
 
+/**
+ * Fail like a CLI that rejects its flags or login: plain text on stdout and
+ * stderr, exit 1, no JSON-RPC reply. Exit only once both writes flushed.
+ */
+function failStartup() {
+  let unflushed = 2;
+  const exit = () => {
+    unflushed -= 1;
+    if (unflushed === 0) process.exit(1);
+  };
+  process.stdout.write("Error: Authentication required.\n", exit);
+  process.stderr.write("agent: unknown option '--bogus-flag'\n", exit);
+}
+
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   let msg;
@@ -489,6 +537,10 @@ rl.on("line", (line) => {
   }
 
   if (msg.method === "initialize") {
+    if (scenario === "start_failure") {
+      failStartup();
+      return;
+    }
     if (scenario === "closed_stdin_after_initialize") {
       // Close before acknowledging initialize, so the parent cannot write
       // session/new until the pipe reader is already gone.
@@ -557,11 +609,17 @@ rl.on("line", (line) => {
       setTimeout(() => process.exit(7), 10);
       return;
     }
+    if (scenario === "hang_prompt") {
+      // Never answer, so the caller's abort or overall timeout ends the turn.
+      return;
+    }
     const operation = isToolScenario()
       ? runToolPrompt(msg.params)
       : scenario === "builtin_permission"
         ? runBuiltinPermissionPrompt()
-        : Promise.resolve().then(async () => {
+        : scenario === "cursor_extensions"
+          ? runCursorExtensionsPrompt()
+          : Promise.resolve().then(async () => {
             if (scenario === "with_thought") {
               update("agent_thought_chunk", {
                 content: { text: "SECRET_THOUGHT" },
