@@ -67,7 +67,13 @@ export function toolSessionOwnerKey(
 export class ToolSessionRegistry {
   readonly #records = new Set<ToolSessionRecord>();
   readonly #byResponseId = new Map<string, ToolSessionRecord>();
-  #closePromise?: Promise<void>;
+  /**
+   * Every session handed to the registry until its teardown has finished,
+   * with that teardown once it has started. It outlives the record, so
+   * shutdown also waits for sessions a handler or TTL is still closing (#90).
+   */
+  readonly #sessions = new Map<AcpToolSession, Promise<void> | undefined>();
+  #shutDown = false;
 
   createRecord(opts: {
     api: ToolApi;
@@ -77,6 +83,14 @@ export class ToolSessionRegistry {
     session: AcpToolSession;
   }): ToolSessionRecord {
     this.#sweep();
+    if (this.#shutDown) {
+      void this.#close(opts.session);
+      throw new ToolSessionError(
+        "The proxy is shutting down",
+        503,
+        "server_shutting_down",
+      );
+    }
     const ownerCount = [...this.#records].filter(
       (record) => record.ownerKey === opts.ownerKey,
     ).length;
@@ -84,7 +98,7 @@ export class ToolSessionRegistry {
       this.#records.size >= MAX_GLOBAL_TOOL_SESSIONS ||
       ownerCount >= MAX_OWNER_TOOL_SESSIONS
     ) {
-      void opts.session.close();
+      void this.#close(opts.session);
       throw new ToolSessionError(
         "Too many parked tool sessions; finish or cancel an existing turn",
         429,
@@ -104,6 +118,7 @@ export class ToolSessionRegistry {
       lastUsed: Date.now(),
     };
     this.#records.add(record);
+    this.#sessions.set(opts.session, undefined);
     return record;
   }
 
@@ -186,7 +201,7 @@ export class ToolSessionRegistry {
         record.mutex.run(async () => {
           if (!waitsOn(record)) return false;
           this.remove(record);
-          await record.session.close().catch(() => undefined);
+          await this.#close(record.session);
           return true;
         }),
       ),
@@ -259,16 +274,21 @@ export class ToolSessionRegistry {
     }
   }
 
+  /**
+   * Close every session and resolve once each teardown (agent killed, run
+   * dirs removed) has finished, including teardowns started elsewhere. New
+   * records are refused from then on, so a turn that starts during shutdown
+   * is closed too.
+   */
   async closeAll(): Promise<void> {
-    if (!this.#closePromise) {
-      const records = [...this.#records];
-      this.#records.clear();
-      this.#byResponseId.clear();
-      this.#closePromise = Promise.all(
-        records.map((record) => record.session.close().catch(() => undefined)),
-      ).then(() => undefined);
+    this.#shutDown = true;
+    this.#records.clear();
+    this.#byResponseId.clear();
+    while (this.#sessions.size > 0) {
+      await Promise.all(
+        [...this.#sessions.keys()].map((session) => this.#close(session)),
+      );
     }
-    await this.#closePromise;
   }
 
   get size(): number {
@@ -280,6 +300,24 @@ export class ToolSessionRegistry {
     for (const record of this.#records) {
       if (record.session.closed) this.remove(record);
     }
+    for (const [session, teardown] of this.#sessions) {
+      if (!teardown && session.closed) void this.#close(session);
+    }
+  }
+
+  /** Close `session`, or join its teardown, and forget it once finished. */
+  #close(session: AcpToolSession): Promise<void> {
+    let teardown = this.#sessions.get(session);
+    if (!teardown) {
+      teardown = session
+        .close()
+        .catch(() => undefined)
+        .then(() => {
+          this.#sessions.delete(session);
+        });
+      this.#sessions.set(session, teardown);
+    }
+    return teardown;
   }
 
   #parkedCall(
