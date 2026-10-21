@@ -406,7 +406,7 @@ When the agent's output shows a rate limit, the account rests for a minute and t
 
 ## Streaming
 
-The proxy supports `stream: true` on `POST /v1/chat/completions`, `POST /v1/responses`, and `POST /v1/messages`. Chat Completions and Messages return Server-Sent Events (SSE) in OpenAI/Anthropic streaming formats. Responses uses OpenAI Responses semantic SSE events (`response.created`, `response.output_text.delta`, …). Cursor CLI emits incremental deltas plus a final full message; the proxy deduplicates output so clients receive each chunk only once.
+The proxy supports `stream: true` on `POST /v1/chat/completions`, `POST /v1/responses`, and `POST /v1/messages`. Chat Completions and Messages return Server-Sent Events (SSE) in OpenAI/Anthropic streaming formats. Responses uses OpenAI Responses semantic SSE events (`response.created`, `response.output_text.delta`, …), each with a `sequence_number` that starts at 0 for every response and goes up by one per event. Cursor CLI emits incremental deltas plus a final full message; the proxy deduplicates output so clients receive each chunk only once.
 
 While the agent is silent (thinking / tools, no tokens yet), the proxy writes SSE comment heartbeats (`: keepalive`) every 15s so clients with idle timeouts — notably Codex CLI — do not drop the stream. Codex `stream_idle_timeout_ms` is usually unnecessary. Long turns still need `CURSOR_BRIDGE_TIMEOUT_MS` above the run wall-clock.
 

@@ -289,19 +289,17 @@ function structuredResponseObject(opts: {
   };
 }
 
-async function writeStructuredResponseTurn(opts: {
-  res: http.ServerResponse;
-  body: OpenAiResponsesRequest;
-  stream: boolean;
-  id: string;
-  createdAt: number;
-  model: string | undefined;
-  previousResponseId?: string | null;
-  promptLength: number;
-  run: (
-    listener?: (event: ToolTurnEvent) => void,
-  ) => Promise<ToolTurnResult>;
-}): Promise<ToolTurnResult> {
+async function writeStructuredResponseTurn(
+  opts: ResponseFrame & {
+    res: http.ServerResponse;
+    stream: boolean;
+    previousResponseId?: string | null;
+    run: (
+      listener?: (event: ToolTurnEvent) => void,
+    ) => Promise<ToolTurnResult>;
+  },
+): Promise<ToolTurnResult> {
+  const { events } = opts;
   const messageId = `msg_${randomUUID().replace(/-/g, "")}`;
   if (!opts.stream) {
     const result = await opts.run();
@@ -333,13 +331,13 @@ async function writeStructuredResponseTurn(opts: {
       model: opts.model,
       output: [],
     };
-    writeResponseEvent(opts.res, "response.created", { response: initial });
+    events.write("response.created", { response: initial });
     let textStarted = false;
     let emittedText = "";
     const emitText = (text: string) => {
       if (!textStarted) {
         textStarted = true;
-        writeResponseEvent(opts.res, "response.output_item.added", {
+        events.write("response.output_item.added", {
           response_id: opts.id,
           output_index: 0,
           item: {
@@ -350,7 +348,7 @@ async function writeStructuredResponseTurn(opts: {
             content: [],
           },
         });
-        writeResponseEvent(opts.res, "response.content_part.added", {
+        events.write("response.content_part.added", {
           response_id: opts.id,
           item_id: messageId,
           output_index: 0,
@@ -359,7 +357,7 @@ async function writeStructuredResponseTurn(opts: {
         });
       }
       emittedText += text;
-      writeResponseEvent(opts.res, "response.output_text.delta", {
+      events.write("response.output_text.delta", {
         response_id: opts.id,
         item_id: messageId,
         output_index: 0,
@@ -375,21 +373,21 @@ async function writeStructuredResponseTurn(opts: {
     }
     let outputIndex = textStarted ? 1 : 0;
     if (textStarted) {
-      writeResponseEvent(opts.res, "response.output_text.done", {
+      events.write("response.output_text.done", {
         response_id: opts.id,
         item_id: messageId,
         output_index: 0,
         content_index: 0,
         text: result.text,
       });
-      writeResponseEvent(opts.res, "response.content_part.done", {
+      events.write("response.content_part.done", {
         response_id: opts.id,
         item_id: messageId,
         output_index: 0,
         content_index: 0,
         part: { type: "output_text", text: result.text, annotations: [] },
       });
-      writeResponseEvent(opts.res, "response.output_item.done", {
+      events.write("response.output_item.done", {
         response_id: opts.id,
         output_index: 0,
         item: {
@@ -406,32 +404,24 @@ async function writeStructuredResponseTurn(opts: {
     if (result.status === "tool_calls") {
       for (const call of result.toolCalls) {
         const wire = callWire(call);
-        writeResponseEvent(opts.res, "response.output_item.added", {
+        events.write("response.output_item.added", {
           response_id: opts.id,
           output_index: outputIndex,
           item: toolCallItem(call, "in_progress"),
         });
-        writeResponseEvent(
-          opts.res,
-          `${wire.events}.delta`,
-          {
-            response_id: opts.id,
-            item_id: call.itemId,
-            output_index: outputIndex,
-            delta: wire.text,
-          },
-        );
-        writeResponseEvent(
-          opts.res,
-          `${wire.events}.done`,
-          {
-            response_id: opts.id,
-            item_id: call.itemId,
-            output_index: outputIndex,
-            [wire.field]: wire.text,
-          },
-        );
-        writeResponseEvent(opts.res, "response.output_item.done", {
+        events.write(`${wire.events}.delta`, {
+          response_id: opts.id,
+          item_id: call.itemId,
+          output_index: outputIndex,
+          delta: wire.text,
+        });
+        events.write(`${wire.events}.done`, {
+          response_id: opts.id,
+          item_id: call.itemId,
+          output_index: outputIndex,
+          [wire.field]: wire.text,
+        });
+        events.write("response.output_item.done", {
           response_id: opts.id,
           output_index: outputIndex,
           item: toolCallItem(call),
@@ -439,7 +429,7 @@ async function writeStructuredResponseTurn(opts: {
         outputIndex += 1;
       }
     }
-    writeResponseEvent(opts.res, "response.completed", {
+    events.write("response.completed", {
       response: structuredResponseObject({
         body: opts.body,
         id: opts.id,
@@ -525,22 +515,40 @@ function createOutputItem(itemId: string, status: ResponseStatus, text: string) 
   };
 }
 
-function writeResponseEvent(
-  res: http.ServerResponse,
-  type: string,
-  data: Record<string, unknown>,
-): void {
-  res.write(`event: ${type}\n`);
-  res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+/** An event's own fields; the writer sets `type` and `sequence_number`. */
+type ResponseEventFields = Record<string, unknown> & {
+  type?: never;
+  sequence_number?: never;
+};
+
+/**
+ * Writes one response's streaming events. Each carries `sequence_number`,
+ * counting from 0 within the response, as the Responses API numbers them
+ * (#94). Every event of a stream, its `response.failed` included, goes
+ * through the response's one writer, so the numbers have no gaps or repeats.
+ */
+class ResponseEventWriter {
+  readonly #res: http.ServerResponse;
+  #next = 0;
+
+  constructor(res: http.ServerResponse) {
+    this.#res = res;
+  }
+
+  write(type: string, fields: ResponseEventFields): void {
+    const event = { type, sequence_number: this.#next++, ...fields };
+    this.#res.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
+  }
 }
 
-/** The response a failure reports on. */
+/** The response a request answers: what its events and failure report on. */
 type ResponseFrame = {
   body: OpenAiResponsesRequest;
   id: string;
   createdAt: number;
   model: string | undefined;
   promptLength: number;
+  events: ResponseEventWriter;
 };
 
 /**
@@ -550,11 +558,10 @@ type ResponseFrame = {
  * announced are not closed. No `[DONE]`, which belongs to Chat Completions.
  */
 function writeResponseFailed(
-  res: http.ServerResponse,
   frame: ResponseFrame,
   failure: AgentFailure,
 ): void {
-  writeResponseEvent(res, "response.failed", {
+  frame.events.write("response.failed", {
     response: createResponseObject({
       body: frame.body,
       id: frame.id,
@@ -579,7 +586,7 @@ function writeResponsesFailure(
   if (!res.headersSent) {
     json(res, failure.status, openAiErrorBody(failure));
   } else if (!res.writableEnded) {
-    writeResponseFailed(res, frame, failure);
+    writeResponseFailed(frame, failure);
     res.end();
   }
 }
@@ -737,6 +744,7 @@ export async function handleResponses(
   )?.name;
   const id = `resp_${randomUUID().replace(/-/g, "")}`;
   const createdAt = Math.floor(Date.now() / 1000);
+  const events = new ResponseEventWriter(res);
 
   const structuredToolStart =
     config.useAcp && selectedTools.length > 0 && !resuming;
@@ -825,16 +833,20 @@ export async function handleResponses(
     use.signal.addEventListener("abort", () => void record.session.close(), {
       once: true,
     });
+    const resumeFrame: ResponseFrame = {
+      body,
+      id,
+      createdAt,
+      model: displayModel,
+      promptLength: prompt.length,
+      events,
+    };
     try {
       const result = await writeStructuredResponseTurn({
+        ...resumeFrame,
         res,
-        body,
         stream: !!body.stream,
-        id,
-        createdAt,
-        model: displayModel,
         previousResponseId,
-        promptLength: prompt.length,
         run: async (listener) => {
           const turn = await ctx.toolSessions.resume(
             record,
@@ -858,7 +870,7 @@ export async function handleResponses(
     } catch (error) {
       writeResponsesFailure(
         res,
-        { body, id, createdAt, model: displayModel, promptLength: prompt.length },
+        resumeFrame,
         failToolTurn(turnRequest, use, error),
       );
     } finally {
@@ -949,6 +961,14 @@ export async function handleResponses(
   const truncatedHeaders = fit.truncated
     ? { "X-Cursor-Proxy-Prompt-Truncated": "true" }
     : undefined;
+  const frame: ResponseFrame = {
+    body,
+    id,
+    createdAt,
+    model: displayModel,
+    promptLength: agentPrompt.length,
+    events,
+  };
 
   if (structuredToolStart) {
     const use = new AccountUse(res, config.verbose, getNextAccountConfigDir());
@@ -980,14 +1000,10 @@ export async function handleResponses(
         once: true,
       });
       const result = await writeStructuredResponseTurn({
+        ...frame,
         res,
-        body,
         stream: !!body.stream,
-        id,
-        createdAt,
-        model: displayModel,
         previousResponseId: body.previous_response_id,
-        promptLength: agentPrompt.length,
         run: async (listener) => {
           const turn = await ctx.toolSessions.collect(record!, listener);
           if (turn.status === "tool_calls") {
@@ -1010,17 +1026,7 @@ export async function handleResponses(
         ctx.toolSessions.remove(record);
         await record.session.close().catch(() => undefined);
       }
-      writeResponsesFailure(
-        res,
-        {
-          body,
-          id,
-          createdAt,
-          model: displayModel,
-          promptLength: agentPrompt.length,
-        },
-        failToolTurn(turnRequest, use, error),
-      );
+      writeResponsesFailure(res, frame, failToolTurn(turnRequest, use, error));
     } finally {
       use.end();
     }
@@ -1048,12 +1054,12 @@ export async function handleResponses(
     const openItem = () => {
       if (itemOpen) return;
       itemOpen = true;
-      writeResponseEvent(res, "response.output_item.added", {
+      events.write("response.output_item.added", {
         response_id: id,
         output_index: 0,
         item: createOutputItem(itemId, "in_progress", ""),
       });
-      writeResponseEvent(res, "response.content_part.added", {
+      events.write("response.content_part.added", {
         response_id: id,
         item_id: itemId,
         output_index: 0,
@@ -1065,7 +1071,7 @@ export async function handleResponses(
       turn,
       {
         open: () =>
-          writeResponseEvent(res, "response.created", {
+          events.write("response.created", {
             response: createResponseObject({
               body,
               id,
@@ -1080,7 +1086,7 @@ export async function handleResponses(
           }),
         text: (delta) => {
           openItem();
-          writeResponseEvent(res, "response.output_text.delta", {
+          events.write("response.output_text.delta", {
             response_id: id,
             item_id: itemId,
             output_index: 0,
@@ -1091,26 +1097,26 @@ export async function handleResponses(
         complete: (text) => {
           openItem();
           const item = createOutputItem(itemId, "completed", text);
-          writeResponseEvent(res, "response.output_text.done", {
+          events.write("response.output_text.done", {
             response_id: id,
             item_id: itemId,
             output_index: 0,
             content_index: 0,
             text,
           });
-          writeResponseEvent(res, "response.content_part.done", {
+          events.write("response.content_part.done", {
             response_id: id,
             item_id: itemId,
             output_index: 0,
             content_index: 0,
             part: item.content[0],
           });
-          writeResponseEvent(res, "response.output_item.done", {
+          events.write("response.output_item.done", {
             response_id: id,
             output_index: 0,
             item,
           });
-          writeResponseEvent(res, "response.completed", {
+          events.write("response.completed", {
             response: createResponseObject({
               body,
               id,
@@ -1125,18 +1131,7 @@ export async function handleResponses(
           });
           res.write("data: [DONE]\n\n");
         },
-        fail: (failure) =>
-          writeResponseFailed(
-            res,
-            {
-              body,
-              id,
-              createdAt,
-              model: displayModel,
-              promptLength: agentPrompt.length,
-            },
-            failure,
-          ),
+        fail: (failure) => writeResponseFailed(frame, failure),
       },
       truncatedHeaders,
     );
