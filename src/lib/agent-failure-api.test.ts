@@ -13,13 +13,23 @@ import {
   vi,
 } from "vitest";
 
+import { getAccountStats } from "./account-pool.js";
 import type { BridgeConfig } from "./config.js";
+import { PLAN_LIMIT_MESSAGE, PLAN_LIMIT_PENALTY_MS } from "./plan-limit.js";
 import { startBridgeServer } from "./server.js";
 
 // Issue #67: every API ends a failed turn with its own terminal error.
+// Issue #65: Cursor's plan-limit answer is reported as an error, not content.
 
 vi.mock("./cursor-cli.js", () => ({
   listCursorCliModels: vi.fn().mockResolvedValue([{ id: "gpt-4", name: "gpt-4" }]),
+}));
+
+// Pool tests use account dirs; never copy the real keychain token into them.
+vi.mock("./token-cache.js", () => ({
+  readKeychainToken: () => undefined,
+  readCachedToken: () => undefined,
+  writeCachedToken: vi.fn(),
 }));
 
 const fixtures = join(process.cwd(), "src", "lib", "__tests__");
@@ -142,6 +152,27 @@ function jsonData(events: SseEvent[]): any[] {
     .map((event) => JSON.parse(event.data));
 }
 
+/** The answer text a stream showed, whichever API wrote it. */
+function streamedText(text: string): string {
+  return jsonData(sseEvents(text))
+    .map((data) => {
+      if (data.object === "chat.completion.chunk") {
+        return data.choices[0]?.delta?.content ?? "";
+      }
+      if (data.type === "response.output_text.delta") return data.delta;
+      if (data.type === "content_block_delta") return data.delta.text ?? "";
+      return "";
+    })
+    .join("");
+}
+
+/** The answer of a non-streamed response, whichever API wrote it. */
+function answerText(api: Api, body: any): string {
+  if (api === "chat") return body.choices[0].message.content;
+  if (api === "responses") return body.output[0].content[0].text;
+  return body.content[0].text;
+}
+
 const PLAIN_REQUESTS = {
   chat: ["/v1/chat/completions", { messages: [{ role: "user", content: "Hi" }] }],
   responses: ["/v1/responses", { input: "Hi" }],
@@ -176,9 +207,20 @@ const TOOL_REQUESTS = {
 } as const;
 
 type Api = keyof typeof PLAIN_REQUESTS;
+const APIS = ["chat", "responses", "anthropic"] as const;
 
-/** Asserts the API's own stream ending for a failed turn and returns the error. */
-function expectStreamFailure(api: Api, text: string): { code: string; message: string } {
+/** The error `type` each API gives an agent failure (Responses has none). */
+const SERVER_ERROR_TYPE = {
+  chat: { type: "server_error" },
+  responses: {},
+  anthropic: { type: "api_error" },
+} as const;
+
+/**
+ * Asserts the API's own stream ending for a failed turn and returns the
+ * error: {code, message} plus `type` where the API has one.
+ */
+function expectStreamFailure(api: Api, text: string): Record<string, unknown> {
   const events = sseEvents(text);
   const last = events[events.length - 1];
   if (api === "responses") {
@@ -198,7 +240,7 @@ function expectStreamFailure(api: Api, text: string): { code: string; message: s
     const chunks = jsonData(events);
     const error = chunks[chunks.length - 1];
     expect(Object.keys(error)).toEqual(["error"]);
-    expect(error.error).toMatchObject({ type: "server_error", param: null });
+    expect(error.error.param).toBeNull();
     expect(chunks.flatMap((chunk) => chunk.choices ?? []).map((c: any) => c.finish_reason))
       .not.toContain("stop");
     return error.error;
@@ -210,7 +252,6 @@ function expectStreamFailure(api: Api, text: string): { code: string; message: s
   expect(events.map((event) => event.event)).not.toContain("message_stop");
   const body = JSON.parse(last.data);
   expect(body.type).toBe("error");
-  expect(body.error.type).toBe("api_error");
   return body.error;
 }
 
@@ -219,17 +260,21 @@ describe("CLI agent that exits non-zero (#67)", () => {
     vi.stubEnv("FAKE_CLI_SCENARIO", "exit_after_text");
   });
 
-  it.each(["chat", "responses", "anthropic"] as const)(
+  it.each(APIS)(
     "%s stream ends with the API's terminal error after the partial text",
     async (api) => {
       const base = await start();
       const [path, body] = PLAIN_REQUESTS[api];
       const { status, text } = await post(base, path, { ...body, stream: true });
       expect(status).toBe(200);
-      expect(text).toContain("Partial answer");
+      expect(streamedText(text)).toBe("Partial answer ");
       expect(text).not.toContain(SECRET);
-      const error = expectStreamFailure(api, text);
-      expect(error).toMatchObject({ code: "cursor_cli_error", message: CLI_EXIT });
+      expect(expectStreamFailure(api, text)).toEqual({
+        code: "cursor_cli_error",
+        message: CLI_EXIT,
+        ...SERVER_ERROR_TYPE[api],
+        ...(api === "chat" ? { param: null } : {}),
+      });
       expect(fs.readFileSync(sessionsLog, "utf8")).toContain(
         `agent_exit_1 agent: token=${SECRET}`,
       );
@@ -326,7 +371,7 @@ describe("CLI agent that succeeds", () => {
 });
 
 describe("ACP agent that exits mid-turn (#67)", () => {
-  it.each(["chat", "responses", "anthropic"] as const)(
+  it.each(APIS)(
     "%s plain stream ends with the API's terminal error",
     async (api) => {
       const base = await start({
@@ -337,12 +382,15 @@ describe("ACP agent that exits mid-turn (#67)", () => {
       const { status, text } = await post(base, path, { ...body, stream: true });
       expect(status).toBe(200);
       const error = expectStreamFailure(api, text);
-      expect(error.code).toBe("cursor_cli_error");
-      expect(error.message).toMatch(/exited with code 7/);
+      expect(error).toMatchObject({
+        code: "cursor_cli_error",
+        message: expect.stringMatching(/exited with code 7/),
+        ...SERVER_ERROR_TYPE[api],
+      });
     },
   );
 
-  it.each(["chat", "responses", "anthropic"] as const)(
+  it.each(APIS)(
     "%s tool stream ends with the API's terminal error and logs the failure",
     async (api) => {
       const base = await start({
@@ -353,8 +401,11 @@ describe("ACP agent that exits mid-turn (#67)", () => {
       const { status, text } = await post(base, path, { ...body, stream: true });
       expect(status).toBe(200);
       const error = expectStreamFailure(api, text);
-      expect(error.code).toBe("cursor_cli_error");
-      expect(error.message).toMatch(/exited with code 7 before responding/);
+      expect(error).toMatchObject({
+        code: "cursor_cli_error",
+        message: expect.stringMatching(/exited with code 7 before responding/),
+        ...SERVER_ERROR_TYPE[api],
+      });
       await vi.waitFor(() => {
         expect(fs.readFileSync(sessionsLog, "utf8")).toMatch(
           new RegExp(`ERROR POST ${path} \\S+ cursor_cli_error `),
@@ -362,4 +413,219 @@ describe("ACP agent that exits mid-turn (#67)", () => {
       });
     },
   );
+});
+
+/** What each API answers when the account hit Cursor's plan limit (#65). */
+const PLAN_LIMIT_BODY = {
+  chat: {
+    error: {
+      message: PLAN_LIMIT_MESSAGE,
+      type: "insufficient_quota",
+      param: null,
+      code: "cursor_plan_limit",
+    },
+  },
+  responses: {
+    error: {
+      message: PLAN_LIMIT_MESSAGE,
+      type: "insufficient_quota",
+      param: null,
+      code: "cursor_plan_limit",
+    },
+  },
+  anthropic: {
+    type: "error",
+    error: {
+      type: "rate_limit_error",
+      message: PLAN_LIMIT_MESSAGE,
+      code: "cursor_plan_limit",
+    },
+  },
+} as const;
+
+/** The stream's terminal error for the plan limit, per API. */
+function expectPlanLimitStream(api: Api, text: string): void {
+  // Nothing of Cursor's reply reaches the client as answer text.
+  expect(streamedText(text)).toBe("");
+  const events = sseEvents(text);
+  if (api === "responses") {
+    expect(events.map((event) => event.event)).toEqual([
+      "response.created",
+      "response.failed",
+    ]);
+  }
+  if (api === "anthropic") {
+    expect(events.map((event) => event.event)).toEqual(["message_start", "error"]);
+  }
+  const { error } = PLAN_LIMIT_BODY[api];
+  expect(expectStreamFailure(api, text)).toEqual(
+    api === "responses"
+      ? { code: error.code, message: error.message }
+      : error,
+  );
+}
+
+describe("Cursor plan limit, CLI mode (#65)", () => {
+  it.each(APIS)("%s answers 429 cursor_plan_limit instead of the reply", async (api) => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", "plan_limit");
+    const base = await start();
+    const [path, body] = PLAIN_REQUESTS[api];
+    const { status, text } = await post(base, path, body);
+    expect(status).toBe(429);
+    expect(JSON.parse(text)).toEqual(PLAN_LIMIT_BODY[api]);
+    expect(fs.readFileSync(sessionsLog, "utf8")).toMatch(
+      new RegExp(`ERROR POST ${path} \\S+ cursor_plan_limit account default, exit 0`),
+    );
+  });
+
+  it.each(APIS)("%s stream holds the reply back and ends with the error", async (api) => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", "plan_limit");
+    const base = await start();
+    const [path, body] = PLAIN_REQUESTS[api];
+    const { status, text } = await post(base, path, { ...body, stream: true });
+    expect(status).toBe(200);
+    expectPlanLimitStream(api, text);
+  });
+
+  it("reports the reply on the CLI's stderr when it exits non-zero", async () => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", "plan_limit_stderr");
+    const base = await start();
+    const { status, text } = await post(base, ...PLAIN_REQUESTS.chat);
+    expect(status).toBe(429);
+    expect(JSON.parse(text)).toEqual(PLAN_LIMIT_BODY.chat);
+  });
+
+  it.each(APIS)("%s keeps an answer that only starts like the reply", async (api) => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", "upgrade_mention");
+    const answer =
+      "Upgrade your plan to continue using premium models, or pick a free one.";
+    const base = await start();
+    const [path, body] = PLAIN_REQUESTS[api];
+    const sync = await post(base, path, body);
+    expect(sync.status).toBe(200);
+    expect(answerText(api, JSON.parse(sync.text))).toBe(answer);
+    const streamed = await post(base, path, { ...body, stream: true });
+    expect(streamedText(streamed.text)).toBe(answer);
+    expect(streamed.text).not.toContain("cursor_plan_limit");
+  });
+
+  it.each(APIS)("%s stream releases a held prefix when the answer ends", async (api) => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", "plan_limit_prefix");
+    const base = await start();
+    const [path, body] = PLAIN_REQUESTS[api];
+    const { text } = await post(base, path, { ...body, stream: true });
+    expect(streamedText(text)).toBe("Upgrade your plan");
+    expect(text).not.toContain("cursor_plan_limit");
+  });
+});
+
+describe("Cursor plan limit, ACP mode (#65)", () => {
+  const acp = (scenario: string) => ({
+    useAcp: true,
+    acpEnv: { FAKE_ACP_SCENARIO: scenario },
+  });
+
+  it.each(APIS)("%s plain turn answers 429", async (api) => {
+    const base = await start(acp("plan_limit_text"));
+    const [path, body] = PLAIN_REQUESTS[api];
+    const { status, text } = await post(base, path, body);
+    expect(status).toBe(429);
+    expect(JSON.parse(text)).toEqual(PLAN_LIMIT_BODY[api]);
+  });
+
+  it.each(APIS)("%s plain stream ends with the error", async (api) => {
+    const base = await start(acp("plan_limit_text"));
+    const [path, body] = PLAIN_REQUESTS[api];
+    const { text } = await post(base, path, { ...body, stream: true });
+    expectPlanLimitStream(api, text);
+  });
+
+  it("reports a prompt error that carries the reply", async () => {
+    const base = await start(acp("plan_limit_rpc_error"));
+    const { status, text } = await post(base, ...PLAIN_REQUESTS.anthropic);
+    expect(status).toBe(429);
+    expect(JSON.parse(text)).toEqual(PLAN_LIMIT_BODY.anthropic);
+  });
+
+  // tool_choice that requires a call, the case that used to report
+  // "Agent completed without the required tool call".
+  const REQUIRED_TOOL = {
+    chat: { tool_choice: "required" },
+    responses: { tool_choice: "required" },
+    anthropic: { tool_choice: { type: "any" } },
+  } as const;
+
+  it.each(APIS)("%s tool turn with a required call answers 429", async (api) => {
+    const base = await start(acp("plan_limit_text"));
+    const [path, body] = TOOL_REQUESTS[api];
+    const { status, text } = await post(base, path, { ...body, ...REQUIRED_TOOL[api] });
+    expect(status).toBe(429);
+    expect(JSON.parse(text)).toEqual(PLAN_LIMIT_BODY[api]);
+    expect(text).not.toContain("required tool call");
+  });
+
+  it.each(APIS)("%s tool stream holds the reply back and ends with the error", async (api) => {
+    const base = await start(acp("plan_limit_text"));
+    const [path, body] = TOOL_REQUESTS[api];
+    const { text } = await post(base, path, { ...body, stream: true });
+    expect(streamedText(text)).toBe("");
+    const error = expectStreamFailure(api, text);
+    expect(error).toMatchObject({ code: "cursor_plan_limit", message: PLAN_LIMIT_MESSAGE });
+  });
+
+  it("tool turn reports a prompt error that carries the reply", async () => {
+    const base = await start(acp("plan_limit_rpc_error"));
+    const { status, text } = await post(base, ...TOOL_REQUESTS.responses);
+    expect(status).toBe(429);
+    expect(JSON.parse(text)).toEqual(PLAN_LIMIT_BODY.responses);
+  });
+});
+
+describe("Cursor plan limit with an account pool (#65)", () => {
+  let accounts: string[];
+
+  beforeEach(() => {
+    accounts = ["acct-a", "acct-b"].map((name) => {
+      const dir = join(workDir, `${name}-${Math.random().toString(36).slice(2)}`);
+      fs.mkdirSync(dir);
+      return dir;
+    });
+  });
+
+  const stat = (dir: string) =>
+    getAccountStats().find((account) => account.configDir === dir)!;
+
+  it.each([
+    ["CLI", false],
+    ["ACP tool", true],
+  ] as const)("%s turn rests the account and the next request rotates", async (_, acpTool) => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", "plan_limit");
+    const base = await start({
+      configDirs: accounts,
+      ...(acpTool
+        ? { useAcp: true, acpEnv: { FAKE_ACP_SCENARIO: "plan_limit_text" } }
+        : {}),
+    });
+    const [path, body] = acpTool ? TOOL_REQUESTS.chat : PLAIN_REQUESTS.chat;
+    const before = Date.now();
+    expect((await post(base, path, body)).status).toBe(429);
+
+    const [limited, other] = stat(accounts[0]).totalRequests === 1
+      ? [accounts[0], accounts[1]]
+      : [accounts[1], accounts[0]];
+    expect(stat(limited)).toMatchObject({
+      totalRequests: 1,
+      totalErrors: 1,
+      totalRateLimits: 1,
+      isRateLimited: true,
+      activeRequests: 0,
+    });
+    expect(stat(limited).rateLimitUntil).toBeGreaterThanOrEqual(
+      before + PLAN_LIMIT_PENALTY_MS,
+    );
+
+    await post(base, path, body);
+    expect(stat(other).totalRequests).toBe(1);
+    expect(stat(limited).totalRequests).toBe(1);
+  });
 });

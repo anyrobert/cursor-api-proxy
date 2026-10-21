@@ -400,6 +400,10 @@ CURSOR_BRIDGE_MULTI_PORT=true CURSOR_BRIDGE_PORT=8765 npm start
 
 account1 on 8765, account2 on 8766, and so on.
 
+### Rate and plan limits
+
+When the agent's output shows a rate limit, the account rests for a minute and the pool prefers the others. When a Cursor plan is used up, the agent answers only "Upgrade your plan to continue"; the proxy returns that as HTTP 429 with code `cursor_plan_limit` on every API (in a stream, as the error that ends it, never as answer text) and rests the account for 15 minutes, so a retry goes to another account. Plan limits are per model: an account that hit it for one model may still answer others.
+
 ## Streaming
 
 The proxy supports `stream: true` on `POST /v1/chat/completions`, `POST /v1/responses`, and `POST /v1/messages`. Chat Completions and Messages return Server-Sent Events (SSE) in OpenAI/Anthropic streaming formats. Responses uses OpenAI Responses semantic SSE events (`response.created`, `response.output_text.delta`, …). Cursor CLI emits incremental deltas plus a final full message; the proxy deduplicates output so clients receive each chunk only once.

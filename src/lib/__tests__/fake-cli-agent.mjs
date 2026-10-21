@@ -34,6 +34,16 @@ function partial(text) {
 const runs = {
   exit_after_text: () => [partial("Partial answer "), SECRET_STDERR, 1],
   exit_silent: () => ["", SECRET_STDERR, 1],
+  // Cursor's answer once the account's plan is used up (#65).
+  plan_limit: () => [answer(["Upgrade your ", "plan to continue"]), "", 0],
+  plan_limit_stderr: () => ["", "Error: Upgrade your plan to continue\n", 1],
+  // Real answers that start like the plan-limit reply.
+  upgrade_mention: () => [
+    answer(["Upgrade your plan to continue ", "using premium models, or pick a free one."]),
+    "",
+    0,
+  ],
+  plan_limit_prefix: () => [answer(["Upgrade", " your plan"]), "", 0],
 };
 
 const [stdout, stderr, code] = (

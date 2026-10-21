@@ -1,4 +1,9 @@
 import { AcpChildExitError } from "../acp-connection.js";
+import {
+  PLAN_LIMIT_CODE,
+  PLAN_LIMIT_MESSAGE,
+  PlanLimitError,
+} from "../plan-limit.js";
 import { ToolSessionError } from "../tool-session-registry.js";
 
 /**
@@ -26,10 +31,23 @@ export const STREAM_FAILURE: AgentFailure = {
 };
 
 /**
- * A structured tool turn that threw: an agent that exited reports like it
- * does on the plain path, a tool-session error keeps its status and code.
+ * The account hit Cursor's plan limit (#65). A 429, not a 402: clients
+ * retry a 429 (the OpenAI and Anthropic SDKs with backoff), and the pool
+ * moves the retry to another account, so the request can still succeed.
+ */
+export const PLAN_LIMIT_FAILURE: AgentFailure = {
+  status: 429,
+  code: PLAN_LIMIT_CODE,
+  message: PLAN_LIMIT_MESSAGE,
+};
+
+/**
+ * A structured tool turn that threw: an agent that exited or hit the plan
+ * limit reports like it does on the plain path, a tool-session error keeps
+ * its status and code.
  */
 export function toolTurnFailure(error: unknown): AgentFailure {
+  if (error instanceof PlanLimitError) return PLAN_LIMIT_FAILURE;
   if (error instanceof AcpChildExitError) return agentExitFailure(error.message);
   if (error instanceof ToolSessionError) {
     return { status: error.status, code: error.code, message: error.message };
@@ -42,11 +60,13 @@ export function toolTurnFailure(error: unknown): AgentFailure {
 }
 
 /**
- * OpenAI's error `type` for a status. A 429 uses the type OpenAI sends for
- * request rate limits; other client errors are invalid requests.
+ * OpenAI's error `type` for a failure. A 429 uses the type OpenAI sends for
+ * an exhausted quota (the plan limit) or for request rate limits; other
+ * client errors are invalid requests.
  */
 function openAiErrorType(failure: AgentFailure): string {
   if (failure.status >= 500) return "server_error";
+  if (failure.code === PLAN_LIMIT_CODE) return "insufficient_quota";
   if (failure.status === 429) return "requests";
   return "invalid_request_error";
 }

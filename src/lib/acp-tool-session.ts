@@ -1,4 +1,5 @@
 import {
+  AcpChildExitError,
   AcpConnection,
   permissionOption,
   type AcpConnectionOptions,
@@ -8,6 +9,11 @@ import {
 import type { AcpModelOptions } from "./acp-model.js";
 import { ClientToolBridge } from "./client-tool-bridge.js";
 import type { AcpPromptBlock } from "./media-input.js";
+import {
+  hitPlanLimit,
+  PlanLimitError,
+  PlanLimitHoldback,
+} from "./plan-limit.js";
 import type {
   ClientToolDefinition,
   ClientToolOutput,
@@ -90,6 +96,8 @@ export class AcpToolSession {
   #promptDone?: Promise<{ ok: true } | { ok: false; error: Error }>;
   #text = "";
   #reasoning = "";
+  /** Keeps the plan-limit reply out of the turn's streamed text (#65). */
+  #holdback = new PlanLimitHoldback();
   #listener?: (event: ToolTurnEvent) => void;
   #ttl?: ReturnType<typeof setTimeout>;
   #closed = false;
@@ -112,7 +120,9 @@ export class AcpToolSession {
         signal: this.#opts.signal,
         onAgentTextChunk: (text) => {
           this.#text += text;
-          this.#listener?.({ type: "text", text });
+          // Held text still reaches the client in the turn's result.
+          const shown = this.#holdback.push(text);
+          if (shown) this.#listener?.({ type: "text", text: shown });
         },
         onAgentThoughtChunk: (text) => {
           this.#reasoning += text;
@@ -210,6 +220,13 @@ export class AcpToolSession {
 
     const promptResult =
       winner.type === "prompt" ? winner.result : await this.#promptDone;
+    const stderr = this.#connection?.stderr ?? "";
+    // Cursor answers instead of failing when the plan is used up, which a
+    // required tool call would otherwise report as a missing call (#65).
+    if (this.#hitPlanLimit(promptResult, stderr)) {
+      await this.close();
+      throw new PlanLimitError();
+    }
     if (!promptResult.ok) {
       await this.close();
       throw promptResult.error;
@@ -220,7 +237,6 @@ export class AcpToolSession {
     }
     this.#terminal = true;
     const { text, reasoning } = this.#drainOutput();
-    const stderr = this.#connection?.stderr ?? "";
     await this.close();
     return {
       status: "completed",
@@ -290,7 +306,28 @@ export class AcpToolSession {
     const reasoning = this.#reasoning.trim();
     this.#text = "";
     this.#reasoning = "";
+    // The next turn's answer starts over; held text is part of `text`.
+    this.#holdback = new PlanLimitHoldback();
     return { text, reasoning };
+  }
+
+  /** Whether the finished prompt was Cursor's plan-limit answer or error. */
+  #hitPlanLimit(
+    prompt: { ok: true } | { ok: false; error: Error },
+    stderr: string,
+  ): boolean {
+    return hitPlanLimit({
+      text: this.#text,
+      failed: !prompt.ok,
+      diagnostics: prompt.ok
+        ? [stderr]
+        : [
+            prompt.error.message,
+            prompt.error instanceof AcpChildExitError
+              ? prompt.error.diagnostics
+              : stderr,
+          ],
+    });
   }
 
   #waitForToolBatch(signal: AbortSignal): Promise<"ready" | "aborted"> {

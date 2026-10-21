@@ -1,4 +1,5 @@
 import type * as http from "node:http";
+import * as path from "node:path";
 
 import { AcpChildExitError } from "../acp-connection.js";
 import {
@@ -17,6 +18,12 @@ import type { BridgeConfig } from "../config.js";
 import { startSseKeepalive, writeSseHeaders } from "../http.js";
 import type { AcpPromptBlock } from "../media-input.js";
 import {
+  hitPlanLimit,
+  PLAN_LIMIT_CODE,
+  PLAN_LIMIT_PENALTY_MS,
+  PlanLimitHoldback,
+} from "../plan-limit.js";
+import {
   logAccountAssigned,
   logAccountStats,
   logAgentError,
@@ -26,6 +33,7 @@ import {
 import { ToolSessionError } from "../tool-session-registry.js";
 import {
   agentExitFailure,
+  PLAN_LIMIT_FAILURE,
   STREAM_FAILURE,
   toolTurnFailure,
   type AgentFailure,
@@ -73,6 +81,11 @@ export class AccountUse {
     return this.#abort.signal;
   }
 
+  /** The account's name for logs, as logAccountAssigned prints it. */
+  get account(): string {
+    return this.configDir ? path.basename(this.configDir) : "default";
+  }
+
   /** Rests the account when the agent's diagnostics show a rate limit. */
   checkRateLimit(stderr: string | undefined): void {
     if (stderr && isRateLimited(stderr)) {
@@ -84,8 +97,12 @@ export class AccountUse {
     reportRequestSuccess(this.configDir, Date.now() - this.#startedAt);
   }
 
-  failed(): void {
+  /** Counts an error; a plan limit also rests the account, as a rate limit does. */
+  failed(failure?: AgentFailure): void {
     reportRequestError(this.configDir, Date.now() - this.#startedAt);
+    if (failure?.code === PLAN_LIMIT_CODE) {
+      reportRateLimit(this.configDir, PLAN_LIMIT_PENALTY_MS);
+    }
   }
 
   /** Releases the account once the request is answered. */
@@ -109,7 +126,7 @@ export function failToolTurn(
   error: unknown,
 ): AgentFailure {
   const failure = toolTurnFailure(error);
-  use.failed();
+  use.failed(failure);
   if (!(error instanceof ToolSessionError)) {
     logTurnFailure(
       turn.config.sessionsLogPath,
@@ -151,16 +168,37 @@ export type TextStreamSink = {
 type AgentRun = { code: number; stderr: string; error?: string };
 
 /**
- * Records a finished run on its account and returns its failure, if any.
- * A run the client walked away from counts as neither.
+ * Records a finished run that answered `text` on its account and returns
+ * its failure, if any: the plan limit before an exit code, since Cursor
+ * reports it as an answer. A run the client walked away from counts as
+ * neither.
  */
 function settleRun(
   turn: PlainTurn,
   use: AccountUse,
   run: AgentRun,
+  text: string,
 ): AgentFailure | undefined {
   use.checkRateLimit(run.stderr);
   if (use.signal.aborted) return undefined;
+  if (
+    hitPlanLimit({
+      text,
+      failed: run.code !== 0,
+      diagnostics: [run.stderr, run.error],
+    })
+  ) {
+    use.failed(PLAN_LIMIT_FAILURE);
+    logTurnFailure(
+      turn.config.sessionsLogPath,
+      turn.method,
+      turn.pathname,
+      turn.remoteAddress,
+      PLAN_LIMIT_FAILURE,
+      `account ${use.account}, exit ${run.code}`,
+    );
+    return PLAN_LIMIT_FAILURE;
+  }
   if (run.code === 0) {
     use.succeeded();
     return undefined;
@@ -182,9 +220,10 @@ function settleRun(
 /**
  * Streams a plain turn through `sink` and always ends the response: with
  * the answer, with the API's terminal error when the agent fails, or with
- * nothing once the client has gone. The CLI marks a finished answer with a
- * `result` line before it exits, so its answer can close first; an exit
- * after that is still recorded as the account's failure.
+ * nothing once the client has gone. Text that could still be the plan-limit
+ * reply is held back until it is ruled out. The CLI marks a finished answer
+ * with a `result` line before it exits, so its answer can close first; an
+ * exit after that is still recorded as the account's failure.
  */
 export async function streamPlainTurn(
   turn: PlainTurn,
@@ -199,6 +238,7 @@ export async function streamPlainTurn(
     /* client disconnected mid-stream */
   });
 
+  const holdback = new PlanLimitHoldback();
   let text = "";
   let ended = false;
   const end = (failure?: AgentFailure) => {
@@ -208,14 +248,21 @@ export async function streamPlainTurn(
       sink.fail(failure);
       return;
     }
+    const held = holdback.release();
+    if (held) sink.text(held);
     logTrafficResponse(config.verbose, turn.logModel, text, true);
     sink.complete(text);
   };
   const onText = (delta: string) => {
     if (ended) return;
     text += delta;
-    sink.text(delta);
+    const shown = holdback.push(delta);
+    if (shown) sink.text(shown);
   };
+  // The answer settles the plan-limit question before the CLI exits; the
+  // exit then records it on the account (settleRun sees the same text).
+  const onCliResult = () =>
+    end(holdback.heldReply ? PLAN_LIMIT_FAILURE : undefined);
   const viaAcp = config.useAcp && typeof turn.promptForAgent === "string";
   try {
     sink.open();
@@ -224,7 +271,7 @@ export async function streamPlainTurn(
       turn.workspaceDir,
       turn.effectiveChatOnly,
       turn.cmdArgs,
-      viaAcp ? onText : createStreamParser(onText, () => end()),
+      viaAcp ? onText : createStreamParser(onText, onCliResult),
       turn.tempDir,
       turn.promptForAgent,
       use.configDir,
@@ -232,7 +279,7 @@ export async function streamPlainTurn(
       turn.modelCatalogName,
       turn.mediaBlocks,
     );
-    end(settleRun(turn, use, run));
+    end(settleRun(turn, use, run, text));
   } catch (error) {
     if (!use.signal.aborted) use.failed();
     console.error(`[${new Date().toISOString()}] Agent stream error:`, error);
@@ -275,10 +322,10 @@ export async function runPlainTurn(
       turn.modelCatalogName,
       turn.mediaBlocks,
     );
-    const failure = settleRun(turn, use, out);
+    const text = out.stdout.trim();
+    const failure = settleRun(turn, use, out, text);
     if (use.signal.aborted) return undefined;
     if (failure) return { ok: false, failure };
-    const text = out.stdout.trim();
     logTrafficResponse(config.verbose, turn.logModel, text, false);
     return { ok: true, text };
   } catch (error) {
