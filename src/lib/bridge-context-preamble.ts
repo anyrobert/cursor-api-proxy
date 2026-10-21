@@ -16,16 +16,6 @@ export type BridgeContextPreambleInput = {
   cursorMode: CursorExecutionMode;
   /** Optional extra from `CURSOR_BRIDGE_CONTEXT_EXTRA` (already length-capped in config). */
   contextExtra?: string;
-  /**
-   * Working directory of the HTTP client that opened the connection (e.g. the
-   * directory the user launched `claude` from). Forwarded so the agent gains
-   * awareness of "where the caller is sitting" even when its own cwd is a
-   * sandbox temp dir. Either resolved by `detectClientCwd` from the socket, or
-   * passed explicitly via `X-Cursor-Invoke-Cwd`.
-   */
-  clientLaunchDir?: string;
-  /** Optional process name/command of the client (lsof COMMAND column). */
-  clientProcessName?: string;
 };
 
 export function readHttpHeader(
@@ -74,15 +64,6 @@ export function buildBridgeContextPreamble(
   const client = invokeFrom ?? clientLabel;
   if (client) {
     lines.push(`client=${truncate(client, 64)}`);
-  }
-
-  const launchDir = input.clientLaunchDir?.trim();
-  if (launchDir && launchDir !== input.agentWorkspaceDir) {
-    const proc = input.clientProcessName?.trim();
-    const tail = proc ? ` (${truncate(proc, 32)})` : "";
-    lines.push(
-      `client launched from ${truncate(launchDir, 200)}${tail} — treat this as the user's active working directory; resolve relative paths against it unless told otherwise.`,
-    );
   }
 
   if (input.contextExtra?.trim()) {

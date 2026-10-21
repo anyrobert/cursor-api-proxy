@@ -8,7 +8,6 @@ import {
   buildBridgeContextPreamble,
   BRIDGE_AGENT_PROMPT_SEPARATOR,
 } from "../bridge-context-preamble.js";
-import { resolveClientLaunchInfo } from "../client-process.js";
 import { buildAgentFixedArgs } from "../agent-cmd-args.js";
 import {
   runAgentStream,
