@@ -32,17 +32,17 @@ describe("run", () => {
     expect(result.stdout).toBe("hello from stdin");
   });
 
-  it("propagates configDir as CURSOR_CONFIG_DIR env var to child process", async () => {
+  it("passes envOverrides such as CURSOR_CONFIG_DIR to the child process", async () => {
     const result = await run(
       node,
       ["-e", "process.stdout.write(process.env.CURSOR_CONFIG_DIR || 'unset')"],
-      { configDir: "/test/account/dir" },
+      { envOverrides: { CURSOR_CONFIG_DIR: "/test/account/dir" } },
     );
     expect(result.code).toBe(0);
     expect(result.stdout).toBe("/test/account/dir");
   });
 
-  it("does not set CURSOR_CONFIG_DIR when configDir is omitted", async () => {
+  it("does not set CURSOR_CONFIG_DIR without an override", async () => {
     const result = await run(node, [
       "-e",
       "process.stdout.write(process.env.CURSOR_CONFIG_DIR || 'unset')",
@@ -113,18 +113,21 @@ describe("runStreaming", () => {
     expect(onLine).toHaveBeenCalledWith("tail");
   });
 
-  it("propagates configDir as CURSOR_CONFIG_DIR env var to child process", async () => {
+  it("passes envOverrides such as CURSOR_CONFIG_DIR to the child process", async () => {
     const lines: string[] = [];
     await runStreaming(
       node,
       ["-e", "console.log(process.env.CURSOR_CONFIG_DIR || 'unset')"],
-      { onLine: (l) => lines.push(l), configDir: "/my/config/dir" },
+      {
+        onLine: (l) => lines.push(l),
+        envOverrides: { CURSOR_CONFIG_DIR: "/my/config/dir" },
+      },
     );
     expect(lines).toHaveLength(1);
     expect(lines[0]).toBe("/my/config/dir");
   });
 
-  it("does not set CURSOR_CONFIG_DIR when configDir is omitted", async () => {
+  it("does not set CURSOR_CONFIG_DIR without an override", async () => {
     const lines: string[] = [];
     await runStreaming(
       node,

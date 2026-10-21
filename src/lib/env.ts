@@ -72,9 +72,10 @@ export type AgentCommand = {
   args: string[];
   env: EnvSource;
   windowsVerbatimArguments?: boolean;
-  /** Path to agent entry script (e.g. index.js). Set when using node+script so max-mode preflight can find config. */
-  agentScriptPath?: string;
-  /** Cursor config dir (cli-config.json). Set so CLI reads the same config preflight wrote to. */
+  /**
+   * The CursorToolkit layout's config dir (`<agent dir>/../data/config`), the
+   * child's CURSOR_CONFIG_DIR when the proxy's env sets none.
+   */
   configDir?: string;
 };
 
@@ -252,7 +253,6 @@ function resolveCmdShim(
       command: nodeOverride ?? nodeBin,
       args: [script, ...args],
       env: { ...env, CURSOR_INVOKED_AS: "agent.cmd" },
-      agentScriptPath: script,
       configDir: configDirFromAgentDir(dir),
     };
   }
@@ -268,7 +268,6 @@ function resolveCmdShim(
         command: nodeOverride ?? versionNode,
         args: [versionScript, ...args],
         env: { ...env, CURSOR_INVOKED_AS: "agent.cmd" },
-        agentScriptPath: versionScript,
         configDir: configDirFromAgentDir(dir),
       };
     }
@@ -442,6 +441,21 @@ export function loadEnvConfig(opts: EnvOptions = {}): LoadedEnv {
   };
 }
 
+/**
+ * The env an agent CLI child starts with: the command's env, the agent
+ * layout's config dir when that env sets none, then `overrides`.
+ */
+export function agentChildEnv(
+  command: AgentCommand,
+  overrides?: Record<string, string>,
+): EnvSource {
+  const env = { ...command.env };
+  if (command.configDir && !env.CURSOR_CONFIG_DIR) {
+    env.CURSOR_CONFIG_DIR = command.configDir;
+  }
+  return { ...env, ...overrides };
+}
+
 export function resolveAgentCommand(
   cmd: string,
   args: string[],
@@ -477,7 +491,6 @@ export function resolveAgentCommand(
         command: loaded.agentNode,
         args: [loaded.agentScript, ...args],
         env: { ...env, CURSOR_INVOKED_AS: "agent.cmd" },
-        agentScriptPath,
         configDir: configDirFromAgentDir(agentDir),
       };
       return out;

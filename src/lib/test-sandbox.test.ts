@@ -5,7 +5,7 @@ import * as path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { cursorConfigDir } from "./acp-config-dir.js";
+import { cursorConfigDir } from "./run-config-dir.js";
 import { buildAcpSpawnEnv } from "./acp-spawn.js";
 
 const fakeServerPath = path.join(
