@@ -1,18 +1,26 @@
-import { spawn, type ChildProcess } from "node:child_process";
+/**
+ * JSON-RPC connection to one `agent acp` child (Agent Client Protocol over
+ * stdio). Both ACP paths run on it: plain one-shot turns (acp-client) and
+ * client-tool turns (acp-tool-session).
+ * See https://cursor.com/docs/cli/acp and https://agentclientprotocol.com/
+ */
+
+import type { ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
 import { debuglog } from "node:util";
-import type { AcpPromptBlock } from "./media-input.js";
 
 import {
   ACP_CLIENT_CAPABILITIES,
+  acpFailureText,
   configureAcpSessionModel,
   formatAcpRpcError,
   type AcpModelOptions,
   type AcpModelPlan,
   type AcpSessionModelState,
 } from "./acp-model.js";
-import { trackChildProcess } from "./process.js";
-import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
+import { spawnAcpChild, type AcpSpawnOptions } from "./acp-spawn.js";
+import type { AcpPromptBlock } from "./media-input.js";
+import { killProcessTree } from "./process-tree-kill.js";
 
 const debugAcp = debuglog("cursor-api-proxy:acp");
 
@@ -69,12 +77,10 @@ type PendingRequest = {
   timer?: ReturnType<typeof setTimeout>;
 };
 
-export type AcpConnectionOptions = {
-  cwd: string;
-  env?: Record<string, string | undefined>;
+export type AcpConnectionOptions = AcpSpawnOptions & {
   requestTimeoutMs?: number;
-  spawnOptions?: { windowsVerbatimArguments?: boolean };
   rawDebug?: boolean;
+  /** When aborted, the connection closes and the child gets SIGTERM. */
   signal?: AbortSignal;
   onAgentTextChunk?: (text: string) => void;
   onAgentThoughtChunk?: (text: string) => void;
@@ -82,45 +88,51 @@ export type AcpConnectionOptions = {
   onPermission?: (
     params: AcpPermissionParams,
   ) => string | undefined | Promise<string | undefined>;
+  /**
+   * Answer a `cursor/*` extension request. Return undefined to send the
+   * documented default (first option, plan accepted, empty result).
+   */
+  onExtensionRequest?: (
+    method: string,
+    params: Record<string, unknown>,
+  ) => Record<string, unknown> | undefined;
 };
 
-const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+export type AcpSessionOptions = AcpModelOptions & {
+  cwd: string;
+  mcpServers?: readonly AcpMcpServer[];
+  /** Skip `authenticate` (pre-authenticated via --api-key or agent login). */
+  skipAuthenticate?: boolean;
+};
 
-function buildAcpSpawnEnv(
-  extra?: Record<string, string | undefined>,
-): NodeJS.ProcessEnv {
-  const inheritKeys = [
-    "PATH",
-    "PATHEXT",
-    "SystemRoot",
-    "WINDIR",
-    "COMSPEC",
-    "TEMP",
-    "TMP",
-    "USERPROFILE",
-    "USERNAME",
-    "HOME",
-    "HOMEDRIVE",
-    "HOMEPATH",
-    "APPDATA",
-    "LOCALAPPDATA",
-    "PROGRAMFILES",
-    "PROGRAMFILES(X86)",
-    "PROGRAMDATA",
-    "PUBLIC",
-    "NODE_OPTIONS",
-  ];
-  const out: NodeJS.ProcessEnv = {};
-  for (const key of inheritKeys) {
-    const value = process.env[key];
-    if (value !== undefined) out[key] = value;
+/**
+ * The ACP child exited on its own (bad flag, auth failure, crash at startup)
+ * while the proxy still needed it. `diagnostics` holds the CLI's stderr and
+ * stdout noise for server logs.
+ */
+export class AcpChildExitError extends Error {
+  constructor(
+    readonly exitCode: number,
+    readonly diagnostics: string,
+  ) {
+    super(`ACP child exited with code ${exitCode}`);
+    this.name = "AcpChildExitError";
   }
-  for (const [key, value] of Object.entries(extra ?? {})) {
-    if (value !== undefined) out[key] = value;
-  }
-  return out;
 }
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+const MAX_STDOUT_NOISE = 4000;
+
+/** Updates the proxy consumes without needing their text, kept out of debug logs. */
+const QUIET_SESSION_UPDATES = new Set([
+  "agent_message_chunk",
+  "agent_thought_chunk",
+  "available_commands_update",
+  "tool_call",
+  "tool_call_update",
+]);
+
+/** Normalise CRLF / stray CR so JSON-RPC lines parse on Windows (avoids silent hangs). */
 function parseLine(line: string): JsonRpcMessage | null {
   const trimmed = line.replace(/\r$/, "").trim();
   if (!trimmed) return null;
@@ -131,7 +143,39 @@ function parseLine(line: string): JsonRpcMessage | null {
   }
 }
 
-function extractAcpContentText(content: unknown): string {
+/** The CLI prints startup failures (auth, keychain) as plain text on stdout, not JSON-RPC. */
+function appendStdoutNoise(noise: string, line: string): string {
+  const trimmed = line.replace(/\r$/, "").trim();
+  if (!trimmed) return noise;
+  const next = noise ? `${noise}\n${trimmed}` : trimmed;
+  return next.length > MAX_STDOUT_NOISE ? next.slice(-MAX_STDOUT_NOISE) : next;
+}
+
+/** Add a proxy-side failure line to server-side diagnostics. */
+export function appendAcpFailure(stderr: string, error: unknown): string {
+  const message = acpFailureText(error);
+  if (!message) return stderr;
+  return stderr.trim() ? `${stderr.trim()}\n${message}` : message;
+}
+
+function describeAcpExit(
+  stderr: string,
+  stdoutNoise: string,
+  code: number,
+  awaitingResponse: boolean,
+): string {
+  let out = stderr;
+  if (stdoutNoise && !out.includes(stdoutNoise)) {
+    out = appendAcpFailure(out, stdoutNoise);
+  }
+  if (awaitingResponse) {
+    out = appendAcpFailure(out, `ACP child exited with code ${code} before responding`);
+  }
+  return out;
+}
+
+/** Extract the text payload from an ACP session/update `content` field. */
+export function extractAcpUpdateText(content: unknown): string {
   if (
     content &&
     typeof content === "object" &&
@@ -156,6 +200,37 @@ function extractAcpContentText(content: unknown): string {
     .join("");
 }
 
+/** Documented answers (cursor.com/docs/cli/acp) for blocking cursor/* requests. */
+function defaultExtensionResponse(
+  method: string,
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  if (method === "cursor/ask_question") {
+    const questions = Array.isArray(params.questions)
+      ? (params.questions as Array<Record<string, unknown>>)
+      : [];
+    return {
+      outcome: {
+        outcome: "answered",
+        answers: questions.map((question) => {
+          const options = Array.isArray(question.options)
+            ? (question.options as Array<Record<string, unknown>>)
+            : [];
+          return {
+            questionId: String(question.id ?? ""),
+            selectedOptionIds:
+              options.length > 0 ? [String(options[0]?.id ?? "")] : [],
+          };
+        }),
+      },
+    };
+  }
+  if (method === "cursor/create_plan") {
+    return { outcome: { outcome: "accepted" } };
+  }
+  return {};
+}
+
 function selectedOption(
   params: AcpPermissionParams,
   preferredKind: string,
@@ -172,13 +247,15 @@ export class AcpConnection {
   readonly child: ChildProcess;
   readonly #opts: AcpConnectionOptions;
   readonly #pending = new Map<number, PendingRequest>();
-  readonly #nextId = { current: 1 };
   readonly #lineReader: readline.Interface;
   readonly #exitPromise: Promise<number>;
   #resolveExit!: (code: number) => void;
+  #nextId = 1;
   #stderr = "";
+  #stdoutNoise = "";
   #closed = false;
-  #spawnError?: Error;
+  /** Why the connection stopped on its own; later requests reject with it. */
+  #failure?: Error;
   #abortHandler?: () => void;
 
   constructor(
@@ -187,14 +264,7 @@ export class AcpConnection {
     opts: AcpConnectionOptions,
   ) {
     this.#opts = opts;
-    this.child = spawn(command, [...args], {
-      cwd: opts.cwd,
-      env: buildAcpSpawnEnv(opts.env),
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsVerbatimArguments: opts.spawnOptions?.windowsVerbatimArguments,
-      detached: DETACH_CHILDREN,
-    });
-    trackChildProcess(this.child);
+    this.child = spawnAcpChild(command, args, opts);
 
     this.#exitPromise = new Promise<number>((resolve) => {
       this.#resolveExit = resolve;
@@ -211,24 +281,18 @@ export class AcpConnection {
     this.#lineReader.on("line", (line) => this.#handleLine(line));
 
     this.child.once("error", (error) => {
-      this.#spawnError = error;
+      this.#failure ??= error;
       this.#failPending(error);
     });
+    // A CLI that exits while a request is being written emits EPIPE on
+    // stdin, not on the ChildProcess. Without this listener Node terminates
+    // the entire proxy instead of failing just the affected request.
     this.child.stdin?.on("error", (error) => {
-      this.#spawnError = error;
+      this.#failure ??= error;
       this.#failPending(error);
       void this.close();
     });
-    this.child.once("close", (code) => {
-      this.#closed = true;
-      this.#lineReader.close();
-      this.#opts.signal?.removeEventListener("abort", this.#abortHandler!);
-      this.#failPending(
-        this.#spawnError ??
-          new Error(`ACP child exited with code ${code ?? 1}`),
-      );
-      this.#resolveExit(code ?? 1);
-    });
+    this.child.once("close", (code) => this.#handleExit(code ?? 1));
 
     this.#abortHandler = () => {
       void this.close("SIGTERM");
@@ -283,6 +347,33 @@ export class AcpConnection {
     );
   }
 
+  /**
+   * initialize → authenticate → session/new → model selection, the setup
+   * every turn needs before its prompt. Returns the new session id.
+   */
+  async openSession(opts: AcpSessionOptions): Promise<string> {
+    const mcpServers = opts.mcpServers ?? [];
+    const initialized = await this.initialize();
+    if (
+      mcpServers.some((server) => server.type === "http") &&
+      initialized?.agentCapabilities?.mcpCapabilities?.http !== true
+    ) {
+      throw new Error(
+        "Installed Cursor ACP agent does not support HTTP MCP servers",
+      );
+    }
+    if (opts.skipAuthenticate) {
+      debugAcp("ACP step: authenticate (skipped, pre-authenticated)");
+    } else {
+      await this.authenticate();
+    }
+    const session = await this.newSession(opts.cwd, mcpServers);
+    const sessionId = session?.sessionId;
+    if (!sessionId) throw new Error("ACP session/new returned no sessionId");
+    await this.configureSessionModel(sessionId, opts, session);
+    return sessionId;
+  }
+
   prompt(
     sessionId: string,
     prompt: string,
@@ -300,12 +391,6 @@ export class AcpConnection {
     );
   }
 
-  #notify(method: string, params: Record<string, unknown>): void {
-    const stdin = this.child.stdin;
-    if (!stdin || this.#closed) return;
-    stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
-  }
-
   request(
     method: string,
     params: Record<string, unknown>,
@@ -313,9 +398,11 @@ export class AcpConnection {
   ): Promise<unknown> {
     const stdin = this.child.stdin;
     if (!stdin || this.#closed) {
-      return Promise.reject(new Error("ACP connection is closed"));
+      return Promise.reject(
+        this.#failure ?? new Error("ACP connection is closed"),
+      );
     }
-    const id = this.#nextId.current++;
+    const id = this.#nextId++;
     return new Promise((resolve, reject) => {
       const pending: PendingRequest = { resolve, reject };
       if (timeoutMs > 0) {
@@ -344,10 +431,20 @@ export class AcpConnection {
     this.#notify("session/cancel", { sessionId });
   }
 
+  /**
+   * Signal the child's process tree but keep the connection open: its exit
+   * is reported like any other, so pending requests reject with
+   * AcpChildExitError.
+   */
+  kill(signal: NodeJS.Signals): void {
+    if (this.#closed) return;
+    killProcessTree(this.child, signal);
+  }
+
   async close(signal: NodeJS.Signals = "SIGKILL"): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
-    this.#opts.signal?.removeEventListener("abort", this.#abortHandler!);
+    this.#detachAbort();
     this.#failPending(new Error("ACP connection closed"));
     try {
       this.child.stdin?.end();
@@ -361,11 +458,44 @@ export class AcpConnection {
     ]);
   }
 
+  #handleExit(code: number): void {
+    const unexpected = !this.#closed;
+    this.#closed = true;
+    this.#lineReader.close();
+    this.#detachAbort();
+    if (unexpected) {
+      // The CLI's helpers can outlive it inside its process group.
+      killProcessTree(this.child, "SIGKILL");
+      this.#failure ??= new AcpChildExitError(
+        code,
+        describeAcpExit(
+          this.stderr,
+          this.#stdoutNoise,
+          code,
+          this.#pending.size > 0,
+        ),
+      );
+      this.#failPending(this.#failure);
+    }
+    this.#resolveExit(code);
+  }
+
   #handleLine(line: string): void {
     if (this.#opts.rawDebug) debugAcp("ACP raw: %s", line);
     const message = parseLine(line);
-    if (!message) return;
+    if (!message) {
+      this.#stdoutNoise = appendStdoutNoise(this.#stdoutNoise, line);
+      return;
+    }
+    try {
+      this.#dispatch(message);
+    } catch (error) {
+      // An exception thrown from a readline listener would crash the proxy.
+      debugAcp("ACP message handler failed: %s", acpFailureText(error));
+    }
+  }
 
+  #dispatch(message: JsonRpcMessage): void {
     if (
       message.id != null &&
       (message.result !== undefined || message.error !== undefined) &&
@@ -386,18 +516,7 @@ export class AcpConnection {
     }
 
     if (message.method === "session/update") {
-      const update = (message.params?.update ?? message.params) as
-        | Record<string, unknown>
-        | undefined;
-      if (!update) return;
-      this.#opts.onSessionUpdate?.(update);
-      const type = update.sessionUpdate;
-      const text = extractAcpContentText(update.content);
-      if (type === "agent_message_chunk" && text) {
-        this.#opts.onAgentTextChunk?.(text);
-      } else if (type === "agent_thought_chunk" && text) {
-        this.#opts.onAgentThoughtChunk?.(text);
-      }
+      this.#handleSessionUpdate(message);
       return;
     }
 
@@ -407,7 +526,41 @@ export class AcpConnection {
     }
 
     if (message.id != null && message.method?.startsWith("cursor/")) {
-      this.#handleCursorExtension(message);
+      const params = message.params ?? {};
+      this.#respond(
+        message.id,
+        this.#opts.onExtensionRequest?.(message.method, params) ??
+          defaultExtensionResponse(message.method, params),
+      );
+    }
+  }
+
+  /** The one place agent text and thought chunks enter the proxy. */
+  #handleSessionUpdate(message: JsonRpcMessage): void {
+    const update = (message.params?.update ?? message.params) as
+      | Record<string, unknown>
+      | undefined;
+    if (!update) return;
+    this.#opts.onSessionUpdate?.(update);
+    const type = update.sessionUpdate;
+    const text = extractAcpUpdateText(update.content);
+    if (type === "agent_message_chunk" && text) {
+      this.#opts.onAgentTextChunk?.(text);
+    } else if (type === "agent_thought_chunk" && text) {
+      this.#opts.onAgentThoughtChunk?.(text);
+    } else if (typeof type === "string" && !QUIET_SESSION_UPDATES.has(type)) {
+      const content = update.content;
+      debugAcp(
+        "session/update (unhandled): %s",
+        JSON.stringify({
+          sessionUpdate: type,
+          hasContent: !!content,
+          contentKeys:
+            content && typeof content === "object" && !Array.isArray(content)
+              ? Object.keys(content)
+              : [],
+        }),
+      );
     }
   }
 
@@ -425,40 +578,22 @@ export class AcpConnection {
     });
   }
 
-  #handleCursorExtension(message: JsonRpcMessage): void {
-    const params = message.params ?? {};
-    if (message.method === "cursor/ask_question") {
-      const questions = Array.isArray(params.questions)
-        ? (params.questions as Array<Record<string, unknown>>)
-        : [];
-      this.#respond(message.id!, {
-        outcome: {
-          outcome: "answered",
-          answers: questions.map((question) => {
-            const options = Array.isArray(question.options)
-              ? (question.options as Array<Record<string, unknown>>)
-              : [];
-            return {
-              questionId: String(question.id ?? ""),
-              selectedOptionIds:
-                options.length > 0 ? [String(options[0]?.id ?? "")] : [],
-            };
-          }),
-        },
-      });
-      return;
-    }
-    if (message.method === "cursor/create_plan") {
-      this.#respond(message.id!, { outcome: { outcome: "accepted" } });
-      return;
-    }
-    this.#respond(message.id!, {});
+  #notify(method: string, params: Record<string, unknown>): void {
+    const stdin = this.child.stdin;
+    if (!stdin || this.#closed) return;
+    stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
   }
 
   #respond(id: number | string, result: Record<string, unknown>): void {
     const stdin = this.child.stdin;
     if (!stdin || this.#closed) return;
     stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+  }
+
+  #detachAbort(): void {
+    if (this.#abortHandler) {
+      this.#opts.signal?.removeEventListener("abort", this.#abortHandler);
+    }
   }
 
   #failPending(error: Error): void {

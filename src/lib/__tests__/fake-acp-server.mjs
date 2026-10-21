@@ -400,6 +400,40 @@ async function runBuiltinPermissionPrompt() {
   update("agent_message_chunk", { content: { text: "Builtin handled" } });
 }
 
+/**
+ * Ask the documented cursor/* blocking requests. The answer text is the JSON
+ * of each reply, sent on stdout so it cannot race the JSON-RPC reply.
+ */
+async function runCursorExtensionsPrompt() {
+  const requests = [
+    [
+      "cursor/ask_question",
+      {
+        toolCallId: "ask-1",
+        questions: [
+          {
+            id: "q1",
+            prompt: "Which?",
+            options: [
+              { id: "a", label: "A" },
+              { id: "b", label: "B" },
+            ],
+          },
+        ],
+      },
+    ],
+    [
+      "cursor/create_plan",
+      { toolCallId: "plan-1", plan: "# Plan", todos: [] },
+    ],
+  ];
+  const answers = {};
+  for (const [method, params] of requests) {
+    answers[method] = await askClient(method, params);
+  }
+  update("agent_message_chunk", { content: { text: JSON.stringify(answers) } });
+}
+
 function parameterizedConfigResult(params) {
   const models =
     scenario === "grok_models"
@@ -557,11 +591,17 @@ rl.on("line", (line) => {
       setTimeout(() => process.exit(7), 10);
       return;
     }
+    if (scenario === "hang_prompt") {
+      // Never answer, so the caller's abort or overall timeout ends the turn.
+      return;
+    }
     const operation = isToolScenario()
       ? runToolPrompt(msg.params)
       : scenario === "builtin_permission"
         ? runBuiltinPermissionPrompt()
-        : Promise.resolve().then(async () => {
+        : scenario === "cursor_extensions"
+          ? runCursorExtensionsPrompt()
+          : Promise.resolve().then(async () => {
             if (scenario === "with_thought") {
               update("agent_thought_chunk", {
                 content: { text: "SECRET_THOUGHT" },

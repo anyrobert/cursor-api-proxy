@@ -4,11 +4,8 @@ import {
   acpModelSelectionError,
   planAcpModelSelection,
 } from "./acp-model.js";
-import {
-  extractAcpUpdateText,
-  runAcpStream,
-  runAcpSync,
-} from "./acp-client.js";
+import { runAcpStream, runAcpSync } from "./acp-client.js";
+import { extractAcpUpdateText } from "./acp-connection.js";
 
 const node = process.execPath;
 const cwd = process.cwd();
