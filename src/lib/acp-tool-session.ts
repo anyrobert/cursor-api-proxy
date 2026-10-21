@@ -57,6 +57,18 @@ export type AcpToolSessionOptions = AcpModelOptions & {
   onClose?: () => void | Promise<void>;
 };
 
+/**
+ * The agent's tool calls broke a rule of the request: tool_choice required
+ * a call it never made, or it made more parallel calls than allowed. The
+ * message names only the rule, so clients may see it.
+ */
+export class ToolCallConstraintError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolCallConstraintError";
+  }
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -209,7 +221,7 @@ export class AcpToolSession {
           calls.length > this.#opts.maxParallelToolCalls
         ) {
           await this.close();
-          throw new Error(
+          throw new ToolCallConstraintError(
             `Agent emitted ${calls.length} parallel tool calls; maximum is ${this.#opts.maxParallelToolCalls}`,
           );
         }
@@ -234,7 +246,9 @@ export class AcpToolSession {
     }
     if (this.#opts.requireToolCall && this.bridge.totalCalls === 0) {
       await this.close();
-      throw new Error("Agent completed without the required tool call");
+      throw new ToolCallConstraintError(
+        "Agent completed without the required tool call",
+      );
     }
     this.#terminal = true;
     const { text, reasoning } = this.#drainOutput();

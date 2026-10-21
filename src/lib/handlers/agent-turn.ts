@@ -21,9 +21,11 @@ import {
   hitPlanLimit,
   PLAN_LIMIT_CODE,
   PLAN_LIMIT_PENALTY_MS,
+  PlanLimitError,
   PlanLimitHoldback,
 } from "../plan-limit.js";
 import {
+  appendSessionError,
   logAccountAssigned,
   logAccountStats,
   logAgentError,
@@ -32,9 +34,9 @@ import {
 } from "../request-log.js";
 import { ToolSessionError } from "../tool-session-registry.js";
 import {
+  AGENT_START_FAILURE,
   agentExitFailure,
   PLAN_LIMIT_FAILURE,
-  STREAM_FAILURE,
   toolTurnFailure,
   type AgentFailure,
 } from "./agent-failure.js";
@@ -115,10 +117,35 @@ export class AccountUse {
 }
 
 /**
+ * Logs an error the client hears about only as `failure`, since its text
+ * can name paths on the proxy host or hold CLI output: the whole error
+ * (with its stack) to the console, its message to the sessions log.
+ */
+function logThrownError(
+  turn: TurnRequest,
+  failure: AgentFailure,
+  error: unknown,
+): void {
+  console.error(
+    `[${new Date().toISOString()}] Agent turn error (${failure.code}):`,
+    error,
+  );
+  appendSessionError(
+    turn.config.sessionsLogPath,
+    turn.method,
+    turn.pathname,
+    turn.remoteAddress,
+    failure.code,
+    error instanceof Error ? error.message : String(error),
+  );
+}
+
+/**
  * Records a structured tool turn that threw and returns what to tell the
  * client. Tool-session errors answer the client's own request and are not
- * logged; anything else goes to the console and the sessions log, with the
- * CLI output of an agent that exited.
+ * logged. An agent exit or the plan limit is logged like on the plain path,
+ * with the CLI output of an agent that exited (AcpConnection has printed
+ * it); any other error is logged whole.
  */
 export function failToolTurn(
   turn: TurnRequest,
@@ -127,7 +154,8 @@ export function failToolTurn(
 ): AgentFailure {
   const failure = toolTurnFailure(error);
   use.failed(failure);
-  if (!(error instanceof ToolSessionError)) {
+  if (error instanceof ToolSessionError) return failure;
+  if (error instanceof AcpChildExitError || error instanceof PlanLimitError) {
     logTurnFailure(
       turn.config.sessionsLogPath,
       turn.method,
@@ -136,6 +164,8 @@ export function failToolTurn(
       failure,
       error instanceof AcpChildExitError ? error.diagnostics : undefined,
     );
+  } else {
+    logThrownError(turn, failure, error);
   }
   return failure;
 }
@@ -218,6 +248,23 @@ function settleRun(
 }
 
 /**
+ * Records a run that rejected, which runAgentSync and runAgentStream do
+ * only when the agent could not be started (a missing binary, say), and
+ * returns AGENT_START_FAILURE. A run the client walked away from counts as
+ * nothing, as in settleRun.
+ */
+function settleStartError(
+  turn: PlainTurn,
+  use: AccountUse,
+  error: unknown,
+): AgentFailure | undefined {
+  if (use.signal.aborted) return undefined;
+  use.failed();
+  logThrownError(turn, AGENT_START_FAILURE, error);
+  return AGENT_START_FAILURE;
+}
+
+/**
  * Streams a plain turn through `sink` and always ends the response: with
  * the answer, with the API's terminal error when the agent fails, or with
  * nothing once the client has gone. Text that could still be the plan-limit
@@ -281,9 +328,8 @@ export async function streamPlainTurn(
     );
     end(settleRun(turn, use, run, text));
   } catch (error) {
-    if (!use.signal.aborted) use.failed();
-    console.error(`[${new Date().toISOString()}] Agent stream error:`, error);
-    end(STREAM_FAILURE);
+    const failure = settleStartError(turn, use, error);
+    if (failure) end(failure);
   } finally {
     stopKeepalive();
     use.end();
@@ -298,7 +344,7 @@ export type PlainTurnResult =
 /**
  * Runs a plain turn to completion. Undefined when the client has gone and
  * there is no one to answer. A run that cannot start (the agent binary is
- * missing, say) rejects, and the request listener answers it.
+ * missing, say) fails with AGENT_START_FAILURE, as it does in a stream.
  */
 export async function runPlainTurn(
   turn: PlainTurn,
@@ -329,8 +375,8 @@ export async function runPlainTurn(
     logTrafficResponse(config.verbose, turn.logModel, text, false);
     return { ok: true, text };
   } catch (error) {
-    if (!use.signal.aborted) use.failed();
-    throw error;
+    const failure = settleStartError(turn, use, error);
+    return failure && { ok: false, failure };
   } finally {
     use.end();
   }
