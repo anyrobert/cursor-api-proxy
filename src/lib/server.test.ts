@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { startBridgeServer } from "./server.js";
 import { appendSessionLine } from "./request-log.js";
-import { run, runStreaming } from "./process.js";
+import { run } from "./process.js";
 import type { BridgeConfig } from "./config.js";
 
 vi.mock("./cursor-cli.js", () => ({

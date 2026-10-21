@@ -216,7 +216,7 @@ function parseQuery(url: string): Record<string, string> {
   return out;
 }
 
-export type AdminDashboardOpts = {
+type AdminDashboardOpts = {
   version: string;
   config: BridgeConfig;
 };
