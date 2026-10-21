@@ -1,4 +1,5 @@
 import { AcpChildExitError } from "../acp-connection.js";
+import { ToolCallConstraintError } from "../acp-tool-session.js";
 import {
   PLAN_LIMIT_CODE,
   PLAN_LIMIT_MESSAGE,
@@ -23,11 +24,17 @@ export function agentExitFailure(message: string): AgentFailure {
   return { status: 500, code: "cursor_cli_error", message };
 }
 
-/** The agent could not be run or its stream broke (spawn error and the like). */
-export const STREAM_FAILURE: AgentFailure = {
+/**
+ * The agent could not be started, e.g. its binary is missing or cannot be
+ * run. Every path (plain or tool, sync or stream) reports it like this,
+ * with the code of a failed agent run (#66, #67, #89): either way the
+ * Cursor CLI is unusable, and only the proxy's operator can fix it. The
+ * cause names paths on the proxy host, so it stays in the server logs.
+ */
+export const AGENT_START_FAILURE: AgentFailure = {
   status: 500,
   code: "cursor_cli_error",
-  message: "The Cursor agent stream failed. See server logs for details.",
+  message: "The Cursor agent could not be started. See server logs for details.",
 };
 
 /**
@@ -41,10 +48,29 @@ export const PLAN_LIMIT_FAILURE: AgentFailure = {
   message: PLAN_LIMIT_MESSAGE,
 };
 
+/** A tool turn that threw an error with no client-safe message of its own. */
+const TOOL_TURN_FAILURE: AgentFailure = {
+  status: 500,
+  code: "tool_session_error",
+  message: "The client-tool turn failed. See server logs for details.",
+};
+
 /**
- * A structured tool turn that threw: an agent that exited or hit the plan
- * limit reports like it does on the plain path, a tool-session error keeps
- * its status and code.
+ * Whether `error` is Node's report that a child process could not be
+ * spawned ("spawn /path/to/agent ENOENT"), which the ACP connection passes
+ * on as it is.
+ */
+function isSpawnError(error: unknown): boolean {
+  const syscall = (error as NodeJS.ErrnoException | null | undefined)?.syscall;
+  return typeof syscall === "string" && syscall.startsWith("spawn");
+}
+
+/**
+ * A structured tool turn that threw. An agent that exited, could not be
+ * started or hit the plan limit reports like it does on the plain path. A
+ * tool-session error keeps its status and code, and a broken tool-call rule
+ * keeps its message. Any other error's text can hold paths or CLI output,
+ * so the client gets a generic message and the error stays in the logs.
  */
 export function toolTurnFailure(error: unknown): AgentFailure {
   if (error instanceof PlanLimitError) return PLAN_LIMIT_FAILURE;
@@ -52,11 +78,11 @@ export function toolTurnFailure(error: unknown): AgentFailure {
   if (error instanceof ToolSessionError) {
     return { status: error.status, code: error.code, message: error.message };
   }
-  return {
-    status: 500,
-    code: "tool_session_error",
-    message: error instanceof Error ? error.message : String(error),
-  };
+  if (error instanceof ToolCallConstraintError) {
+    return { ...TOOL_TURN_FAILURE, message: error.message };
+  }
+  if (isSpawnError(error)) return AGENT_START_FAILURE;
+  return TOOL_TURN_FAILURE;
 }
 
 /**

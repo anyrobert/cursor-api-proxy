@@ -25,8 +25,6 @@ import { ToolSessionRegistry } from "./tool-session-registry.js";
 const SECRET_STDERR = "agent: token=secret-models-detail";
 const MODEL_CHECK_FAILED =
   "The Cursor CLI could not list models. See server logs for details.";
-const INTERNAL =
-  "The proxy could not handle the request. See server logs for details.";
 
 let workDir: string;
 let sessionsLog: string;
@@ -201,36 +199,8 @@ describe("model check that fails", () => {
   });
 });
 
-describe("agent that cannot be started on a sync turn", () => {
-  // The ACP child's spawn error ("spawn <path> ENOENT") rejects the turn,
-  // and the request listener answers it.
-  let base: string;
-  let missingAcp: string;
-
-  beforeEach(async () => {
-    missingAcp = join(workDir, "no-such-acp-agent");
-    base = await start({
-      agentBin: fakeAgent("agent-catalog", "echo 'auto - Auto'"),
-      useAcp: true,
-      acpCommand: missingAcp,
-      acpArgs: [],
-      acpEnv: {},
-    });
-  });
-
-  it.each(["chat", "responses", "anthropic"] as const)(
-    "%s answers a generic 500 in the API's shape and logs the spawn error",
-    async (api) => {
-      const { status, text } = await post(base, api);
-
-      expect(status).toBe(500);
-      expect(JSON.parse(text)).toEqual(errorBody(api, 500, "internal_error", INTERNAL));
-      expect(text).not.toContain(workDir);
-      expect(consoleErrors()).toContain(missingAcp);
-      expect(sessionsLogText()).toContain(" internal_error ");
-    },
-  );
-});
+// An agent that cannot be started, and the catch-all's generic answer for
+// anything else, are covered in agent-start-failure-api.test.ts (#100).
 
 describe("model API body that is not JSON", () => {
   it.each(["chat", "responses", "anthropic"] as const)(
