@@ -45,11 +45,35 @@ export function isPlanLimitReply(text: string): boolean {
   );
 }
 
-/** Whether diagnostics (CLI stderr, an ACP error) carry a reply anywhere. */
+/**
+ * What the CLI prints instead (exit 1) when the account is out of plan:
+ * "ActionRequiredError: Your team's prepaid balance is used up Buy credits
+ * for your team to keep going."
+ */
+const OUT_OF_PLAN_ERRORS = [
+  "prepaid balance is used up",
+  "buy credits for your team",
+];
+
+/**
+ * An ActionRequiredError line about money or the plan. Other user actions
+ * (log in, say) raise the same error class, so the line must say which.
+ */
+const ACTION_REQUIRED_PLAN =
+  /ActionRequiredError:.*\b(balance|credits?|plan|payment|billing)\b/i;
+
+/**
+ * Whether diagnostics (CLI stderr, an ACP error) carry a plan-limit reply
+ * or an out-of-plan error anywhere.
+ */
 export function mentionsPlanLimit(diagnostics: string | undefined): boolean {
   if (!diagnostics) return false;
   const text = normalize(diagnostics);
-  return PHRASES.some((phrase) => text.includes(phrase));
+  return (
+    PHRASES.some((phrase) => text.includes(phrase)) ||
+    OUT_OF_PLAN_ERRORS.some((error) => text.includes(error)) ||
+    diagnostics.split(/\r?\n/).some((line) => ACTION_REQUIRED_PLAN.test(line))
+  );
 }
 
 /**

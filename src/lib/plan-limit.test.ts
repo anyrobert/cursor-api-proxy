@@ -48,6 +48,34 @@ describe("mentionsPlanLimit", () => {
     expect(mentionsPlanLimit("rate limit exceeded")).toBe(false);
     expect(mentionsPlanLimit("upgrade your plan")).toBe(false);
   });
+
+  const PREPAID =
+    "ActionRequiredError: Your team's prepaid balance is used up Buy credits for your team to keep going.";
+
+  it.each([
+    PREPAID,
+    `[cli] starting\n${PREPAID}\n    at run (agent.js:1:1)`,
+    // The same text as an ACP JSON-RPC error (formatAcpRpcError's "message: data").
+    `Internal error: ${PREPAID}`,
+    "Your team's PREPAID balance\nis used up",
+    "Buy credits for your team to keep going.",
+    "ActionRequiredError: Billing details are missing for this team",
+    "ActionRequiredError: Add a credit card to your plan",
+    "ActionRequiredError: Not enough credits left",
+  ])("finds the out-of-plan error in %j", (diagnostics) => {
+    expect(mentionsPlanLimit(diagnostics)).toBe(true);
+  });
+
+  it.each([
+    "ActionRequiredError: Please log in to continue (run `agent login`)",
+    "ActionRequiredError: Accept the new terms of service",
+    // The keywords outside the ActionRequiredError line do not count.
+    "ActionRequiredError: Please log in\nYour plan: Pro",
+    "Error: credits endpoint unreachable",
+    "balance used up",
+  ])("leaves %j alone", (diagnostics) => {
+    expect(mentionsPlanLimit(diagnostics)).toBe(false);
+  });
 });
 
 describe("hitPlanLimit", () => {

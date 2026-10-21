@@ -500,6 +500,23 @@ describe("Cursor plan limit, CLI mode (#65)", () => {
     expect(JSON.parse(text)).toEqual(PLAN_LIMIT_BODY.chat);
   });
 
+  // The CLI exits 1 with "ActionRequiredError: Your team's prepaid balance
+  // is used up ..." where ACP answers with a plan-limit reply.
+  it.each(APIS)("%s reports the CLI's prepaid-balance error as a plan limit", async (api) => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", "prepaid_balance");
+    const base = await start();
+    const [path, body] = PLAIN_REQUESTS[api];
+    const sync = await post(base, path, body);
+    expect(sync.status).toBe(429);
+    expect(JSON.parse(sync.text)).toEqual(PLAN_LIMIT_BODY[api]);
+    const streamed = await post(base, path, { ...body, stream: true });
+    expect(streamed.status).toBe(200);
+    expectPlanLimitStream(api, streamed.text);
+    expect(fs.readFileSync(sessionsLog, "utf8")).toMatch(
+      new RegExp(`ERROR POST ${path} \\S+ cursor_plan_limit account default, exit 1`),
+    );
+  });
+
   it.each(APIS)("%s keeps an answer that only starts like the reply", async (api) => {
     vi.stubEnv("FAKE_CLI_SCENARIO", "upgrade_mention");
     const answer =

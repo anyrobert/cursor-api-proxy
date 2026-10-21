@@ -402,7 +402,7 @@ account1 on 8765, account2 on 8766, and so on.
 
 ### Rate and plan limits
 
-When the agent's output shows a rate limit, the account rests for a minute and the pool prefers the others. When a Cursor plan is used up, the agent answers only "Upgrade your plan to continue" (or "Add a payment method to continue"); the proxy returns that as HTTP 429 with code `cursor_plan_limit` on every API (in a stream, as the error that ends it, never as answer text) and rests the account for 15 minutes, so a retry goes to another account. Plan limits are per model: an account that hit it for one model may still answer others.
+When the agent's output shows a rate limit, the account rests for a minute and the pool prefers the others. When a Cursor plan is used up, the agent answers only "Upgrade your plan to continue" (or "Add a payment method to continue"), or the CLI fails with "prepaid balance is used up"; the proxy returns that as HTTP 429 with code `cursor_plan_limit` on every API (in a stream, as the error that ends it, never as answer text) and rests the account for 15 minutes, so a retry goes to another account. Plan limits are per model: an account that hit it for one model may still answer others.
 
 ## Streaming
 

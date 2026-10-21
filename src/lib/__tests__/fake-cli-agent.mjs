@@ -38,6 +38,11 @@ const runs = {
   plan_limit: () => [answer(["Upgrade your ", "plan to continue"]), "", 0],
   payment_method: () => [answer(["Add a payment ", "method to continue"]), "", 0],
   plan_limit_stderr: () => ["", "Error: Upgrade your plan to continue\n", 1],
+  prepaid_balance: () => [
+    "",
+    "ActionRequiredError: Your team's prepaid balance is used up Buy credits for your team to keep going.\n",
+    1,
+  ],
   // Real answers that start like the plan-limit reply.
   upgrade_mention: () => [
     answer(["Upgrade your plan to continue ", "using premium models, or pick a free one."]),
