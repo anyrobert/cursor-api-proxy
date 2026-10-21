@@ -54,8 +54,9 @@ export function buildAcpSpawnEnv(
 
 /**
  * Start `agent acp`. Every ACP child (plain and tool turns) is spawned here,
- * so its environment and config dir are decided in one place. Children lead
- * their own process group so killProcessTree can reap the CLI's helpers.
+ * with the env agent-runner built for its run (including the run's private
+ * config dir, see acp-config-dir.ts). Children lead their own process group
+ * so killProcessTree can reap the CLI's helpers.
  */
 export function spawnAcpChild(
   command: string,

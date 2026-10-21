@@ -136,6 +136,57 @@ describe("one-shot ACP turns", () => {
   });
 });
 
+describe("the CLI's end-of-turn RetriableError trailer (#76)", () => {
+  const ANSWER = "The image shows a red square.";
+
+  it("is not in a sync answer", async () => {
+    const result = await runAcpSync(node, [fakeServerPath], "What is this?", {
+      cwd,
+      timeoutMs: 5_000,
+      skipAuthenticate: true,
+      env: { FAKE_ACP_SCENARIO: "retriable_trailer" },
+    });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe(ANSWER);
+  });
+
+  it("is not in a streamed answer", async () => {
+    const chunks: string[] = [];
+    const result = await runAcpStream(
+      node,
+      [fakeServerPath],
+      "What is this?",
+      {
+        cwd,
+        timeoutMs: 5_000,
+        skipAuthenticate: true,
+        env: { FAKE_ACP_SCENARIO: "retriable_trailer" },
+      },
+      (chunk) => chunks.push(chunk),
+    );
+    expect(result.code).toBe(0);
+    expect(chunks.join("")).toBe(ANSWER);
+  });
+
+  it("releases held text before a tool call and drops the trailer at the end", async () => {
+    const events: string[] = [];
+    const connection = connect("retriable_trailer_after_tool_call", {
+      onAgentTextChunk: (text) => events.push(`text:${text}`),
+      onSessionUpdate: (update) => {
+        if (update.sessionUpdate === "tool_call") events.push("tool_call");
+      },
+    });
+    const sessionId = await connection.openSession({ cwd, skipAuthenticate: true });
+    await connection.prompt(sessionId, "What is this?");
+    expect(events).toEqual([
+      "text:Let me look.",
+      "text:\n\n",
+      "tool_call",
+      "text:It is a red square.",
+    ]);
+  });
+});
+
 describe("ACP child that exits before replying", () => {
   async function startFailure(
     overrides: Partial<AcpConnectionOptions> = {},

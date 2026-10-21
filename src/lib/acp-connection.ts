@@ -19,6 +19,7 @@ import {
   type AcpSessionModelState,
 } from "./acp-model.js";
 import { spawnAcpChild, type AcpSpawnOptions } from "./acp-spawn.js";
+import { AcpTrailerFilter } from "./acp-text-trailer.js";
 import type { AcpPromptBlock } from "./media-input.js";
 import { killProcessTree } from "./process-tree-kill.js";
 
@@ -82,8 +83,13 @@ export type AcpConnectionOptions = AcpSpawnOptions & {
   rawDebug?: boolean;
   /** When aborted, the connection closes and the child gets SIGTERM. */
   signal?: AbortSignal;
+  /**
+   * Agent message text without the CLI's end-of-turn error trailer
+   * (acp-text-trailer.ts); text that could be that trailer comes late.
+   */
   onAgentTextChunk?: (text: string) => void;
   onAgentThoughtChunk?: (text: string) => void;
+  /** Every session/update as the CLI sent it, text chunks included. */
   onSessionUpdate?: (update: Record<string, unknown>) => void;
   onPermission?: (
     params: AcpPermissionParams,
@@ -277,6 +283,13 @@ export class AcpConnection {
   /** Why the connection stopped on its own; later requests reject with it. */
   #failure?: Error;
   #abortHandler?: () => void;
+  readonly #agentText = new AcpTrailerFilter((text) => {
+    try {
+      this.#opts.onAgentTextChunk?.(text);
+    } catch (error) {
+      debugAcp("ACP text listener failed: %s", acpFailureText(error));
+    }
+  });
 
   constructor(
     command: string,
@@ -408,7 +421,7 @@ export class AcpConnection {
         prompt: [{ type: "text", text: prompt }, ...(mediaBlocks ?? [])],
       },
       timeoutMs,
-    );
+    ).finally(() => this.#agentText.end());
   }
 
   request(
@@ -465,6 +478,7 @@ export class AcpConnection {
     if (this.#closed) return;
     this.#closed = true;
     this.#detachAbort();
+    this.#agentText.end();
     this.#failPending(new Error("ACP connection closed"));
     try {
       this.child.stdin?.end();
@@ -483,6 +497,7 @@ export class AcpConnection {
     this.#closed = true;
     this.#lineReader.close();
     this.#detachAbort();
+    this.#agentText.end();
     if (unexpected) {
       // The CLI's helpers can outlive it inside its process group.
       killProcessTree(this.child, "SIGKILL");
@@ -566,11 +581,13 @@ export class AcpConnection {
       | Record<string, unknown>
       | undefined;
     if (!update) return;
-    this.#opts.onSessionUpdate?.(update);
     const type = update.sessionUpdate;
+    // Text followed by a tool call is not the end of the turn.
+    if (type === "tool_call") this.#agentText.flush();
+    this.#opts.onSessionUpdate?.(update);
     const text = extractAcpUpdateText(update.content);
     if (type === "agent_message_chunk" && text) {
-      this.#opts.onAgentTextChunk?.(text);
+      this.#agentText.push(text);
     } else if (type === "agent_thought_chunk" && text) {
       this.#opts.onAgentThoughtChunk?.(text);
     } else if (typeof type === "string" && !QUIET_SESSION_UPDATES.has(type)) {

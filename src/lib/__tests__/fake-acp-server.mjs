@@ -5,6 +5,44 @@
 import { closeSync, openSync, readFileSync } from "node:fs";
 import { devNull } from "node:os";
 import { createInterface } from "node:readline";
+import { mkdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir, userInfo } from "node:os";
+import { join, resolve, sep } from "node:path";
+
+/**
+ * Tests run with a throwaway home (vitest.setup.ts). If this agent child
+ * sees the real user home, or a config dir inside it, the proxy would hand
+ * it (and copy for it) the developer's real Cursor config: fail loudly.
+ */
+function realHomeReached() {
+  const realHome = realpathOrResolve(userInfo().homedir);
+  const inside = (dir) => {
+    const real = realpathOrResolve(dir);
+    return real === realHome || real.startsWith(`${realHome}${sep}`);
+  };
+  const xdg = process.env.XDG_CONFIG_HOME?.trim();
+  return (
+    realpathOrResolve(homedir()) === realHome ||
+    [process.env.CURSOR_CONFIG_DIR?.trim(), xdg && join(xdg, "cursor")].some(
+      (dir) => dir && inside(dir),
+    )
+  );
+}
+
+function realpathOrResolve(dir) {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return resolve(dir);
+  }
+}
+
+if (realHomeReached()) {
+  process.stderr.write(
+    "__FAKE_ACP_REAL_HOME__: test agent child reached the real user home or its Cursor config\n",
+  );
+  process.exit(70);
+}
 
 const scenario = process.env.FAKE_ACP_SCENARIO || "";
 const waiting = new Map();
@@ -500,6 +538,83 @@ function failStartup() {
   process.stderr.write("agent: unknown option '--bogus-flag'\n", exit);
 }
 
+/**
+ * "persist_model_config" saves model choices in the CLI config dir the way
+ * the real CLI does (#63): `--model` at startup, every set_config_option,
+ * and a store per session. The prompt answer is the JSON of the config dir
+ * the run used and the cli-config.json it found there at startup. It only
+ * writes inside the OS temp dir, so a test bug cannot reach a real ~/.cursor.
+ */
+function cliConfigDir() {
+  const explicit = process.env.CURSOR_CONFIG_DIR;
+  if (explicit?.trim()) return explicit;
+  const xdg = process.env.XDG_CONFIG_HOME;
+  if (xdg?.trim()) return join(xdg, "cursor");
+  return join(homedir(), ".cursor");
+}
+
+function insideTmp(dir) {
+  return realpathOrResolve(dir).startsWith(`${realpathSync(tmpdir())}${sep}`);
+}
+
+function readJson(file) {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeConfigFile(name, transform) {
+  const dir = persistedConfig.dir;
+  if (!insideTmp(dir)) {
+    process.stderr.write(`__FAKE_ACP_REFUSED_WRITE__:${dir}\n`);
+    return;
+  }
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, name);
+  const next = transform(readJson(file) ?? {});
+  const temp = `${file}.${process.pid}.tmp`;
+  writeFileSync(temp, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  renameSync(temp, file);
+}
+
+function persistModelChoice(params) {
+  writeConfigFile("cli-config.json", (config) => ({
+    ...config,
+    selectedModel: { modelId: params?.value, parameters: [] },
+    modelParameters: { ...config.modelParameters, [params?.value]: [] },
+    hasChangedDefaultModel: true,
+    modelSelectionHistory: [params?.value, ...(config.modelSelectionHistory ?? [])],
+  }));
+  writeConfigFile("acp-config.json", (config) => ({
+    ...config,
+    selectedModelVariantId: params?.value,
+  }));
+}
+
+function persistSessionStore(sessionId) {
+  const store = join(persistedConfig.dir, "acp-sessions", sessionId);
+  if (!insideTmp(persistedConfig.dir)) return;
+  mkdirSync(store, { recursive: true });
+  writeFileSync(join(store, "store.db"), "");
+}
+
+const persistedConfig =
+  scenario === "persist_model_config"
+    ? {
+        dir: cliConfigDir(),
+        seen: readJson(join(cliConfigDir(), "cli-config.json")),
+      }
+    : undefined;
+if (persistedConfig && cliModelArg()) {
+  writeConfigFile("cli-config.json", (config) => ({
+    ...config,
+    model: { modelId: cliModelArg() },
+    hasChangedDefaultModel: true,
+  }));
+}
+
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   let msg;
@@ -570,6 +685,12 @@ rl.on("line", (line) => {
     send({ id: msg.id, result: {} });
     return;
   }
+  if (msg.method === "session/new" && persistedConfig) {
+    persistSessionStore("sess-1");
+  }
+  if (msg.method === "session/set_config_option" && persistedConfig) {
+    persistModelChoice(msg.params);
+  }
   if (msg.method === "session/new") {
     mcpServers = msg.params?.mcpServers ?? [];
     process.stderr.write(
@@ -629,6 +750,46 @@ rl.on("line", (line) => {
     }
     if (scenario === "hang_prompt") {
       // Never answer, so the caller's abort or overall timeout ends the turn.
+      return;
+    }
+    if (scenario === "retriable_trailer") {
+      // The real CLI reports a stream that broke after the answer as one more
+      // chunk, then still ends the turn normally (#76).
+      update("agent_message_chunk", {
+        content: { text: "The image shows a red square." },
+      });
+      update("agent_message_chunk", {
+        content: { text: "\n\nError: RetriableError: WritableIterable is closed" },
+      });
+      send({ id: msg.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (persistedConfig) {
+      update("agent_message_chunk", {
+        content: {
+          text: JSON.stringify({
+            configDir: persistedConfig.dir,
+            seen: persistedConfig.seen,
+          }),
+        },
+      });
+      send({ id: msg.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (scenario === "retriable_trailer_after_tool_call") {
+      update("agent_message_chunk", { content: { text: "Let me look.\n\n" } });
+      update("tool_call", {
+        toolCallId: "read-1",
+        title: "Read image",
+        kind: "read",
+        status: "pending",
+      });
+      update("tool_call_update", { toolCallId: "read-1", status: "completed" });
+      update("agent_message_chunk", { content: { text: "It is a red square." } });
+      update("agent_message_chunk", {
+        content: { text: "\n\nError: RetriableError: WritableIterable is closed" },
+      });
+      send({ id: msg.id, result: { stopReason: "end_turn" } });
       return;
     }
     const operation = isToolScenario()

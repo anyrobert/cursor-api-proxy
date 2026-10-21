@@ -1,14 +1,22 @@
-import * as fs from "node:fs";
-
-import { runAcpStream, runAcpSync } from "./acp-client.js";
+import { runAcpStream, runAcpSync, type AcpRunOptions } from "./acp-client.js";
+import {
+  createRunConfigDir,
+  cursorConfigDir,
+  type RunConfigDir,
+} from "./acp-config-dir.js";
 import type { AcpModelOptions } from "./acp-model.js";
+import { buildAcpSpawnEnv } from "./acp-spawn.js";
 import type { AcpPromptBlock } from "./media-input.js";
 import { AcpToolSession } from "./acp-tool-session.js";
 import type { BridgeConfig } from "./config.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
 import { run, runStreaming } from "./process.js";
 import type { ClientToolDefinition } from "./tool-types.js";
-import { chatOnlyHomeDir, getChatOnlyEnvOverrides } from "./workspace.js";
+import {
+  chatOnlyHomeDir,
+  getChatOnlyEnvOverrides,
+  removeChatOnlyTempDir,
+} from "./workspace.js";
 import { readKeychainToken, writeCachedToken } from "./token-cache.js";
 
 function cacheTokenForAccount(configDir?: string): void {
@@ -71,18 +79,34 @@ function extractModeFromCmdArgs(cmdArgs: string[]): CursorExecutionMode {
   return "ask";
 }
 
-function acpInvocation(
-  config: BridgeConfig,
-  workspaceDir: string,
-  effectiveChatOnly: boolean,
-  cmdArgs: string[],
-  configDir?: string,
-  tempDir?: string,
-): {
+/** What every ACP run is started from. */
+type AcpRunContext = {
+  config: BridgeConfig;
+  workspaceDir: string;
+  effectiveChatOnly: boolean;
+  cmdArgs: string[];
+  /** Account pool config dir. */
+  configDir?: string;
+  /** Chat-only isolation root, owned by the run once it is handed over. */
+  tempDir?: string;
+};
+
+type AcpInvocation = {
   args: string[];
   env: Record<string, string | undefined>;
   model?: string;
-} {
+  /** Remove the run's private dirs; call once its agent is gone. */
+  release: () => void;
+};
+
+/**
+ * Args and env for one `agent acp` run. The CLI saves each model choice in
+ * its config dir (#63), so the run always gets a config dir of its own: the
+ * chat-only temp home when there is no account pool, else a copy of the
+ * account's (or the user's) config dir. On failure it removes `tempDir`.
+ */
+function acpInvocation(ctx: AcpRunContext): AcpInvocation {
+  const { config, workspaceDir, effectiveChatOnly, cmdArgs, configDir, tempDir } = ctx;
   const model = extractModelFromCmdArgs(cmdArgs);
   const mode = extractModeFromCmdArgs(cmdArgs);
   let args = acpArgsWithWorkspace(config.acpArgs, workspaceDir);
@@ -97,21 +121,69 @@ function acpInvocation(
   } else if (configDir) {
     env.CURSOR_CONFIG_DIR = configDir;
   }
-  return { args, env, model };
+  if (effectiveChatOnly && !configDir) {
+    return { args, env, model, release: () => removeChatOnlyTempDir(tempDir) };
+  }
+  let runConfig: RunConfigDir;
+  try {
+    runConfig = createRunConfigDir(cursorConfigDir(buildAcpSpawnEnv(env)));
+  } catch (error) {
+    removeChatOnlyTempDir(tempDir);
+    throw error;
+  }
+  env.CURSOR_CONFIG_DIR = runConfig.dir;
+  return {
+    args,
+    env,
+    model,
+    release: () => {
+      runConfig.dispose();
+      removeChatOnlyTempDir(tempDir);
+    },
+  };
 }
 
-/**
- * Remove a chat-only request's isolation root once its run settles, failed
- * or aborted runs included, so no temp home (with its keychain link) is
- * left behind. `rmSync` unlinks symlinks without following them.
- */
-function removeTempDir(tempDir?: string): void {
-  if (!tempDir) return;
+/** Run one plain ACP turn; its dirs are released however it ends. */
+function withAcpRun<T>(
+  ctx: AcpRunContext,
+  run: (invocation: AcpInvocation) => Promise<T>,
+): Promise<T> {
+  let invocation: AcpInvocation;
   try {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  } catch {
-    /* best effort */
+    invocation = acpInvocation(ctx);
+  } catch (error) {
+    return Promise.reject(error);
   }
+  return run(invocation)
+    .then((out) => {
+      cacheTokenForAccount(ctx.configDir);
+      return out;
+    })
+    .finally(invocation.release);
+}
+
+function acpRunOptions(
+  ctx: AcpRunContext,
+  invocation: AcpInvocation,
+  request: {
+    signal?: AbortSignal;
+    modelDisplayName?: string;
+    mediaBlocks?: AcpPromptBlock[];
+  },
+): AcpRunOptions {
+  const { config } = ctx;
+  return {
+    cwd: ctx.workspaceDir,
+    timeoutMs: config.timeoutMs,
+    env: invocation.env,
+    ...acpModelOptions(config, invocation.model, request.modelDisplayName),
+    requestTimeoutMs: config.timeoutMs,
+    spawnOptions: config.acpSpawnOptions,
+    skipAuthenticate: config.acpSkipAuthenticate,
+    rawDebug: config.acpRawDebug,
+    signal: request.signal,
+    mediaBlocks: request.mediaBlocks,
+  };
 }
 
 export function runAgentSync(
@@ -127,35 +199,19 @@ export function runAgentSync(
   mediaBlocks?: AcpPromptBlock[],
 ): Promise<AgentRunResult> {
   if (mediaBlocks?.length && !config.useAcp) {
-    removeTempDir(tempDir);
+    removeChatOnlyTempDir(tempDir);
     return Promise.reject(new Error("multimodal input requires Cursor ACP mode"));
   }
   if (config.useAcp && typeof stdinPrompt === "string") {
-    const invocation = acpInvocation(
-      config,
-      workspaceDir,
-      effectiveChatOnly,
-      cmdArgs,
-      configDir,
-      tempDir,
+    const ctx = { config, workspaceDir, effectiveChatOnly, cmdArgs, configDir, tempDir };
+    return withAcpRun(ctx, (invocation) =>
+      runAcpSync(
+        config.acpCommand,
+        invocation.args,
+        stdinPrompt,
+        acpRunOptions(ctx, invocation, { signal, modelDisplayName, mediaBlocks }),
+      ),
     );
-    return runAcpSync(config.acpCommand, invocation.args, stdinPrompt, {
-      cwd: workspaceDir,
-      timeoutMs: config.timeoutMs,
-      env: invocation.env,
-      ...acpModelOptions(config, invocation.model, modelDisplayName),
-      requestTimeoutMs: config.timeoutMs,
-      spawnOptions: config.acpSpawnOptions,
-      skipAuthenticate: config.acpSkipAuthenticate,
-      rawDebug: config.acpRawDebug,
-      signal,
-      mediaBlocks,
-    })
-      .then((out) => {
-        cacheTokenForAccount(configDir);
-        return out;
-      })
-      .finally(() => removeTempDir(tempDir));
   }
   const runEnvOverrides = effectiveChatOnly
     ? getChatOnlyEnvOverrides(chatOnlyHomeDir(workspaceDir, tempDir), configDir)
@@ -173,7 +229,7 @@ export function runAgentSync(
       cacheTokenForAccount(configDir);
       return out;
     })
-    .finally(() => removeTempDir(tempDir));
+    .finally(() => removeChatOnlyTempDir(tempDir));
 }
 
 export type StreamLineHandler = (line: string) => void;
@@ -192,41 +248,20 @@ export function runAgentStream(
   mediaBlocks?: AcpPromptBlock[],
 ): Promise<Omit<AgentRunResult, "stdout">> {
   if (mediaBlocks?.length && !config.useAcp) {
-    removeTempDir(tempDir);
+    removeChatOnlyTempDir(tempDir);
     return Promise.reject(new Error("multimodal input requires Cursor ACP mode"));
   }
   if (config.useAcp && typeof stdinPrompt === "string") {
-    const invocation = acpInvocation(
-      config,
-      workspaceDir,
-      effectiveChatOnly,
-      cmdArgs,
-      configDir,
-      tempDir,
+    const ctx = { config, workspaceDir, effectiveChatOnly, cmdArgs, configDir, tempDir };
+    return withAcpRun(ctx, (invocation) =>
+      runAcpStream(
+        config.acpCommand,
+        invocation.args,
+        stdinPrompt,
+        acpRunOptions(ctx, invocation, { signal, modelDisplayName, mediaBlocks }),
+        onLine,
+      ),
     );
-    return runAcpStream(
-      config.acpCommand,
-      invocation.args,
-      stdinPrompt,
-      {
-        cwd: workspaceDir,
-        timeoutMs: config.timeoutMs,
-        env: invocation.env,
-        ...acpModelOptions(config, invocation.model, modelDisplayName),
-        requestTimeoutMs: config.timeoutMs,
-        spawnOptions: config.acpSpawnOptions,
-        skipAuthenticate: config.acpSkipAuthenticate,
-        rawDebug: config.acpRawDebug,
-        signal,
-        mediaBlocks,
-      },
-      onLine,
-    )
-      .then((result) => {
-        cacheTokenForAccount(configDir);
-        return result;
-      })
-      .finally(() => removeTempDir(tempDir));
   }
   const streamEnvOverrides = effectiveChatOnly
     ? getChatOnlyEnvOverrides(chatOnlyHomeDir(workspaceDir, tempDir), configDir)
@@ -245,7 +280,7 @@ export function runAgentStream(
       cacheTokenForAccount(configDir);
       return result;
     })
-    .finally(() => removeTempDir(tempDir));
+    .finally(() => removeChatOnlyTempDir(tempDir));
 }
 
 export async function startAgentToolSession(opts: {
@@ -264,40 +299,34 @@ export async function startAgentToolSession(opts: {
   maxParallelToolCalls?: number;
 }): Promise<AcpToolSession> {
   if (!opts.config.useAcp) {
+    removeChatOnlyTempDir(opts.tempDir);
     throw new Error("Structured tool passthrough requires ACP mode");
   }
-  const invocation = acpInvocation(
-    opts.config,
-    opts.workspaceDir,
-    opts.effectiveChatOnly,
-    opts.cmdArgs,
-    opts.configDir,
-    opts.tempDir,
-  );
+  const invocation = acpInvocation(opts);
   let cleaned = false;
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
     cacheTokenForAccount(opts.configDir);
-    removeTempDir(opts.tempDir);
+    invocation.release();
   };
-  const session = new AcpToolSession({
-    command: opts.config.acpCommand,
-    args: invocation.args,
-    cwd: opts.workspaceDir,
-    env: invocation.env,
-    timeoutMs: opts.config.timeoutMs,
-    spawnOptions: opts.config.acpSpawnOptions,
-    skipAuthenticate: opts.config.acpSkipAuthenticate,
-    rawDebug: opts.config.acpRawDebug,
-    signal: opts.signal,
-    ...acpModelOptions(opts.config, invocation.model, opts.modelDisplayName),
-    tools: opts.tools,
-    requireToolCall: opts.requireToolCall,
-    maxParallelToolCalls: opts.maxParallelToolCalls,
-    onClose: cleanup,
-  });
   try {
+    const session = new AcpToolSession({
+      command: opts.config.acpCommand,
+      args: invocation.args,
+      cwd: opts.workspaceDir,
+      env: invocation.env,
+      timeoutMs: opts.config.timeoutMs,
+      spawnOptions: opts.config.acpSpawnOptions,
+      skipAuthenticate: opts.config.acpSkipAuthenticate,
+      rawDebug: opts.config.acpRawDebug,
+      signal: opts.signal,
+      ...acpModelOptions(opts.config, invocation.model, opts.modelDisplayName),
+      tools: opts.tools,
+      requireToolCall: opts.requireToolCall,
+      maxParallelToolCalls: opts.maxParallelToolCalls,
+      onClose: cleanup,
+    });
     await session.start(opts.prompt, opts.mediaBlocks);
     return session;
   } catch (error) {

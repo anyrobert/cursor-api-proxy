@@ -112,6 +112,60 @@ describe("ACP requestTimeoutMs", () => {
     });
   });
 
+  it("runs a pool account on a private copy of its config dir (#63)", async () => {
+    const account = fs.mkdtempSync(path.join(os.tmpdir(), "account-"));
+    fs.writeFileSync(path.join(account, "cli-config.json"), '{"version":1}');
+    let seen: { dir?: string; config?: string } = {};
+    vi.mocked(runAcpSync).mockImplementationOnce(async (_cmd, _args, _prompt, opts) => {
+      const dir = opts.env?.CURSOR_CONFIG_DIR;
+      seen = { dir, config: fs.readFileSync(path.join(dir!, "cli-config.json"), "utf8") };
+      return { code: 0, stdout: "ok", stderr: "" };
+    });
+    try {
+      await runAgentSync(
+        config(),
+        "/tmp/ws",
+        false,
+        ["--print", "--mode", "agent", "--model", "auto"],
+        undefined,
+        "hello",
+        account,
+      );
+      expect(seen.dir).toBeDefined();
+      expect(seen.dir).not.toBe(account);
+      expect(seen.config).toBe('{"version":1}');
+      expect(fs.existsSync(seen.dir!)).toBe(false);
+    } finally {
+      fs.rmSync(account, { recursive: true, force: true });
+    }
+  });
+
+  it("removes the run's config dir and temp dir when the run fails", async () => {
+    const account = fs.mkdtempSync(path.join(os.tmpdir(), "account-"));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-proxy-"));
+    vi.mocked(runAcpStream).mockRejectedValueOnce(new Error("agent failed"));
+    try {
+      await expect(
+        runAgentStream(
+          config(),
+          path.join(tempDir, "workspace"),
+          true,
+          ["--print", "--mode", "ask", "--model", "auto"],
+          () => {},
+          tempDir,
+          "hello",
+          account,
+        ),
+      ).rejects.toThrow("agent failed");
+      const runConfigDir = vi.mocked(runAcpStream).mock.calls[0][3].env?.CURSOR_CONFIG_DIR;
+      expect(runConfigDir).toMatch(/cursor-proxy-config-/);
+      expect(fs.existsSync(runConfigDir!)).toBe(false);
+      expect(fs.existsSync(tempDir)).toBe(false);
+    } finally {
+      fs.rmSync(account, { recursive: true, force: true });
+    }
+  });
+
   it("passes config.timeoutMs as ACP stream requestTimeoutMs", async () => {
     await runAgentStream(
       config(),
