@@ -19,20 +19,53 @@ describe("readHttpHeader", () => {
 });
 
 describe("buildBridgeContextPreamble", () => {
-  it("uses one line with workspace and cwd when paths differ", () => {
+  it("names only the sandbox in chat-only mode, never the host workspace", () => {
     const text = buildBridgeContextPreamble({
       headers: {},
       bridgeWorkspaceBase: "/Users/me/Developer",
-      agentWorkspaceDir: "/tmp/cursor-proxy-abc",
+      agentWorkspaceDir: "/tmp/cursor-proxy-abc/workspace",
       isolatedChatOnly: true,
       cursorMode: "ask",
     });
-    expect(text).toMatch(/^Via cursor-api-proxy → Cursor CLI\./);
-    expect(text).toContain("mode=ask");
-    expect(text).toContain("/Users/me/Developer");
-    expect(text).toContain("/tmp/cursor-proxy-abc");
-    expect(text).toContain("temp sandbox");
-    expect(text.split("\n").length).toBe(1);
+    expect(text).toBe(
+      "Via cursor-api-proxy → Cursor CLI. cwd=/tmp/cursor-proxy-abc/workspace; mode=ask. Chat-only: the cwd is a temp sandbox and nothing outside it is in scope.",
+    );
+    expect(text).not.toContain("/Users/me/Developer");
+    expect(text).not.toContain("workspace=");
+  });
+
+  it("leaves a client's X-Cursor-Workspace path out in chat-only mode", () => {
+    const text = buildBridgeContextPreamble({
+      headers: {
+        "x-cursor-workspace": "/Users/me/Developer/my-app",
+        "x-cursor-proxy-client": "sdk-helper",
+      },
+      bridgeWorkspaceBase: "/Users/me/Developer",
+      agentWorkspaceDir: "/tmp/sandbox",
+      isolatedChatOnly: true,
+      cursorMode: "agent",
+      contextExtra: "Be brief.",
+    });
+    expect(text).not.toContain("X-Cursor-Workspace");
+    expect(text).not.toContain("/Users/me/Developer");
+    expect(text.split("\n")).toEqual([
+      "Via cursor-api-proxy → Cursor CLI. cwd=/tmp/sandbox; mode=agent. Chat-only: the cwd is a temp sandbox and nothing outside it is in scope.",
+      "client=sdk-helper",
+      "Be brief.",
+    ]);
+  });
+
+  it("names the workspace base and the agent cwd when they differ outside chat-only", () => {
+    const text = buildBridgeContextPreamble({
+      headers: {},
+      bridgeWorkspaceBase: "/Users/me/Developer",
+      agentWorkspaceDir: "/Users/me/Developer/my-app",
+      isolatedChatOnly: false,
+      cursorMode: "ask",
+    });
+    expect(text).toBe(
+      "Via cursor-api-proxy → Cursor CLI. workspace=/Users/me/Developer; agent cwd=/Users/me/Developer/my-app; mode=ask.",
+    );
   });
 
   it("dedupes to cwd= only when workspace matches cwd and not sandboxed", () => {
@@ -48,17 +81,17 @@ describe("buildBridgeContextPreamble", () => {
     expect(text).not.toContain("temp sandbox");
   });
 
-  it("includes X-Cursor-Workspace hint line when header set", () => {
+  it("includes the X-Cursor-Workspace line outside chat-only", () => {
     const text = buildBridgeContextPreamble({
       headers: { "x-cursor-workspace": "/Users/me/Developer/my-app" },
       bridgeWorkspaceBase: "/Users/me/Developer",
-      agentWorkspaceDir: "/tmp/sandbox",
-      isolatedChatOnly: true,
-      cursorMode: "ask",
+      agentWorkspaceDir: "/Users/me/Developer/my-app",
+      isolatedChatOnly: false,
+      cursorMode: "agent",
     });
-    expect(text).toContain("X-Cursor-Workspace=");
-    expect(text).toContain("/Users/me/Developer/my-app");
-    expect(text).toContain("(hint only)");
+    expect(text.split("\n")[1]).toBe(
+      "X-Cursor-Workspace=/Users/me/Developer/my-app",
+    );
   });
 
   it("prefers X-Cursor-Invoke-From over X-Cursor-Proxy-Client", () => {

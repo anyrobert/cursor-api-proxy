@@ -7,11 +7,14 @@ export const BRIDGE_AGENT_PROMPT_SEPARATOR = "\n\n---\n\n";
 
 export type BridgeContextPreambleInput = {
   headers: IncomingHttpHeaders;
-  /** Resolved `CURSOR_BRIDGE_WORKSPACE` (absolute). */
+  /** Resolved `CURSOR_BRIDGE_WORKSPACE` (absolute). Not shown in chat-only mode. */
   bridgeWorkspaceBase: string;
   /** Directory the Cursor agent process uses as workspace cwd. */
   agentWorkspaceDir: string;
-  /** True when the agent runs in an isolated temp dir (chat-only sandbox). */
+  /**
+   * True when the agent runs in an isolated temp dir (chat-only sandbox):
+   * the preamble then names only that dir, no host path.
+   */
   isolatedChatOnly: boolean;
   cursorMode: CursorExecutionMode;
   /** Optional extra from `CURSOR_BRIDGE_CONTEXT_EXTRA` (already length-capped in config). */
@@ -35,28 +38,40 @@ function truncate(s: string, max: number): string {
 }
 
 /**
+ * The first preamble line's directories. In chat-only mode it names only the
+ * sandbox: the agent's tools can read absolute paths, so naming the host
+ * workspace would point it at the real project the sandbox keeps it out of.
+ */
+function describeDirectories(input: BridgeContextPreambleInput): string {
+  const mode = `mode=${input.cursorMode}`;
+  if (input.isolatedChatOnly) {
+    return `cwd=${input.agentWorkspaceDir}; ${mode}. Chat-only: the cwd is a temp sandbox and nothing outside it is in scope.`;
+  }
+  const loc =
+    input.bridgeWorkspaceBase === input.agentWorkspaceDir
+      ? `cwd=${input.agentWorkspaceDir}`
+      : `workspace=${input.bridgeWorkspaceBase}; agent cwd=${input.agentWorkspaceDir}`;
+  return `${loc}; ${mode}.`;
+}
+
+/**
  * Short factual prefix: request went through this HTTP bridge, CLI mode, and
  * which directories apply. Optional lines only when headers / env add signal.
  */
 export function buildBridgeContextPreamble(
   input: BridgeContextPreambleInput,
 ): string {
-  const samePath =
-    !input.isolatedChatOnly &&
-    input.bridgeWorkspaceBase === input.agentWorkspaceDir;
-  const loc = samePath
-    ? `cwd=${input.agentWorkspaceDir}`
-    : `workspace=${input.bridgeWorkspaceBase}; agent cwd=${input.agentWorkspaceDir}`;
-  const sandbox = input.isolatedChatOnly ? " (agent cwd is a temp sandbox)" : "";
-
   const lines: string[] = [
-    `Via cursor-api-proxy → Cursor CLI. ${loc}; mode=${input.cursorMode}${sandbox}.`,
+    `Via cursor-api-proxy → Cursor CLI. ${describeDirectories(input)}`,
   ];
 
-  const pathHint = readHttpHeader(input.headers, "x-cursor-workspace");
+  // In chat-only mode the header does not pick the workspace, and its path
+  // is a host path like the workspace base.
+  const pathHint = input.isolatedChatOnly
+    ? undefined
+    : readHttpHeader(input.headers, "x-cursor-workspace");
   if (pathHint) {
-    const hintTag = input.isolatedChatOnly ? " (hint only)" : "";
-    lines.push(`X-Cursor-Workspace=${truncate(pathHint, 120)}${hintTag}`);
+    lines.push(`X-Cursor-Workspace=${truncate(pathHint, 120)}`);
   }
 
   const invokeFrom = readHttpHeader(input.headers, "x-cursor-invoke-from");
