@@ -95,14 +95,6 @@ export type AcpConnectionOptions = AcpSpawnOptions & {
     params: AcpPermissionParams,
   ) => string | undefined | Promise<string | undefined>;
   /**
-   * Answer a `cursor/*` extension request. Return undefined to send the
-   * documented default (first option, plan accepted, empty result).
-   */
-  onExtensionRequest?: (
-    method: string,
-    params: Record<string, unknown>,
-  ) => Record<string, unknown> | undefined;
-  /**
    * Log the CLI's output tail when the child exits on its own (default
    * true). Callers that log AcpChildExitError.diagnostics themselves turn
    * it off.
@@ -226,33 +218,71 @@ export function extractAcpUpdateText(content: unknown): string {
     .join("");
 }
 
-/** Documented answers (cursor.com/docs/cli/acp) for blocking cursor/* requests. */
-function defaultExtensionResponse(
+/**
+ * cursor/* methods the CLI sends as requests but documents as notifications:
+ * it ignores the reply, so they need no answer beyond an empty result.
+ */
+const CURSOR_PROGRESS_REQUESTS = new Set([
+  "cursor/update_todos",
+  "cursor/task",
+  "cursor/generate_image",
+]);
+
+type CursorQuestionAnswer = { questionId: string; selectedOptionIds: string[] };
+
+function stringId(entry: unknown): string | undefined {
+  const id =
+    entry && typeof entry === "object" ? (entry as { id?: unknown }).id : undefined;
+  return typeof id === "string" ? id : undefined;
+}
+
+/** Each question's first option; a question without options gets none. */
+function firstOptionAnswers(questions: unknown): CursorQuestionAnswer[] {
+  if (!Array.isArray(questions)) return [];
+  return questions.flatMap((question) => {
+    const questionId = stringId(question);
+    if (questionId === undefined) return [];
+    const options = (question as { options?: unknown }).options;
+    const first = Array.isArray(options)
+      ? options.map(stringId).find((id) => id !== undefined)
+      : undefined;
+    return [{ questionId, selectedOptionIds: first === undefined ? [] : [first] }];
+  });
+}
+
+/**
+ * Answer Cursor's own requests in the shapes documented at
+ * cursor.com/docs/cli/acp, on both ACP paths. Nobody can answer a turn
+ * interactively, so a question gets each question's first option and a
+ * plan is accepted (the CLI then saves it to ~/.cursor/plans itself).
+ */
+function answerCursorRequest(
   method: string,
   params: Record<string, unknown>,
 ): Record<string, unknown> {
   if (method === "cursor/ask_question") {
-    const questions = Array.isArray(params.questions)
-      ? (params.questions as Array<Record<string, unknown>>)
-      : [];
-    return {
-      outcome: {
-        outcome: "answered",
-        answers: questions.map((question) => {
-          const options = Array.isArray(question.options)
-            ? (question.options as Array<Record<string, unknown>>)
-            : [];
-          return {
-            questionId: String(question.id ?? ""),
-            selectedOptionIds:
-              options.length > 0 ? [String(options[0]?.id ?? "")] : [],
-          };
-        }),
-      },
-    };
+    const answers = firstOptionAnswers(params.questions);
+    console.warn(
+      "[cursor-api-proxy:acp] cursor/ask_question auto-selecting the first option: %s",
+      answers
+        .map(({ questionId, selectedOptionIds }) =>
+          `${questionId}=${selectedOptionIds[0] ?? "(none)"}`,
+        )
+        .join(", ") || "(no questions)",
+    );
+    return { outcome: { outcome: "answered", answers } };
   }
   if (method === "cursor/create_plan") {
+    debugAcp("cursor/create_plan: accepting the plan");
     return { outcome: { outcome: "accepted" } };
+  }
+  if (CURSOR_PROGRESS_REQUESTS.has(method)) {
+    debugAcp("%s: acknowledged", method);
+  } else {
+    console.warn(
+      "[cursor-api-proxy:acp] auto-responding to unknown %s with empty result",
+      method,
+    );
   }
   return {};
 }
@@ -566,11 +596,9 @@ export class AcpConnection {
     }
 
     if (message.id != null && message.method?.startsWith("cursor/")) {
-      const params = message.params ?? {};
       this.#respond(
         message.id,
-        this.#opts.onExtensionRequest?.(message.method, params) ??
-          defaultExtensionResponse(message.method, params),
+        answerCursorRequest(message.method, message.params ?? {}),
       );
     }
   }

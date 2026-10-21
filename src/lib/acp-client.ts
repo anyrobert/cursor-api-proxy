@@ -61,34 +61,6 @@ export type AcpSyncResult = AcpStreamResult & {
 /** Reported when the whole turn outlives `timeoutMs`, as timeout(1) does. */
 const TIMEOUT_EXIT_CODE = 124;
 
-/**
- * The cursor/* answers this path has always sent. They predate the shapes
- * documented at cursor.com/docs/cli/acp, which AcpConnection sends by
- * default (first option `answered`, plan `accepted`); kept so that sharing
- * AcpConnection does not change what plain ask/plan turns do.
- */
-function plainExtensionResponse(
-  method: string,
-  params: Record<string, unknown>,
-): Record<string, unknown> {
-  if (method === "cursor/ask_question" && Array.isArray(params.options)) {
-    const options = params.options as Array<{ id?: string; label?: string }>;
-    const first = options[0];
-    console.warn(
-      "[cursor-api-proxy:acp] cursor/ask_question auto-selecting first option: id=%s (total=%d)",
-      first?.id ?? "(none)",
-      options.length,
-    );
-    return { selectedId: first?.id ?? "" };
-  }
-  if (method === "cursor/create_plan") return { approved: true };
-  console.warn(
-    "[cursor-api-proxy:acp] auto-responding to unknown %s with empty result",
-    method,
-  );
-  return {};
-}
-
 type TurnOutput = {
   onText: (text: string) => void;
   /** Thought chunks; omitted when the caller drops them. */
@@ -117,7 +89,6 @@ function runAcpTurn(
       rawDebug: opts.rawDebug,
       onAgentTextChunk: output.onText,
       onAgentThoughtChunk: output.onThought,
-      onExtensionRequest: plainExtensionResponse,
       // The diagnostics go back in `stderr`, which callers log (logAgentError).
       logUnexpectedExit: false,
     });

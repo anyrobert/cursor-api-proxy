@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { format } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runAcpStream, runAcpSync } from "./acp-client.js";
@@ -46,7 +47,8 @@ afterEach(async () => {
 });
 
 describe("AcpConnection", () => {
-  it("answers cursor/* requests with the documented shapes by default", async () => {
+  it("answers cursor/* requests with the documented shapes", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
     let text = "";
     const connection = connect("cursor_extensions", {
       onAgentTextChunk: (chunk) => {
@@ -77,22 +79,171 @@ describe("AcpConnection", () => {
   });
 });
 
-describe("one-shot ACP turns", () => {
-  it("keeps the cursor/* answers the plain path has always sent", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+describe("cursor/* requests on both ACP paths (#93)", () => {
+  type CursorRequest = { method: string; params: Record<string, unknown> };
+
+  /** As CLI 2026.10.19 sends it (ask-question-handler.ts). */
+  const DOCUMENTED_QUESTIONS: CursorRequest = {
+    method: "cursor/ask_question",
+    params: {
+      toolCallId: "call_123",
+      title: "Need input",
+      questions: [
+        {
+          id: "db",
+          prompt: "Which database?",
+          options: [
+            { id: "pg", label: "Postgres" },
+            { id: "sqlite", label: "SQLite" },
+          ],
+          allowMultiple: false,
+        },
+        {
+          id: "extras",
+          prompt: "Which extras?",
+          options: [
+            { id: "auth", label: "Auth" },
+            { id: "logs", label: "Logs" },
+          ],
+          allowMultiple: true,
+        },
+        { id: "notes", prompt: "Anything else?", options: [] },
+      ],
+    },
+  };
+  /** The undocumented form the plain path used to answer with `selectedId`. */
+  const LEGACY_OPTIONS: CursorRequest = {
+    method: "cursor/ask_question",
+    params: {
+      options: [
+        { id: "a", label: "A" },
+        { id: "b", label: "B" },
+      ],
+    },
+  };
+  /** As CLI 2026.10.19 sends it (create-plan-handler.ts). */
+  const CREATE_PLAN: CursorRequest = {
+    method: "cursor/create_plan",
+    params: {
+      toolCallId: "call_124",
+      name: "Add caching",
+      overview: "Cache hot reads",
+      plan: "# Add caching\n\n1. Add a cache layer",
+      todos: [{ id: "t1", content: "Add a cache layer", status: "pending" }],
+      isProject: false,
+      phases: [
+        {
+          name: "Build",
+          todos: [{ id: "t1", content: "Add a cache layer", status: "pending" }],
+        },
+      ],
+    },
+  };
+  /** Documented as a notification, but the CLI sends it as a request. */
+  const UPDATE_TODOS: CursorRequest = {
+    method: "cursor/update_todos",
+    params: {
+      toolCallId: "call_125",
+      todos: [{ id: "t1", content: "Add a cache layer", status: "in_progress" }],
+      merge: true,
+    },
+  };
+
+  const FIRST_OPTIONS_ANSWERED = {
+    outcome: {
+      outcome: "answered",
+      answers: [
+        { questionId: "db", selectedOptionIds: ["pg"] },
+        { questionId: "extras", selectedOptionIds: ["auth"] },
+        { questionId: "notes", selectedOptionIds: [] },
+      ],
+    },
+  };
+  const PLAN_ACCEPTED = { outcome: { outcome: "accepted" } };
+
+  const CASES: Array<[string, CursorRequest, Record<string, unknown>]> = [
+    [
+      "the documented questions form with each question's first option",
+      DOCUMENTED_QUESTIONS,
+      FIRST_OPTIONS_ANSWERED,
+    ],
+    [
+      "the legacy options form in the documented shape",
+      LEGACY_OPTIONS,
+      { outcome: { outcome: "answered", answers: [] } },
+    ],
+    ["cursor/create_plan by accepting the plan", CREATE_PLAN, PLAN_ACCEPTED],
+    ["cursor/update_todos with an empty result", UPDATE_TODOS, {}],
+  ];
+
+  function cursorRequestsEnv(requests: CursorRequest[]) {
+    return {
+      FAKE_ACP_SCENARIO: "cursor_requests",
+      FAKE_ACP_CURSOR_REQUESTS: JSON.stringify(requests),
+    };
+  }
+
+  /** The replies the agent got, in order, on a one-shot turn. */
+  async function plainReplies(requests: CursorRequest[]): Promise<unknown> {
     const result = await runAcpSync(node, [fakeServerPath], "Plan it", {
       cwd,
       timeoutMs: 5_000,
       skipAuthenticate: true,
-      env: { FAKE_ACP_SCENARIO: "cursor_extensions" },
+      env: cursorRequestsEnv(requests),
     });
     expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({
-      "cursor/ask_question": {},
-      "cursor/create_plan": { approved: true },
+    return JSON.parse(result.stdout);
+  }
+
+  /** The replies the agent got, in order, on a client-tool turn. */
+  async function toolReplies(requests: CursorRequest[]): Promise<unknown> {
+    const session = new AcpToolSession({
+      command: node,
+      args: [fakeServerPath],
+      cwd,
+      env: cursorRequestsEnv(requests),
+      timeoutMs: 5_000,
+      skipAuthenticate: true,
+      tools: [{ name: "weather", inputSchema: { type: "object" } }],
+    });
+    try {
+      await session.start("Plan it");
+      const result = await session.collect();
+      expect(result.status).toBe("completed");
+      return JSON.parse(result.text);
+    } finally {
+      await session.close();
+    }
+  }
+
+  describe.each([
+    ["plain", plainReplies],
+    ["tool", toolReplies],
+  ])("on the %s path", (_path, repliesTo) => {
+    it.each(CASES)("answers %s", async (_name, request, expected) => {
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      expect(await repliesTo([request])).toStrictEqual([expected]);
+    });
+
+    it("warns about the options it picked and unknown requests only", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const unknown = { method: "cursor/not_yet_invented", params: {} };
+      const replies = await repliesTo([
+        DOCUMENTED_QUESTIONS,
+        CREATE_PLAN,
+        UPDATE_TODOS,
+        unknown,
+      ]);
+      expect(replies).toStrictEqual([FIRST_OPTIONS_ANSWERED, PLAN_ACCEPTED, {}, {}]);
+      expect(warn.mock.calls.map((args) => format(...args))).toStrictEqual([
+        "[cursor-api-proxy:acp] cursor/ask_question auto-selecting the first option: db=pg, extras=auth, notes=(none)",
+        "[cursor-api-proxy:acp] auto-responding to unknown cursor/not_yet_invented with empty result",
+      ]);
     });
   });
+});
 
+describe("one-shot ACP turns", () => {
   it("reports a turn that outlives timeoutMs with exit code 124", async () => {
     const result = await runAcpSync(node, [fakeServerPath], "hi", {
       cwd,

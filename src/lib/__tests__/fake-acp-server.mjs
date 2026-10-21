@@ -472,6 +472,20 @@ async function runCursorExtensionsPrompt() {
   update("agent_message_chunk", { content: { text: JSON.stringify(answers) } });
 }
 
+/**
+ * "cursor_requests" sends the requests in FAKE_ACP_CURSOR_REQUESTS (a JSON
+ * array of { method, params }) one at a time. The answer text is the JSON
+ * array of the replies, in order.
+ */
+async function runCursorRequestsPrompt() {
+  const requests = JSON.parse(process.env.FAKE_ACP_CURSOR_REQUESTS ?? "[]");
+  const replies = [];
+  for (const { method, params } of requests) {
+    replies.push(await askClient(method, params));
+  }
+  update("agent_message_chunk", { content: { text: JSON.stringify(replies) } });
+}
+
 function parameterizedConfigResult(params) {
   const models =
     scenario === "grok_models"
@@ -790,6 +804,14 @@ rl.on("line", (line) => {
         content: { text: "\n\nError: RetriableError: WritableIterable is closed" },
       });
       send({ id: msg.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (scenario === "cursor_requests") {
+      runCursorRequestsPrompt().then(
+        () => send({ id: msg.id, result: { stopReason: "end_turn" } }),
+        (error) =>
+          send({ id: msg.id, error: { code: -32603, message: error.message } }),
+      );
       return;
     }
     const operation = isToolScenario()
