@@ -8,7 +8,7 @@ import {
   createRunConfigDir,
   cursorConfigDir,
   RUN_CONFIG_FILES,
-} from "./acp-config-dir.js";
+} from "./run-config-dir.js";
 import { runAgentStream, runAgentSync, startAgentToolSession } from "./agent-runner.js";
 import type { BridgeConfig } from "./config.js";
 

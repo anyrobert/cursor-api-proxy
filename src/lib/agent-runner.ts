@@ -3,7 +3,7 @@ import {
   createRunConfigDir,
   cursorConfigDir,
   type RunConfigDir,
-} from "./acp-config-dir.js";
+} from "./run-config-dir.js";
 import type { AcpModelOptions } from "./acp-model.js";
 import { buildAcpSpawnEnv } from "./acp-spawn.js";
 import type { AcpPromptBlock } from "./media-input.js";
