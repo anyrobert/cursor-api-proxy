@@ -14,6 +14,14 @@ const CLIENT_SAFE_EXIT =
   "The Cursor agent process exited with code 1 before responding. See server logs for details.";
 const CLI_STDERR = "agent: unknown option '--bogus-flag'";
 const CLI_STDOUT = "Error: Authentication required.";
+const QUESTIONS_SKIPPED = {
+  outcome: {
+    outcome: "skipped",
+    reason:
+      "No interactive user is available to answer; proceed with your best judgement and state your assumptions.",
+  },
+};
+const PLAN_ACCEPTED = { outcome: { outcome: "accepted" } };
 
 const node = process.execPath;
 const cwd = process.cwd();
@@ -57,14 +65,9 @@ describe("AcpConnection", () => {
     });
     const sessionId = await connection.openSession({ cwd, skipAuthenticate: true });
     await connection.prompt(sessionId, "Plan it");
-    expect(JSON.parse(text)).toEqual({
-      "cursor/ask_question": {
-        outcome: {
-          outcome: "answered",
-          answers: [{ questionId: "q1", selectedOptionIds: ["a"] }],
-        },
-      },
-      "cursor/create_plan": { outcome: { outcome: "accepted" } },
+    expect(JSON.parse(text)).toStrictEqual({
+      "cursor/ask_question": QUESTIONS_SKIPPED,
+      "cursor/create_plan": PLAN_ACCEPTED,
     });
   });
 
@@ -149,28 +152,16 @@ describe("cursor/* requests on both ACP paths (#93)", () => {
     },
   };
 
-  const FIRST_OPTIONS_ANSWERED = {
-    outcome: {
-      outcome: "answered",
-      answers: [
-        { questionId: "db", selectedOptionIds: ["pg"] },
-        { questionId: "extras", selectedOptionIds: ["auth"] },
-        { questionId: "notes", selectedOptionIds: [] },
-      ],
-    },
-  };
-  const PLAN_ACCEPTED = { outcome: { outcome: "accepted" } };
-
   const CASES: Array<[string, CursorRequest, Record<string, unknown>]> = [
     [
-      "the documented questions form with each question's first option",
+      "the documented questions form by skipping it with a reason",
       DOCUMENTED_QUESTIONS,
-      FIRST_OPTIONS_ANSWERED,
+      QUESTIONS_SKIPPED,
     ],
     [
-      "the legacy options form in the documented shape",
+      "the legacy options form by skipping it in the documented shape",
       LEGACY_OPTIONS,
-      { outcome: { outcome: "answered", answers: [] } },
+      QUESTIONS_SKIPPED,
     ],
     ["cursor/create_plan by accepting the plan", CREATE_PLAN, PLAN_ACCEPTED],
     ["cursor/update_todos with an empty result", UPDATE_TODOS, {}],
@@ -225,18 +216,26 @@ describe("cursor/* requests on both ACP paths (#93)", () => {
       expect(await repliesTo([request])).toStrictEqual([expected]);
     });
 
-    it("warns about the options it picked and unknown requests only", async () => {
+    it("warns about skipped questions and unknown requests only", async () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       const unknown = { method: "cursor/not_yet_invented", params: {} };
       const replies = await repliesTo([
         DOCUMENTED_QUESTIONS,
+        LEGACY_OPTIONS,
         CREATE_PLAN,
         UPDATE_TODOS,
         unknown,
       ]);
-      expect(replies).toStrictEqual([FIRST_OPTIONS_ANSWERED, PLAN_ACCEPTED, {}, {}]);
+      expect(replies).toStrictEqual([
+        QUESTIONS_SKIPPED,
+        QUESTIONS_SKIPPED,
+        PLAN_ACCEPTED,
+        {},
+        {},
+      ]);
       expect(warn.mock.calls.map((args) => format(...args))).toStrictEqual([
-        "[cursor-api-proxy:acp] cursor/ask_question auto-selecting the first option: db=pg, extras=auth, notes=(none)",
+        '[cursor-api-proxy:acp] cursor/ask_question skipped, no interactive user to answer: db "Which database?", extras "Which extras?", notes "Anything else?"',
+        "[cursor-api-proxy:acp] cursor/ask_question skipped, no interactive user to answer: (no questions)",
         "[cursor-api-proxy:acp] auto-responding to unknown cursor/not_yet_invented with empty result",
       ]);
     });

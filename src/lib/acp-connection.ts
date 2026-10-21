@@ -228,49 +228,42 @@ const CURSOR_PROGRESS_REQUESTS = new Set([
   "cursor/generate_image",
 ]);
 
-type CursorQuestionAnswer = { questionId: string; selectedOptionIds: string[] };
+/** The CLI hands this to the agent as the reason its questions went unanswered. */
+const NO_USER_TO_ASK =
+  "No interactive user is available to answer; proceed with your best judgement and state your assumptions.";
 
-function stringId(entry: unknown): string | undefined {
-  const id =
-    entry && typeof entry === "object" ? (entry as { id?: unknown }).id : undefined;
-  return typeof id === "string" ? id : undefined;
-}
-
-/** Each question's first option; a question without options gets none. */
-function firstOptionAnswers(questions: unknown): CursorQuestionAnswer[] {
-  if (!Array.isArray(questions)) return [];
-  return questions.flatMap((question) => {
-    const questionId = stringId(question);
-    if (questionId === undefined) return [];
-    const options = (question as { options?: unknown }).options;
-    const first = Array.isArray(options)
-      ? options.map(stringId).find((id) => id !== undefined)
-      : undefined;
-    return [{ questionId, selectedOptionIds: first === undefined ? [] : [first] }];
-  });
+/** `id "prompt"` for each question, for the server log. */
+function describeQuestions(questions: unknown): string {
+  if (!Array.isArray(questions) || questions.length === 0) {
+    return "(no questions)";
+  }
+  return questions
+    .map((question) => {
+      const { id, prompt } = (question ?? {}) as { id?: unknown; prompt?: unknown };
+      const label = typeof id === "string" ? id : "(no id)";
+      return typeof prompt === "string" ? `${label} ${JSON.stringify(prompt)}` : label;
+    })
+    .join(", ");
 }
 
 /**
  * Answer Cursor's own requests in the shapes documented at
  * cursor.com/docs/cli/acp, on both ACP paths. Nobody can answer a turn
- * interactively, so a question gets each question's first option and a
- * plan is accepted (the CLI then saves it to ~/.cursor/plans itself).
+ * interactively, so questions are skipped with a reason that tells the
+ * agent to go on with its own judgement (choosing an option would invent
+ * the user's decision), and a plan is accepted (the CLI then saves it to
+ * ~/.cursor/plans itself).
  */
 function answerCursorRequest(
   method: string,
   params: Record<string, unknown>,
 ): Record<string, unknown> {
   if (method === "cursor/ask_question") {
-    const answers = firstOptionAnswers(params.questions);
     console.warn(
-      "[cursor-api-proxy:acp] cursor/ask_question auto-selecting the first option: %s",
-      answers
-        .map(({ questionId, selectedOptionIds }) =>
-          `${questionId}=${selectedOptionIds[0] ?? "(none)"}`,
-        )
-        .join(", ") || "(no questions)",
+      "[cursor-api-proxy:acp] cursor/ask_question skipped, no interactive user to answer: %s",
+      describeQuestions(params.questions),
     );
-    return { outcome: { outcome: "answered", answers } };
+    return { outcome: { outcome: "skipped", reason: NO_USER_TO_ASK } };
   }
   if (method === "cursor/create_plan") {
     debugAcp("cursor/create_plan: accepting the plan");
