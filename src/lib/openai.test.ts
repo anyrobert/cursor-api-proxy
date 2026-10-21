@@ -175,7 +175,7 @@ describe("toolsToSystemText", () => {
         parseOpenAiFunctionTools([
           { type: "web_search" },
           { type: "namespace", name: "multi_agent_v1", tools: [] },
-        ]),
+        ]).tools,
       ),
     ).toBeUndefined();
   });
@@ -191,7 +191,7 @@ describe("toolsToSystemText", () => {
             parameters: { type: "object", properties: {} },
           },
         ],
-      ),
+      ).tools,
     );
     expect(text).toBe(
       [
@@ -223,7 +223,7 @@ describe("toolsToSystemText", () => {
               },
             },
             { type: "function", name: "ping" },
-          ]),
+          ]).tools,
         ),
       ),
     ).toBe(
@@ -245,17 +245,51 @@ describe("toolsToSystemText", () => {
         { type: "namespace", name: "mcp__docs", tools: [search] },
         { type: "namespace", name: "mcp__wiki", tools: [search] },
         { type: "file_search", vector_store_ids: ["vs_1"] },
-        { type: "custom", name: "apply_patch", format: { type: "text" } },
         { description: "no name" },
-      ]),
+      ]).tools,
     );
     expect(functionLines(text)).toEqual([
       "Function: search",
       "Function: mcp__wiki__search",
     ]);
-    expect(text).not.toMatch(
-      /mcp__docs|web_search|file_search|apply_patch|undefined/,
+    expect(text).not.toMatch(/mcp__docs|web_search|file_search|undefined/);
+  });
+
+  it("renders a freeform custom tool as a function of one input string", () => {
+    const text = toolsToSystemText(
+      parseOpenAiFunctionTools([
+        {
+          type: "custom",
+          name: "apply_patch",
+          description: "Edit files.",
+          format: {
+            type: "grammar",
+            syntax: "lark",
+            definition: "start: begin_patch hunk+ end_patch",
+          },
+        },
+      ]).tools,
     );
+    expect(lines(entries(text))).toEqual([
+      "Function: apply_patch",
+      "Description: Edit files.",
+      "",
+      "Pass the tool's whole input as raw text in the `input` string.",
+      "",
+      "The text must match this Lark grammar:",
+      "start: begin_patch hunk+ end_patch",
+      `Parameters: ${JSON.stringify({
+        type: "object",
+        properties: {
+          input: {
+            type: "string",
+            description: "The tool's raw input text, passed on unchanged.",
+          },
+        },
+        required: ["input"],
+        additionalProperties: false,
+      })}`,
+    ]);
   });
 
   it("renders Anthropic input_schema", () => {
@@ -272,7 +306,7 @@ describe("toolsToSystemText", () => {
               },
             },
             { type: "custom", name: "custom_tool", input_schema: { type: "object" } },
-          ]),
+          ]).tools,
         ),
       ),
     ).toBe(
@@ -287,18 +321,17 @@ describe("toolsToSystemText", () => {
   });
 
   it("renders nothing for tool_choice none and only the named tool otherwise", () => {
-    const openAi = parseOpenAiFunctionTools([weather, time]);
+    const openAi = parseOpenAiFunctionTools([weather, time]).tools;
     const anthropic = parseAnthropicFunctionTools([
       { name: "get_weather" },
       { name: "get_time" },
-    ]);
+    ]).tools;
     expect(
       toolsToSystemText(resolveToolChoice(openAi, "none").tools),
     ).toBeUndefined();
     expect(
       toolsToSystemText(
-        resolveToolChoice(anthropic, { type: "none" }, { anthropic: true })
-          .tools,
+        resolveToolChoice(anthropic, { type: "none" }).tools,
       ),
     ).toBeUndefined();
     expect(
@@ -314,11 +347,8 @@ describe("toolsToSystemText", () => {
     expect(
       functionLines(
         toolsToSystemText(
-          resolveToolChoice(
-            anthropic,
-            { type: "tool", name: "get_weather" },
-            { anthropic: true },
-          ).tools,
+          resolveToolChoice(anthropic, { type: "tool", name: "get_weather" })
+            .tools,
         ),
       ),
     ).toEqual(["Function: get_weather"]);
@@ -344,7 +374,7 @@ describe("toolsToSystemText", () => {
     });
 
     it("lists every tool and spends the rest on full schemas, in order", () => {
-      const tools = parseOpenAiFunctionTools(
+      const { tools } = parseOpenAiFunctionTools(
         Array.from({ length: 17 }, (_, index) => bigTool(index)),
       );
       const fullSize = tools
@@ -382,7 +412,7 @@ describe("toolsToSystemText", () => {
     it("counts the tools that do not fit even as brief entries", () => {
       const many = parseOpenAiFunctionTools(
         Array.from({ length: 60 }, (_, index) => bigTool(index)),
-      );
+      ).tools;
       const text = toolsToSystemText(many);
       const listed = functionLines(text).length;
       expect(listed).toBeGreaterThan(0);
@@ -438,5 +468,37 @@ describe("responsesInputToMessages", () => {
       input: [{ type: "function_call_output", call_id: "call_1", output: "42" }],
     });
     expect(result).toEqual([{ role: "tool", content: "42" }]);
+  });
+
+  it("replays freeform custom tool calls the way the agent makes them", () => {
+    const patch = "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch";
+    const result = responsesInputToMessages({
+      input: [
+        { type: "message", role: "user", content: "Add a.txt" },
+        {
+          type: "custom_tool_call",
+          id: "ctc_1",
+          call_id: "call_1",
+          name: "apply_patch",
+          input: patch,
+        },
+        {
+          type: "custom_tool_call_output",
+          call_id: "call_1",
+          output: "Success. Updated the following files:\nA a.txt",
+        },
+      ],
+    });
+    expect(result).toEqual([
+      { role: "user", content: "Add a.txt" },
+      {
+        role: "assistant",
+        content: `Function call apply_patch: ${JSON.stringify({ input: patch })}`,
+      },
+      {
+        role: "tool",
+        content: "Success. Updated the following files:\nA a.txt",
+      },
+    ]);
   });
 });

@@ -1,4 +1,8 @@
-import type { ClientToolDefinition } from "./tool-types.js";
+import {
+  freeformArguments,
+  isResponsesToolOutput,
+  type ClientToolDefinition,
+} from "./tool-types.js";
 
 export type OpenAiChatCompletionRequest = {
   model?: string;
@@ -137,18 +141,22 @@ export function responsesInputToMessages(
       continue;
     }
 
-    if (item.type === "function_call_output") {
+    if (isResponsesToolOutput(item)) {
       const output = responseItemContentToText(item.output ?? item.content);
       if (output) messages.push({ role: "tool", content: output });
       continue;
     }
 
-    if (item.type === "function_call") {
+    // A freeform call is written the way the agent makes it: a function
+    // call whose one `input` argument holds the raw text.
+    if (item.type === "function_call" || item.type === "custom_tool_call") {
       const name = typeof item.name === "string" ? item.name : "function";
       const args =
-        typeof item.arguments === "string"
-          ? item.arguments
-          : JSON.stringify(item.arguments ?? {});
+        item.type === "custom_tool_call"
+          ? freeformArguments(item.input)
+          : typeof item.arguments === "string"
+            ? item.arguments
+            : JSON.stringify(item.arguments ?? {});
       messages.push({
         role: "assistant",
         content: `Function call ${name}: ${args}`,
@@ -209,10 +217,10 @@ function briefToolEntry(tool: ClientToolDefinition): string {
  * see them but not call them.
  *
  * Takes the parsed definitions, so every API renders alike: Chat and flat
- * Responses functions, legacy `functions`, namespace members under their
- * flattened names, and Anthropic `input_schema`. Host-side builtins and
- * namespace groups never reach it, and `tool_choice` has already narrowed
- * the list.
+ * Responses functions, legacy `functions`, freeform `custom` tools as their
+ * one-`input` function, namespace members under their flattened names, and
+ * Anthropic `input_schema`. Host-side builtins and namespace groups never
+ * reach it, and `tool_choice` has already narrowed the list.
  *
  * The entries stay within TOOLS_TEXT_BUDGET. Every tool first gets a brief
  * entry (name and a description cut to BRIEF_DESCRIPTION_MAX) while those

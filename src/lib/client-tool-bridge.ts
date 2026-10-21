@@ -10,10 +10,11 @@ import {
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import type {
-  ClientToolDefinition,
-  ClientToolOutput,
-  PendingClientToolCall,
+import {
+  callIdentity,
+  type ClientToolDefinition,
+  type ClientToolOutput,
+  type PendingClientToolCall,
 } from "./tool-types.js";
 
 type ToolCallResult = {
@@ -55,7 +56,7 @@ function pendingView(call: ParkedCall): PendingClientToolCall {
     itemId: call.itemId,
     name: call.name,
     arguments: call.arguments,
-    ...(call.namespaced ? { namespaced: call.namespaced } : {}),
+    ...callIdentity(call),
   };
 }
 
@@ -172,9 +173,7 @@ export class ClientToolBridge {
           itemId,
           name,
           arguments: argumentsJson,
-          ...(definition.namespaced
-            ? { namespaced: definition.namespaced }
-            : {}),
+          ...callIdentity(definition),
           exposed: false,
           retryKey,
           requests: new Set(),
