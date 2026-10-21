@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AcpToolSession } from "./acp-tool-session.js";
 import type { ClientToolDefinition } from "./tool-types.js";
@@ -278,5 +278,39 @@ describe("AcpToolSession", () => {
     await session.close();
     await session.close();
     expect(cleanupCalls).toBe(1);
+  });
+
+  it("makes a second close() wait for the teardown already running (#90)", async () => {
+    let finishCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      finishCleanup = resolve;
+    });
+    let cleanupCalls = 0;
+    const session = createSession("tool_call", undefined, {
+      onClose: async () => {
+        cleanupCalls += 1;
+        await cleanupGate;
+      },
+    });
+    try {
+      await session.start("Use weather");
+      expect((await session.collect()).status).toBe("tool_calls");
+
+      const first = session.close();
+      let secondDone = false;
+      const second = session.close().then(() => {
+        secondDone = true;
+      });
+      expect(session.closed).toBe(true);
+      await vi.waitFor(() => expect(cleanupCalls).toBe(1));
+      expect(secondDone).toBe(false);
+
+      finishCleanup();
+      await Promise.all([first, second]);
+      expect(secondDone).toBe(true);
+      expect(cleanupCalls).toBe(1);
+    } finally {
+      finishCleanup();
+    }
   });
 });

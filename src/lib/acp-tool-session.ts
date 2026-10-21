@@ -101,6 +101,7 @@ export class AcpToolSession {
   #listener?: (event: ToolTurnEvent) => void;
   #ttl?: ReturnType<typeof setTimeout>;
   #closed = false;
+  #closing?: Promise<void>;
   #terminal = false;
 
   constructor(opts: AcpToolSessionOptions) {
@@ -258,8 +259,17 @@ export class AcpToolSession {
     return this.collect(listener);
   }
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
+  /**
+   * Cancel the turn, kill the agent and release the run's dirs. Every call
+   * waits for the same teardown, so a caller that comes second (shutdown,
+   * after a TTL or abort started it) still knows when it is done (#90).
+   */
+  close(): Promise<void> {
+    this.#closing ??= this.#teardown();
+    return this.#closing;
+  }
+
+  async #teardown(): Promise<void> {
     this.#closed = true;
     if (this.#ttl) clearTimeout(this.#ttl);
     this.#listener = undefined;

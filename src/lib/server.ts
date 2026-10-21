@@ -19,11 +19,13 @@ export type BridgeServerOptions = {
   config: BridgeConfig;
 };
 
+export type BridgeHttpServer = http.Server | https.Server;
+
 export function startBridgeServer(
   opts: BridgeServerOptions,
-): (http.Server | https.Server)[] {
+): BridgeHttpServer[] {
   const { config } = opts;
-  const servers: (http.Server | https.Server)[] = [];
+  const servers: BridgeHttpServer[] = [];
 
   if (config.configDirs && config.configDirs.length > 0) {
     if (config.multiPort) {
@@ -53,63 +55,157 @@ export function startBridgeServer(
 }
 
 /**
- * Register SIGTERM / SIGINT handlers for graceful shutdown.
- * Closes all HTTP(S) servers, kills in-flight agent processes, then exits.
+ * What a server leaves running that must finish before the process exits:
+ * its tool sessions, and the requests still being handled, whose agents'
+ * temp dirs are only removed once their turn ends (#90).
+ */
+type ServerCleanup = {
+  toolSessions: ToolSessionRegistry;
+  requests: Set<Promise<void>>;
+};
+
+const serverCleanup = new WeakMap<BridgeHttpServer, ServerCleanup>();
+
+const DRAIN_TIMEOUT_MS = 10_000;
+/** Below the 5 s the SDK and the launcher script wait before SIGKILL. */
+const CLEANUP_TIMEOUT_MS = 3_000;
+
+export type ShutdownOptions = {
+  /** Most time to wait for the servers to close; exits with 1 after it. */
+  drainTimeoutMs?: number;
+  /** Most time to wait for tool sessions and running turns to clean up. */
+  cleanupTimeoutMs?: number;
+  /** Replaces process.exit (tests). */
+  exit?: (code: number) => void;
+};
+
+export type GracefulShutdownOptions = ShutdownOptions & {
+  /** Where SIGINT and SIGTERM arrive (tests); defaults to process. */
+  signals?: Pick<NodeJS.EventEmitter, "on">;
+};
+
+function exitProcess(code: number): void {
+  process.exit(code);
+}
+
+/** Whether `work` settles within `ms`. */
+async function settlesWithin(
+  work: Promise<unknown>,
+  ms: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<false>((resolve) => {
+    timer = setTimeout(resolve, ms, false);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([work.then(() => true, () => true), timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function closeServer(server: BridgeHttpServer): Promise<void> {
+  return new Promise((resolve) => {
+    // closeAllConnections is missing before Node 18.2.
+    if (typeof server.closeAllConnections === "function") {
+      server.closeAllConnections();
+    }
+    server.close(() => resolve());
+  });
+}
+
+/**
+ * Stop `servers`, then exit. Their tool sessions are closed first, which
+ * cancels each turn, kills its agent and removes its run dirs; the remaining
+ * agents are killed and open connections dropped. Exit waits for the
+ * sessions' teardown and the requests still running (at most
+ * `cleanupTimeoutMs`), and for the servers to close: 0 once they have, 1 if
+ * they have not after `drainTimeoutMs`.
+ */
+export async function shutdownBridge(
+  servers: readonly BridgeHttpServer[],
+  opts: ShutdownOptions = {},
+): Promise<void> {
+  const exit = opts.exit ?? exitProcess;
+  const cleanups = servers.flatMap((server) => serverCleanup.get(server) ?? []);
+
+  const sessionsClosed = Promise.all(
+    cleanups.map((cleanup) => cleanup.toolSessions.closeAll()),
+  );
+  killAllChildProcesses();
+  const serversClosed = Promise.all(servers.map(closeServer));
+  const requestsEnded = Promise.allSettled(
+    cleanups.flatMap((cleanup) => [...cleanup.requests]),
+  );
+
+  const [cleanedUp, drained] = await Promise.all([
+    settlesWithin(
+      Promise.all([sessionsClosed, requestsEnded]),
+      opts.cleanupTimeoutMs ?? CLEANUP_TIMEOUT_MS,
+    ),
+    settlesWithin(serversClosed, opts.drainTimeoutMs ?? DRAIN_TIMEOUT_MS),
+  ]);
+  if (!cleanedUp) {
+    console.error(
+      "[shutdown] Timed out waiting for agent sessions to clean up — some temp dirs may remain.",
+    );
+  }
+  if (!drained) {
+    console.error(
+      "[shutdown] Timed out waiting for connections to drain — forcing exit.",
+    );
+  }
+  exit(drained ? 0 : 1);
+}
+
+/**
+ * Shut down gracefully on the first SIGINT or SIGTERM (`shutdownBridge`). A
+ * second signal exits with 1 at once, without waiting for the cleanup.
  */
 export function setupGracefulShutdown(
-  servers: (http.Server | https.Server)[],
-  timeoutMs = 10_000,
+  servers: readonly BridgeHttpServer[],
+  opts: GracefulShutdownOptions = {},
 ): void {
+  const { signals = process, ...shutdownOpts } = opts;
+  const exit = opts.exit ?? exitProcess;
   let shuttingDown = false;
 
-  const shutdown = (signal: string) => {
-    if (shuttingDown) return;
+  const onSignal = (signal: NodeJS.Signals) => {
+    if (shuttingDown) {
+      console.error(`[shutdown] ${signal} received again — exiting now.`);
+      exit(1);
+      return;
+    }
     shuttingDown = true;
     console.log(
       `\n[${new Date().toISOString()}] ${signal} received — shutting down gracefully…`,
     );
-
-    // Stop accepting new connections and kill all in-flight agent processes
-    killAllChildProcesses();
-
-    const closePromises = servers.map(
-      (s) =>
-        new Promise<void>((resolve) => {
-          // closeAllConnections available since Node 18.2
-          if (typeof (s as any).closeAllConnections === "function") {
-            (s as any).closeAllConnections();
-          }
-          s.close(() => resolve());
-        }),
-    );
-
-    const forceExit = setTimeout(() => {
-      console.error(
-        "[shutdown] Timed out waiting for connections to drain — forcing exit.",
-      );
-      process.exit(1);
-    }, timeoutMs).unref();
-
-    Promise.all(closePromises).then(() => {
-      clearTimeout(forceExit);
-      process.exit(0);
+    shutdownBridge(servers, shutdownOpts).catch((error: unknown) => {
+      console.error("[shutdown] Failed:", error);
+      exit(1);
     });
   };
 
-  process.once("SIGTERM", () => shutdown("SIGTERM"));
-  process.once("SIGINT", () => shutdown("SIGINT"));
+  signals.on("SIGTERM", () => onSignal("SIGTERM"));
+  signals.on("SIGINT", () => onSignal("SIGINT"));
 }
 
-function startSingleServer(
-  opts: BridgeServerOptions,
-): http.Server | https.Server {
+function startSingleServer(opts: BridgeServerOptions): BridgeHttpServer {
   const { config } = opts;
 
   const toolSessions = new ToolSessionRegistry();
-  const requestListener = createRequestListener(opts, { toolSessions });
+  const handleRequest = createRequestListener(opts, { toolSessions });
+  const requests = new Set<Promise<void>>();
+  const requestListener: http.RequestListener = (req, res) => {
+    const handled = handleRequest(req, res);
+    requests.add(handled);
+    // Derived from `handled`, so a rejection still surfaces as unhandled.
+    void handled.finally(() => requests.delete(handled));
+  };
 
   const useTls = Boolean(config.tlsCertPath && config.tlsKeyPath);
-  let server: http.Server | https.Server;
+  let server: BridgeHttpServer;
 
   if (useTls) {
     const cert = fs.readFileSync(config.tlsCertPath!, "utf8");
@@ -118,6 +214,7 @@ function startSingleServer(
   } else {
     server = http.createServer(requestListener);
   }
+  serverCleanup.set(server, { toolSessions, requests });
 
   server.on("error", (err: NodeJS.ErrnoException) => {
     if (err.code === "EADDRINUSE") {
