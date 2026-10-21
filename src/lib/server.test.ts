@@ -125,8 +125,15 @@ describe("startBridgeServer", () => {
   let servers: (http.Server | https.Server)[] = [];
 
   afterEach(async () => {
+    // close() alone waits for every keep-alive socket the client agent still
+    // holds, up to its ~4 s idle timeout, if a response was not finished when
+    // close() ran (#75). Drop them so such a regression fails its own
+    // assertion at once instead of stalling teardown.
     for (const s of servers) {
-      await new Promise((r) => s.close(r));
+      await new Promise((r) => {
+        s.close(r);
+        s.closeAllConnections();
+      });
     }
     servers = [];
   });
