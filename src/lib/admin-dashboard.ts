@@ -41,9 +41,28 @@ function notFound(res: http.ServerResponse): void {
   res.end("not found\n");
 }
 
-function safeJoin(root: string, rel: string): string | null {
-  const target = path.normalize(path.join(root, rel));
-  if (!target.startsWith(root)) return null;
+/**
+ * Joins `rel` onto `root` and returns the result only while it stays inside
+ * `root` (the root itself included). A string prefix test is not enough: a
+ * sibling such as `public-old` starts with `public` (#92). `path.relative`
+ * applies the platform's rules, so on Windows `\` separates too and case is
+ * ignored; a result that is absolute (one naming a drive such as `D:`) is
+ * refused as well. `pathApi` lets tests apply the Windows rules anywhere.
+ */
+export function safeJoin(
+  root: string,
+  rel: string,
+  pathApi: path.PlatformPath = path,
+): string | null {
+  const target = pathApi.join(root, rel);
+  const fromRoot = pathApi.relative(root, target);
+  if (
+    fromRoot === ".." ||
+    fromRoot.startsWith(`..${pathApi.sep}`) ||
+    pathApi.isAbsolute(fromRoot)
+  ) {
+    return null;
+  }
   return target;
 }
 
