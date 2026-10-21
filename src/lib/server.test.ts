@@ -210,6 +210,50 @@ describe("startBridgeServer", () => {
     expect(body).toContain("cursor-api-proxy");
   });
 
+  it.each(["/", "/wiki", "/static/styles.css"])(
+    "has ended the dashboard %s response by the time the client has read it",
+    async (path) => {
+      servers = startBridgeServer({
+        version: "1.0.0",
+        config: createTestConfig(),
+      });
+      await new Promise<void>((resolve) =>
+        servers[0].on("listening", () => resolve()),
+      );
+      const served: http.ServerResponse[] = [];
+      servers[0].on("request", (_req, res) => served.push(res));
+
+      // A response still open after the client has the full body keeps its
+      // keep-alive socket busy, so server.close() waits on the client's idle
+      // timeout (~4 s) instead of returning (#75). Whether an open response
+      // loses that race depends on fs timing, so repeat the request to make a
+      // regression fail reliably.
+      for (let i = 0; i < 10; i++) {
+        const { status } = await fetchServer(servers[0], path);
+        expect(status).toBe(200);
+        expect(served).toHaveLength(i + 1);
+        expect(served[i].writableEnded).toBe(true);
+      }
+    },
+  );
+
+  it.each(["/static/missing.css", "/static/"])(
+    "answers 404 for the missing or directory dashboard asset %s",
+    async (path) => {
+      servers = startBridgeServer({
+        version: "1.0.0",
+        config: createTestConfig(),
+      });
+      await new Promise<void>((resolve) =>
+        servers[0].on("listening", () => resolve()),
+      );
+
+      const { status, body } = await fetchServer(servers[0], path);
+      expect(status).toBe(404);
+      expect(body).toBe("not found\n");
+    },
+  );
+
   it("does not append session logs for dashboard /api/status and /api/log polling", async () => {
     const appendSessionLineMock = vi.mocked(appendSessionLine);
     appendSessionLineMock.mockClear();

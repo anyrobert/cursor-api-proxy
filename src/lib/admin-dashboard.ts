@@ -47,17 +47,28 @@ function safeJoin(root: string, rel: string): string | null {
   return target;
 }
 
+const MISSING_FILE_CODES = new Set(["ENOENT", "ENOTDIR", "EISDIR"]);
+
+// Dashboard assets are a few KB, so each one is read whole and sent with a
+// single end(): the response is complete before any byte reaches the client,
+// so keep-alive sockets go idle at once and server.close() never waits on
+// them (#75). A read error is answered here instead of escaping as an
+// unhandled stream 'error' that would take the process down.
 function serveFile(res: http.ServerResponse, filePath: string): void {
-  fs.stat(filePath, (err, stat) => {
-    if (err || !stat.isFile()) return notFound(res);
+  fs.readFile(filePath, (err, data) => {
+    if (err) {
+      if (MISSING_FILE_CODES.has(err.code ?? "")) return notFound(res);
+      res.writeHead(500, { "content-type": "text/plain" });
+      res.end("internal error\n");
+      return;
+    }
     const ext = path.extname(filePath).toLowerCase();
-    const mime = MIME[ext] ?? "application/octet-stream";
     res.writeHead(200, {
-      "content-type": mime,
-      "content-length": stat.size,
+      "content-type": MIME[ext] ?? "application/octet-stream",
+      "content-length": data.length,
       "cache-control": "no-cache",
     });
-    fs.createReadStream(filePath).pipe(res);
+    res.end(data);
   });
 }
 
