@@ -1,8 +1,13 @@
 import * as crypto from "node:crypto";
-import * as fs from "node:fs";
 import * as http from "node:http";
 
 import type { BridgeConfig } from "./config.js";
+import { CursorCliModelsError } from "./cursor-cli.js";
+import {
+  anthropicErrorBody,
+  openAiErrorBody,
+  type AgentFailure,
+} from "./handlers/agent-failure.js";
 import type { ModelCacheRef } from "./handlers/models.js";
 import { handleHealth } from "./handlers/health.js";
 import { handleModels } from "./handlers/models.js";
@@ -14,7 +19,11 @@ import {
   handleAdminDashboard,
 } from "./admin-dashboard.js";
 import { extractBearerToken, json, readBody } from "./http.js";
-import { appendSessionLine, logIncoming } from "./request-log.js";
+import {
+  appendSessionError,
+  appendSessionLine,
+  logIncoming,
+} from "./request-log.js";
 import type { ToolSessionRegistry } from "./tool-session-registry.js";
 
 export type BridgeServerOptions = {
@@ -26,12 +35,59 @@ export type BridgeRequestRuntime = {
   toolSessions: ToolSessionRegistry;
 };
 
-/** The model APIs: POST routes that take a JSON body and run an agent turn. */
-const MODEL_APIS = new Map([
-  ["/v1/chat/completions", { handle: handleChatCompletions }],
-  ["/v1/responses", { handle: handleResponses }],
-  ["/v1/messages", { handle: handleAnthropicMessages }],
+type ModelApi = {
+  /** Every model API handler has the Chat Completions handler's signature. */
+  handle: typeof handleChatCompletions;
+  /** A failure as the API's clients parse it. */
+  errorBody: (failure: AgentFailure) => unknown;
+};
+
+/**
+ * The model APIs: POST routes that take a JSON body and run an agent turn.
+ * An error a handler throws is answered in its API's error shape.
+ */
+const MODEL_APIS = new Map<string, ModelApi>([
+  ["/v1/chat/completions", { handle: handleChatCompletions, errorBody: openAiErrorBody }],
+  ["/v1/responses", { handle: handleResponses, errorBody: openAiErrorBody }],
+  ["/v1/messages", { handle: handleAnthropicMessages, errorBody: anthropicErrorBody }],
 ]);
+
+/** The error shape of the proxy's own routes, such as /v1/models. */
+function proxyErrorBody(failure: AgentFailure) {
+  return { error: { message: failure.message, code: failure.code } };
+}
+
+/** What the client hears about an error nothing else answered. */
+const INTERNAL_FAILURE: AgentFailure = {
+  status: 500,
+  code: "internal_error",
+  message: "The proxy could not handle the request. See server logs for details.",
+};
+
+/**
+ * A thrown error as the client sees it, and the detail that stays in the
+ * server logs. A thrown error's own text can hold CLI output or paths on the
+ * proxy host, so the client sees it only when its type promises a
+ * client-safe message.
+ */
+function describeThrown(error: unknown): {
+  failure: AgentFailure;
+  detail: string;
+  stack?: string;
+} {
+  if (error instanceof CursorCliModelsError) {
+    // The code of a failed agent run: either way the Cursor CLI is unusable,
+    // and only the proxy's operator can fix it.
+    return {
+      failure: { status: 500, code: "cursor_cli_error", message: error.message },
+      detail: error.diagnostics,
+    };
+  }
+  if (error instanceof Error) {
+    return { failure: INTERNAL_FAILURE, detail: error.message, stack: error.stack };
+  }
+  return { failure: INTERNAL_FAILURE, detail: String(error) };
+}
 
 export function createRequestListener(
   opts: BridgeServerOptions,
@@ -142,23 +198,22 @@ export function createRequestListener(
         json(res, 404, { error: { message: "Not found", code: "not_found" } });
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[${new Date().toISOString()}] Proxy error: ${msg}`);
-      if (err instanceof Error && err.stack) {
-        console.error(err.stack);
-      }
-      try {
-        fs.appendFileSync(
-          config.sessionsLogPath,
-          `${new Date().toISOString()} ERROR ${method} ${pathname} ${remoteAddress} ${msg.slice(0, 200).replace(/\n/g, " ")}\n`,
-        );
-      } catch {
-        /* ignore */
-      }
+      const { failure, detail, stack } = describeThrown(err);
+      console.error(
+        `[${new Date().toISOString()}] Proxy error (${failure.code}): ${detail}`,
+      );
+      if (stack) console.error(stack);
+      appendSessionError(
+        config.sessionsLogPath,
+        method,
+        pathname,
+        remoteAddress,
+        failure.code,
+        detail,
+      );
       if (!res.headersSent) {
-        json(res, 500, {
-          error: { message: msg, code: "internal_error" },
-        });
+        const errorBody = api?.errorBody ?? proxyErrorBody;
+        json(res, failure.status, errorBody(failure));
       } else {
         res.end();
       }

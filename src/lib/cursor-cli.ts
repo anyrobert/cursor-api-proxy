@@ -1,8 +1,24 @@
 import { tmpdir } from "node:os";
 
-import { run } from "./process.js";
+import { run, type RunResult } from "./process.js";
 
 export type CursorCliModel = { id: string; name: string };
+
+/**
+ * `agent --list-models` failed: the CLI did not start, exited non-zero or
+ * printed no model catalog. The message is safe to show clients;
+ * `diagnostics` (the binary's path and the CLI's output) is for server logs
+ * only.
+ */
+export class CursorCliModelsError extends Error {
+  constructor(readonly diagnostics: string) {
+    super("The Cursor CLI could not list models. See server logs for details.");
+    this.name = "CursorCliModelsError";
+  }
+}
+
+const SET_AGENT_BIN =
+  "Set CURSOR_AGENT_BIN to the Cursor cursor-agent executable.";
 
 /** Strip CSI / OSC ANSI sequences so colored CLI output still parses. */
 export function stripAnsi(text: string): string {
@@ -35,37 +51,42 @@ export async function listCursorCliModels(args: {
   agentBin: string;
   timeoutMs: number;
 }): Promise<CursorCliModel[]> {
-  // Parent shells (Cursor agent, CI) often set FORCE_COLOR=1; that paints
-  // `--list-models` with ANSI and used to yield an empty OpenAI model list.
-  const list = await run(args.agentBin, ["--list-models"], {
-    cwd: tmpdir(),
-    timeoutMs: args.timeoutMs,
-    envOverrides: {
-      NO_COLOR: "1",
-      FORCE_COLOR: "0",
-      TERM: "dumb",
-    },
-  });
+  const bin = JSON.stringify(args.agentBin);
+  let list: RunResult;
+  try {
+    // Parent shells (Cursor agent, CI) often set FORCE_COLOR=1; that paints
+    // `--list-models` with ANSI and used to yield an empty OpenAI model list.
+    list = await run(args.agentBin, ["--list-models"], {
+      cwd: tmpdir(),
+      timeoutMs: args.timeoutMs,
+      envOverrides: {
+        NO_COLOR: "1",
+        FORCE_COLOR: "0",
+        TERM: "dumb",
+      },
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new CursorCliModelsError(
+      `Cursor CLI check failed for ${bin}: --list-models could not run (${reason}). ${SET_AGENT_BIN}`,
+    );
+  }
 
   if (list.code !== 0) {
-    throw new Error(
-      `Cursor CLI check failed for ${JSON.stringify(
-        args.agentBin,
-      )}: --list-models exited ${list.code}: ${
+    throw new CursorCliModelsError(
+      `Cursor CLI check failed for ${bin}: --list-models exited ${list.code}: ${
         list.stderr.trim() || "no diagnostic output"
-      }. Set CURSOR_AGENT_BIN to the Cursor cursor-agent executable.`,
+      }. ${SET_AGENT_BIN}`,
     );
   }
 
   const models = parseCursorCliModels(list.stdout);
   if (models.length === 0) {
     const sample = stripAnsi(`${list.stdout}\n${list.stderr}`).trim().slice(0, 240);
-    throw new Error(
-      `${JSON.stringify(
-        args.agentBin,
-      )} did not return a Cursor model catalog and may be another vendor's "agent" binary.${
+    throw new CursorCliModelsError(
+      `${bin} did not return a Cursor model catalog and may be another vendor's "agent" binary.${
         sample ? ` Output: ${sample}` : ""
-      } Set CURSOR_AGENT_BIN to the Cursor cursor-agent executable.`,
+      } ${SET_AGENT_BIN}`,
     );
   }
   return models;
