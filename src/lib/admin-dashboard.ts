@@ -1,4 +1,4 @@
-import { execSync, spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
@@ -47,27 +47,47 @@ function safeJoin(root: string, rel: string): string | null {
   return target;
 }
 
+const MISSING_FILE_CODES = new Set(["ENOENT", "ENOTDIR", "EISDIR"]);
+
+// Dashboard assets are a few KB, so each one is read whole and sent with a
+// single end(): the response is complete before any byte reaches the client,
+// so keep-alive sockets go idle at once and server.close() never waits on
+// them (#75). A read error is answered here instead of escaping as an
+// unhandled stream 'error' that would take the process down.
 function serveFile(res: http.ServerResponse, filePath: string): void {
-  fs.stat(filePath, (err, stat) => {
-    if (err || !stat.isFile()) return notFound(res);
+  fs.readFile(filePath, (err, data) => {
+    if (err) {
+      if (MISSING_FILE_CODES.has(err.code ?? "")) return notFound(res);
+      res.writeHead(500, { "content-type": "text/plain" });
+      res.end("internal error\n");
+      return;
+    }
     const ext = path.extname(filePath).toLowerCase();
-    const mime = MIME[ext] ?? "application/octet-stream";
     res.writeHead(200, {
-      "content-type": mime,
-      "content-length": stat.size,
+      "content-type": MIME[ext] ?? "application/octet-stream",
+      "content-length": data.length,
       "cache-control": "no-cache",
     });
-    fs.createReadStream(filePath).pipe(res);
+    res.end(data);
   });
 }
 
-function launchdLoadedSync(): boolean {
-  try {
-    const out = execSync("launchctl list 2>/dev/null", { encoding: "utf8" });
-    return out.split("\n").some((l) => l.trim().endsWith(PLIST_LABEL));
-  } catch {
-    return false;
-  }
+const LAUNCHCTL_TIMEOUT_MS = 2_000;
+
+// /api/status is polled every few seconds by each open dashboard, so the
+// launchctl probe runs async: a blocking exec here would stall the event
+// loop, and every in-flight completion stream with it, on each poll.
+function checkLaunchdLoaded(cb: (loaded: boolean) => void): void {
+  if (process.platform !== "darwin") return cb(false);
+  execFile(
+    "launchctl",
+    ["list"],
+    { encoding: "utf8", timeout: LAUNCHCTL_TIMEOUT_MS },
+    (err, stdout) => {
+      if (err) return cb(false);
+      cb(stdout.split("\n").some((l) => l.trim().endsWith(PLIST_LABEL)));
+    },
+  );
 }
 
 function storagePaths(config: BridgeConfig) {
@@ -120,31 +140,32 @@ function getStatus(
 
   const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
   const plistPath = path.join(home, "Library/LaunchAgents", `${PLIST_LABEL}.plist`);
-  const launchdLoaded = process.platform === "darwin" ? launchdLoadedSync() : false;
 
   const env = process.env;
-  cb({
-    running,
-    pid,
-    port: config.port,
-    host: config.host,
-    version,
-    uptimeSeconds: Math.floor((Date.now() - START_TIME) / 1000),
-    launchdLoaded,
-    plistPath,
-    packageRoot: root,
-    publicDir,
-    docsDir,
-    storageDir,
-    sessionsLogPath: config.sessionsLogPath,
-    serviceLog,
-    pidFile,
-    apiKeyConfigured: Boolean(env.CURSOR_API_KEY ?? env.CURSOR_AUTH_TOKEN),
-    bridgeApiKeyRequired: Boolean(config.requiredKey),
-    node: process.version,
-    platform: `${process.platform} ${process.arch}`,
-    startedAt: new Date(START_TIME).toISOString(),
-  });
+  checkLaunchdLoaded((launchdLoaded) =>
+    cb({
+      running,
+      pid,
+      port: config.port,
+      host: config.host,
+      version,
+      uptimeSeconds: Math.floor((Date.now() - START_TIME) / 1000),
+      launchdLoaded,
+      plistPath,
+      packageRoot: root,
+      publicDir,
+      docsDir,
+      storageDir,
+      sessionsLogPath: config.sessionsLogPath,
+      serviceLog,
+      pidFile,
+      apiKeyConfigured: Boolean(env.CURSOR_API_KEY ?? env.CURSOR_AUTH_TOKEN),
+      bridgeApiKeyRequired: Boolean(config.requiredKey),
+      node: process.version,
+      platform: `${process.platform} ${process.arch}`,
+      startedAt: new Date(START_TIME).toISOString(),
+    }),
+  );
 }
 
 function sanitizedBridgeConfig(config: BridgeConfig): Record<string, unknown> {
@@ -216,7 +237,7 @@ function parseQuery(url: string): Record<string, string> {
   return out;
 }
 
-export type AdminDashboardOpts = {
+type AdminDashboardOpts = {
   version: string;
   config: BridgeConfig;
 };

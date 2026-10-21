@@ -1,10 +1,12 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import * as fs from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { startBridgeServer } from "./server.js";
 import { appendSessionLine } from "./request-log.js";
-import { run, runStreaming } from "./process.js";
+import { run } from "./process.js";
 import type { BridgeConfig } from "./config.js";
 
 vi.mock("./cursor-cli.js", () => ({
@@ -125,8 +127,15 @@ describe("startBridgeServer", () => {
   let servers: (http.Server | https.Server)[] = [];
 
   afterEach(async () => {
+    // close() alone waits for every keep-alive socket the client agent still
+    // holds, up to its ~4 s idle timeout, if a response was not finished when
+    // close() ran (#75). Drop them so such a regression fails its own
+    // assertion at once instead of stalling teardown.
     for (const s of servers) {
-      await new Promise((r) => s.close(r));
+      await new Promise((r) => {
+        s.close(r);
+        s.closeAllConnections();
+      });
     }
     servers = [];
   });
@@ -210,6 +219,50 @@ describe("startBridgeServer", () => {
     expect(body).toContain("cursor-api-proxy");
   });
 
+  it.each(["/", "/wiki", "/static/styles.css"])(
+    "has ended the dashboard %s response by the time the client has read it",
+    async (path) => {
+      servers = startBridgeServer({
+        version: "1.0.0",
+        config: createTestConfig(),
+      });
+      await new Promise<void>((resolve) =>
+        servers[0].on("listening", () => resolve()),
+      );
+      const served: http.ServerResponse[] = [];
+      servers[0].on("request", (_req, res) => served.push(res));
+
+      // A response still open after the client has the full body keeps its
+      // keep-alive socket busy, so server.close() waits on the client's idle
+      // timeout (~4 s) instead of returning (#75). Whether an open response
+      // loses that race depends on fs timing, so repeat the request to make a
+      // regression fail reliably.
+      for (let i = 0; i < 10; i++) {
+        const { status } = await fetchServer(servers[0], path);
+        expect(status).toBe(200);
+        expect(served).toHaveLength(i + 1);
+        expect(served[i].writableEnded).toBe(true);
+      }
+    },
+  );
+
+  it.each(["/static/missing.css", "/static/"])(
+    "answers 404 for the missing or directory dashboard asset %s",
+    async (path) => {
+      servers = startBridgeServer({
+        version: "1.0.0",
+        config: createTestConfig(),
+      });
+      await new Promise<void>((resolve) =>
+        servers[0].on("listening", () => resolve()),
+      );
+
+      const { status, body } = await fetchServer(servers[0], path);
+      expect(status).toBe(404);
+      expect(body).toBe("not found\n");
+    },
+  );
+
   it("does not append session logs for dashboard /api/status and /api/log polling", async () => {
     const appendSessionLineMock = vi.mocked(appendSessionLine);
     appendSessionLineMock.mockClear();
@@ -230,6 +283,61 @@ describe("startBridgeServer", () => {
     // finish handlers run after response completion; flush microtasks before assert.
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(appendSessionLineMock).not.toHaveBeenCalled();
+  });
+
+  describe("dashboard /api/status launchd probe", () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const listsProxy =
+      '#!/bin/sh\nprintf "PID\\tStatus\\tLabel\\n123\\t0\\tcom.cursor-api-proxy\\n"\n';
+    let binDir = "";
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", realPlatform);
+      vi.unstubAllEnvs();
+      if (binDir) fs.rmSync(binDir, { recursive: true, force: true });
+      binDir = "";
+    });
+
+    // Asks /api/status as if running on `platform`, with PATH holding only a
+    // temp dir (and `launchctlScript` as its launchctl, if given), so the real
+    // launchctl never runs. The pid file /api/status writes lands there too.
+    async function statusLaunchdLoaded(
+      platform: NodeJS.Platform,
+      launchctlScript?: string,
+    ): Promise<unknown> {
+      binDir = fs.mkdtempSync(join(tmpdir(), "cursor-proxy-launchctl-"));
+      if (launchctlScript !== undefined) {
+        fs.writeFileSync(join(binDir, "launchctl"), launchctlScript, { mode: 0o755 });
+      }
+      vi.stubEnv("PATH", binDir);
+      Object.defineProperty(process, "platform", { ...realPlatform, value: platform });
+
+      servers = startBridgeServer({
+        version: "1.0.0",
+        config: createTestConfig({ sessionsLogPath: join(binDir, "sessions.log") }),
+      });
+      await new Promise<void>((resolve) =>
+        servers[0].on("listening", () => resolve()),
+      );
+      const { status, body } = await fetchServer(servers[0], "/api/status");
+      expect(status).toBe(200);
+      return (JSON.parse(body) as { launchdLoaded: unknown }).launchdLoaded;
+    }
+
+    it.skipIf(process.platform === "win32")(
+      "reports launchd loaded on macOS when launchctl lists the proxy",
+      async () => {
+        expect(await statusLaunchdLoaded("darwin", listsProxy)).toBe(true);
+      },
+    );
+
+    it("reports launchd not loaded on macOS when launchctl cannot run", async () => {
+      expect(await statusLaunchdLoaded("darwin")).toBe(false);
+    });
+
+    it("does not consult launchctl off macOS", async () => {
+      expect(await statusLaunchdLoaded("linux", listsProxy)).toBe(false);
+    });
   });
 
   it("POST /api/log/clear archives and truncates sessions log", async () => {
