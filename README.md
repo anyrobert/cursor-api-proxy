@@ -400,11 +400,17 @@ CURSOR_BRIDGE_MULTI_PORT=true CURSOR_BRIDGE_PORT=8765 npm start
 
 account1 on 8765, account2 on 8766, and so on.
 
+### Rate and plan limits
+
+When the agent's output shows a rate limit, the account rests for a minute and the pool prefers the others. When a Cursor plan is used up, the agent answers only "Upgrade your plan to continue" (or "Add a payment method to continue"), or the CLI fails with "prepaid balance is used up"; the proxy returns that as HTTP 429 with code `cursor_plan_limit` on every API (in a stream, as the error that ends it, never as answer text) and rests the account for 15 minutes, so a retry goes to another account. Plan limits are per model: an account that hit it for one model may still answer others.
+
 ## Streaming
 
 The proxy supports `stream: true` on `POST /v1/chat/completions`, `POST /v1/responses`, and `POST /v1/messages`. Chat Completions and Messages return Server-Sent Events (SSE) in OpenAI/Anthropic streaming formats. Responses uses OpenAI Responses semantic SSE events (`response.created`, `response.output_text.delta`, …). Cursor CLI emits incremental deltas plus a final full message; the proxy deduplicates output so clients receive each chunk only once.
 
 While the agent is silent (thinking / tools, no tokens yet), the proxy writes SSE comment heartbeats (`: keepalive`) every 15s so clients with idle timeouts — notably Codex CLI — do not drop the stream. Codex `stream_idle_timeout_ms` is usually unnecessary. Long turns still need `CURSOR_BRIDGE_TIMEOUT_MS` above the run wall-clock.
+
+When the agent fails after a stream has started, the stream ends with the API's own error: Chat Completions sends a chunk holding only `error` (`{ message, type, param, code }`) and then `data: [DONE]`; Responses sends `response.failed`, whose `response` has `status: "failed"` and `error: { code, message }`; Messages sends an `error` event with `{ "type": "error", "error": { type, message, code } }`. Before a stream starts, the same failure is an HTTP error in that API's shape. The `code` says what failed, e.g. `cursor_cli_error` when the agent exits non-zero.
 
 Test streaming from repo root, with the proxy running:
 

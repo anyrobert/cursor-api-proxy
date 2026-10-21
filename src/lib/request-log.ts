@@ -76,7 +76,6 @@ export function logAccountAssigned(configDir: string | undefined): void {
 
 export function logAccountStats(verbose: boolean, stats: AccountStat[]): void {
   if (!verbose || stats.length === 0) return;
-  const now = Date.now();
   const lines: string[] = [];
   for (const s of stats) {
     const name = path.basename(s.configDir).padEnd(20);
@@ -203,6 +202,29 @@ export function appendSessionLine(
 }
 
 /**
+ * One ERROR line in the sessions log: the failure's tag and the first 200
+ * characters of its detail, on one line.
+ */
+function appendSessionError(
+  logPath: string,
+  method: string,
+  pathname: string,
+  remoteAddress: string,
+  tag: string,
+  detail: string,
+): void {
+  try {
+    const truncated = detail.trim().slice(0, 200).replace(/\n/g, " ");
+    fs.appendFileSync(
+      logPath,
+      `${new Date().toISOString()} ERROR ${method} ${pathname} ${remoteAddress} ${tag} ${truncated}\n`,
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
  * Log an agent execution error to console and sessions log.
  * Returns the message for the API response: `reason` when the proxy knows
  * why the run failed (never raw CLI stderr), else a generic line.
@@ -218,17 +240,43 @@ export function logAgentError(
 ): string {
   const errMsg = `Cursor CLI failed (exit ${exitCode}): ${stderr.trim()}`;
   console.error(`[${new Date().toISOString()}] Agent error: ${errMsg}`);
-  try {
-    const truncated = stderr.trim().slice(0, 200).replace(/\n/g, " ");
-    fs.appendFileSync(
-      logPath,
-      `${new Date().toISOString()} ERROR ${method} ${pathname} ${remoteAddress} agent_exit_${exitCode} ${truncated}\n`,
-    );
-  } catch {
-    /* ignore */
-  }
+  appendSessionError(
+    logPath,
+    method,
+    pathname,
+    remoteAddress,
+    `agent_exit_${exitCode}`,
+    stderr,
+  );
   return (
     reason?.trim() ||
     `The Cursor agent process exited with code ${exitCode}. See server logs for details.`
+  );
+}
+
+/**
+ * Log a failed turn the proxy reported to its client: its code and client
+ * message to the console, and to the sessions log its code with `detail`
+ * (server-side diagnostics, such as the CLI output of an agent that
+ * exited), or else the message.
+ */
+export function logTurnFailure(
+  logPath: string,
+  method: string,
+  pathname: string,
+  remoteAddress: string,
+  failure: { code: string; message: string },
+  detail?: string,
+): void {
+  console.error(
+    `[${new Date().toISOString()}] Agent turn failed (${failure.code}): ${failure.message}`,
+  );
+  appendSessionError(
+    logPath,
+    method,
+    pathname,
+    remoteAddress,
+    failure.code,
+    detail?.trim() || failure.message,
   );
 }

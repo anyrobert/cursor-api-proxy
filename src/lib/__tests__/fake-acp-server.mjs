@@ -596,6 +596,24 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "session/prompt") {
+    if (scenario === "plan_limit_text") {
+      // Cursor's answer once the plan is used up (#65), split like a stream.
+      update("agent_message_chunk", { content: { text: "Upgrade your " } });
+      update("agent_message_chunk", { content: { text: "plan to continue" } });
+      send({ id: msg.id, result: {} });
+      return;
+    }
+    if (scenario === "plan_limit_rpc_error") {
+      send({
+        id: msg.id,
+        error: {
+          code: -32603,
+          message: "Internal error",
+          data: { message: "Upgrade your plan to continue" },
+        },
+      });
+      return;
+    }
     if (realCatalog) {
       const values = Object.fromEntries(
         realOptions.map((option) => [option.id, option.currentValue]),
