@@ -25,7 +25,7 @@ function cacheTokenForAccount(configDir?: string): void {
   if (token) writeCachedToken(configDir, token);
 }
 
-export type AgentRunResult = {
+type AgentRunResult = {
   code: number;
   stdout: string;
   stderr: string;
@@ -232,7 +232,7 @@ export function runAgentSync(
     .finally(() => removeChatOnlyTempDir(tempDir));
 }
 
-export type StreamLineHandler = (line: string) => void;
+type StreamLineHandler = (line: string) => void;
 
 export function runAgentStream(
   config: BridgeConfig,
