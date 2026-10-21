@@ -613,6 +613,34 @@ rl.on("line", (line) => {
       // Never answer, so the caller's abort or overall timeout ends the turn.
       return;
     }
+    if (scenario === "retriable_trailer") {
+      // The real CLI reports a stream that broke after the answer as one more
+      // chunk, then still ends the turn normally (#76).
+      update("agent_message_chunk", {
+        content: { text: "The image shows a red square." },
+      });
+      update("agent_message_chunk", {
+        content: { text: "\n\nError: RetriableError: WritableIterable is closed" },
+      });
+      send({ id: msg.id, result: { stopReason: "end_turn" } });
+      return;
+    }
+    if (scenario === "retriable_trailer_after_tool_call") {
+      update("agent_message_chunk", { content: { text: "Let me look.\n\n" } });
+      update("tool_call", {
+        toolCallId: "read-1",
+        title: "Read image",
+        kind: "read",
+        status: "pending",
+      });
+      update("tool_call_update", { toolCallId: "read-1", status: "completed" });
+      update("agent_message_chunk", { content: { text: "It is a red square." } });
+      update("agent_message_chunk", {
+        content: { text: "\n\nError: RetriableError: WritableIterable is closed" },
+      });
+      send({ id: msg.id, result: { stopReason: "end_turn" } });
+      return;
+    }
     const operation = isToolScenario()
       ? runToolPrompt(msg.params)
       : scenario === "builtin_permission"
