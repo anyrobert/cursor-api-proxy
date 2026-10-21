@@ -1,4 +1,6 @@
+import * as fs from "node:fs";
 import * as http from "node:http";
+import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BridgeConfig } from "./config.js";
@@ -142,6 +144,29 @@ describe("chat-only handlers", () => {
       expect(prompt).toContain(`cwd=${cwd};`);
       expect(prompt).toContain("nothing outside it is in scope");
       expect(prompt).not.toContain(HOST_WORKSPACE);
+      expect(fs.existsSync(path.dirname(cwd))).toBe(false);
+    },
+  );
+
+  it.each(endpoints)(
+    "$path removes the temp dir when it returns on the Windows command-line limit",
+    async ({ path: endpoint, body }) => {
+      vi.mocked(fitPromptToWinCmdline).mockReturnValueOnce({
+        ok: false,
+        error: "Windows command line exceeds the configured limit",
+      });
+
+      const res = await post(endpoint, body);
+
+      expect(res.status).toBe(500);
+      expect(JSON.stringify(await res.json())).toContain(
+        "windows_cmdline_limit",
+      );
+      expect(run).not.toHaveBeenCalled();
+      expect(runStreaming).not.toHaveBeenCalled();
+      const tempDir = path.dirname(agentInvocation().cwd);
+      expect(path.basename(tempDir)).toMatch(/^cursor-proxy-/);
+      expect(fs.existsSync(tempDir)).toBe(false);
     },
   );
 });

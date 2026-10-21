@@ -34,7 +34,7 @@ import {
 } from "../request-log.js";
 import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
-import { resolveWorkspace } from "../workspace.js";
+import { removeChatOnlyTempDir, resolveWorkspace } from "../workspace.js";
 import { sanitizeMessages, sanitizeSystem } from "../sanitize.js";
 import {
   getNextAccountConfigDir,
@@ -548,6 +548,7 @@ export async function handleAnthropicMessages(
     cwd: workspaceDir,
   });
   if (!fit.ok) {
+    removeChatOnlyTempDir(tempDir);
     json(res, 500, {
       error: {
         type: "api_error",

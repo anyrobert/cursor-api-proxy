@@ -50,7 +50,7 @@ import {
 import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
 import { sanitizeMessages } from "../sanitize.js";
-import { resolveWorkspace } from "../workspace.js";
+import { removeChatOnlyTempDir, resolveWorkspace } from "../workspace.js";
 import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
@@ -908,6 +908,7 @@ export async function handleResponses(
     cwd: workspaceDir,
   });
   if (!fit.ok) {
+    removeChatOnlyTempDir(tempDir);
     json(res, 500, {
       error: {
         message: fit.error,
