@@ -1,4 +1,6 @@
+import * as fs from "node:fs";
 import * as http from "node:http";
+import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BridgeConfig } from "./config.js";
@@ -100,11 +102,25 @@ describe("client disconnect", () => {
 
   it("aborts the agent when the client goes away mid-request", async () => {
     let seenSignal: AbortSignal | undefined;
+    let seenCwd: string | undefined;
     const agentReached = new Promise<void>((resolve) => {
       vi.mocked(run).mockImplementation((_bin, _args, opts) => {
         seenSignal = opts?.signal;
+        seenCwd = opts?.cwd;
         resolve();
-        return new Promise(() => {});
+        // Like the real run: the killed child settles the run on abort.
+        return new Promise((settle) => {
+          opts?.signal?.addEventListener(
+            "abort",
+            () =>
+              settle({
+                code: -1,
+                stdout: "",
+                stderr: "terminated by signal SIGTERM",
+              }),
+            { once: true },
+          );
+        });
       });
     });
 
@@ -129,6 +145,13 @@ describe("client disconnect", () => {
     await disconnected;
     await vi.waitFor(() => {
       expect(seenSignal!.aborted).toBe(true);
+    });
+
+    // The aborted run still removes its chat-only temp dir.
+    const tempDir = path.dirname(seenCwd!);
+    expect(path.basename(tempDir)).toMatch(/^cursor-proxy-/);
+    await vi.waitFor(() => {
+      expect(fs.existsSync(tempDir)).toBe(false);
     });
   });
 });

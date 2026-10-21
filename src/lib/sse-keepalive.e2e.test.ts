@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as http from "node:http";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +28,22 @@ vi.mock("./process.js", async (importOriginal) => {
       stderr: "",
     }),
     runStreaming: vi.fn(),
+  };
+});
+
+// Every chat-only temp dir the handlers create, so teardown can check that
+// each one was removed (parked tool sessions remove theirs on close).
+const chatOnlyTempDirs = vi.hoisted(() => new Set<string>());
+
+vi.mock("./workspace.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./workspace.js")>();
+  return {
+    ...actual,
+    resolveWorkspace: (...args: Parameters<typeof actual.resolveWorkspace>) => {
+      const ws = actual.resolveWorkspace(...args);
+      if (ws.tempDir) chatOnlyTempDirs.add(ws.tempDir);
+      return ws;
+    },
   };
 });
 
@@ -146,6 +163,14 @@ afterEach(async () => {
         new Promise<void>((resolve) => server.close(() => resolve())),
     ),
   );
+  // Closing the server closes parked tool sessions in the background; wait
+  // for them so no temp dir outlives the test file.
+  await vi.waitFor(() => {
+    expect([...chatOnlyTempDirs].filter((dir) => fs.existsSync(dir))).toEqual(
+      [],
+    );
+  });
+  chatOnlyTempDirs.clear();
 });
 
 describe("SSE keepalive e2e (CLI stream)", () => {
