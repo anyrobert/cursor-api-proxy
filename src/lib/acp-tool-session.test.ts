@@ -13,6 +13,13 @@ const fakeServerPath = join(
   "__tests__",
   "fake-acp-server.mjs",
 );
+const fakeMcpClientAgentPath = join(
+  cwd,
+  "src",
+  "lib",
+  "__tests__",
+  "fake-acp-mcp-client.mjs",
+);
 
 const sessions: AcpToolSession[] = [];
 
@@ -75,6 +82,49 @@ describe("AcpToolSession", () => {
     ]);
     expect(final.status).toBe("completed");
     expect(final.text).toContain("Tool result: sunny");
+  });
+
+  it("answers the agent's retries of a timed-out call once (#64)", async () => {
+    const session = createSession("retry_on_timeout", undefined, {
+      args: [fakeMcpClientAgentPath],
+      env: {
+        FAKE_ACP_MCP_SCENARIO: "retry_on_timeout",
+        FAKE_ACP_MCP_TIMEOUT_MS: "200",
+      },
+    });
+    await session.start("Use weather");
+    const first = await session.collect();
+    expect(first.status).toBe("tool_calls");
+    if (first.status !== "tool_calls") return;
+    expect(first.toolCalls).toHaveLength(1);
+
+    // The caller answers late; the agent times out and retries meanwhile.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const final = await session.resume([
+      { callId: first.toolCalls[0].callId, output: "sunny" },
+    ]);
+    expect(final.status).toBe("completed");
+    const attempt = /^Tool result: sunny \(attempt (\d+)\)$/.exec(final.text);
+    expect(Number(attempt?.[1])).toBeGreaterThan(1);
+    expect(session.bridge.totalCalls).toBe(1);
+  });
+
+  it("tells the agent to use the caller's tools, not its own (#68)", async () => {
+    const session = createSession("echo_prompt", undefined, {
+      args: [fakeMcpClientAgentPath],
+      env: { FAKE_ACP_MCP_SCENARIO: "echo_prompt" },
+    });
+    await session.start("User: run `echo first_turn_ok`\n\nAssistant:");
+    const result = await session.collect();
+    expect(result.status).toBe("completed");
+    expect(result.text).toMatch(
+      new RegExp(
+        `^Tool use: .*the MCP server "${session.bridge.serverName}" \\(weather\\)\\..*built-in tools .* disabled`,
+      ),
+    );
+    expect(result.text).toMatch(
+      /do not call them\.\n\nUser: run `echo first_turn_ok`\n\nAssistant:$/,
+    );
   });
 
   it("batches parallel tool calls", async () => {

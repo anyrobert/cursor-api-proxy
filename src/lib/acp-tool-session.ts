@@ -62,6 +62,24 @@ function toolCallId(value: unknown): string | undefined {
   return typeof rec?.toolCallId === "string" ? rec.toolCallId : undefined;
 }
 
+/**
+ * Opens the prompt of every structured tool turn (#68). ACP has no way to
+ * hide the agent's built-in tools (session/new takes only cwd and MCP
+ * servers; the CLI's tool filters do not apply to `agent acp`), and the
+ * proxy rejects them, so the model is told where its tools are instead.
+ */
+function clientToolNote(
+  serverName: string,
+  tools: readonly ClientToolDefinition[],
+): string {
+  const names = tools.map((tool) => tool.name).join(", ");
+  return [
+    `Tool use: your tools for this task are the user's tools on the MCP server "${serverName}" (${names}).`,
+    "They run in the user's environment; use them for every action, such as running a command or reading or editing a file.",
+    "Your built-in tools (shell, file read/edit, search, web) are disabled in this session, so do not call them.",
+  ].join(" ");
+}
+
 export class AcpToolSession {
   readonly bridge: ClientToolBridge;
 
@@ -129,8 +147,9 @@ export class AcpToolSession {
       if (!this.#sessionId) throw new Error("ACP session/new returned no sessionId");
       await this.#setModel(session);
       this.#armTtl();
+      const note = clientToolNote(this.bridge.serverName, this.#opts.tools);
       this.#promptDone = this.#connection
-        .prompt(this.#sessionId, prompt, 0, mediaBlocks)
+        .prompt(this.#sessionId, `${note}\n\n${prompt}`, 0, mediaBlocks)
         .then(() => ({ ok: true }) as const)
         .catch((error: unknown) => ({
           ok: false as const,
@@ -152,10 +171,6 @@ export class AcpToolSession {
 
   hasCall(callId: string): boolean {
     return this.bridge.has(callId);
-  }
-
-  pendingCalls(): PendingClientToolCall[] {
-    return this.bridge.pendingCalls();
   }
 
   async collect(
