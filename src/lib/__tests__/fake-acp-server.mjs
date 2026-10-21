@@ -6,8 +6,43 @@ import { closeSync, openSync, readFileSync } from "node:fs";
 import { devNull } from "node:os";
 import { createInterface } from "node:readline";
 import { mkdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir, tmpdir, userInfo } from "node:os";
 import { join, resolve, sep } from "node:path";
+
+/**
+ * Tests run with a throwaway home (vitest.setup.ts). If this agent child
+ * sees the real user home, or a config dir inside it, the proxy would hand
+ * it (and copy for it) the developer's real Cursor config: fail loudly.
+ */
+function realHomeReached() {
+  const realHome = realpathOrResolve(userInfo().homedir);
+  const inside = (dir) => {
+    const real = realpathOrResolve(dir);
+    return real === realHome || real.startsWith(`${realHome}${sep}`);
+  };
+  const xdg = process.env.XDG_CONFIG_HOME?.trim();
+  return (
+    realpathOrResolve(homedir()) === realHome ||
+    [process.env.CURSOR_CONFIG_DIR?.trim(), xdg && join(xdg, "cursor")].some(
+      (dir) => dir && inside(dir),
+    )
+  );
+}
+
+function realpathOrResolve(dir) {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return resolve(dir);
+  }
+}
+
+if (realHomeReached()) {
+  process.stderr.write(
+    "__FAKE_ACP_REAL_HOME__: test agent child reached the real user home or its Cursor config\n",
+  );
+  process.exit(70);
+}
 
 const scenario = process.env.FAKE_ACP_SCENARIO || "";
 const waiting = new Map();
@@ -519,13 +554,7 @@ function cliConfigDir() {
 }
 
 function insideTmp(dir) {
-  let real;
-  try {
-    real = realpathSync(dir);
-  } catch {
-    real = resolve(dir);
-  }
-  return real.startsWith(`${realpathSync(tmpdir())}${sep}`);
+  return realpathOrResolve(dir).startsWith(`${realpathSync(tmpdir())}${sep}`);
 }
 
 function readJson(file) {
