@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  anthropicBuiltinToolNames,
   anthropicToolOutputs,
   chatToolOutputs,
   parseAnthropicFunctionTools,
@@ -10,6 +9,7 @@ import {
   responsesCallIds,
   responsesToolOutputs,
   responsesTurnToolOutputs,
+  type ParsedClientTools,
 } from "./tool-types.js";
 
 describe("tool normalization", () => {
@@ -28,7 +28,7 @@ describe("tool normalization", () => {
           name: "response",
           parameters: { type: "object", properties: { y: {} } },
         },
-      ]),
+      ]).tools,
     ).toEqual([
       {
         name: "chat",
@@ -47,7 +47,7 @@ describe("tool normalization", () => {
           name: "legacy",
           parameters: { type: "object", properties: {} },
         },
-      ])[0].name,
+      ]).tools[0].name,
     ).toBe("legacy");
     expect(
       parseAnthropicFunctionTools([
@@ -55,12 +55,15 @@ describe("tool normalization", () => {
           name: "anthropic",
           input_schema: { type: "object", properties: {} },
         },
-      ])[0].inputSchema,
+      ]).tools[0].inputSchema,
     ).toEqual({ type: "object", properties: {} });
   });
 
   it("ignores host-side builtin tools and rejects duplicates", () => {
-    expect(parseOpenAiFunctionTools([{ type: "web_search" }])).toEqual([]);
+    expect(parseOpenAiFunctionTools([{ type: "web_search" }])).toEqual({
+      tools: [],
+      dropped: [{ type: "web_search" }],
+    });
     expect(() =>
       parseOpenAiFunctionTools([
         { type: "function", name: "same" },
@@ -85,7 +88,7 @@ describe("tool normalization", () => {
             },
           ],
         },
-      ]),
+      ]).tools,
     ).toEqual([
       {
         name: "close_agent",
@@ -97,7 +100,7 @@ describe("tool normalization", () => {
   });
 
   it("prefixes namespaced tools whose bare name already exists", () => {
-    const tools = parseOpenAiFunctionTools([
+    const { tools } = parseOpenAiFunctionTools([
       { type: "function", name: "search" },
       {
         type: "namespace",
@@ -126,7 +129,7 @@ describe("tool normalization", () => {
   });
 
   it("keeps a top-level function's bare name when a namespace lists it first", () => {
-    const tools = parseOpenAiFunctionTools([
+    const { tools } = parseOpenAiFunctionTools([
       {
         type: "namespace",
         name: "mcp__docs",
@@ -162,7 +165,40 @@ describe("tool normalization", () => {
         { type: "namespace", name: "empty", tools: [] },
         { type: "namespace", name: "no-tools-field" },
       ]),
-    ).toEqual([]);
+    ).toEqual({ tools: [], dropped: [] });
+  });
+
+  it("reports every tool it drops", () => {
+    expect(
+      parseOpenAiFunctionTools([
+        { type: "web_search", external_web_access: true },
+        { type: "custom", custom: { name: "chat_freeform" } },
+        {
+          type: "namespace",
+          name: "mcp__img",
+          tools: [
+            { type: "image_generation", name: "draw" },
+            { type: "function", name: "crop" },
+          ],
+        },
+        { description: "no type" },
+      ]),
+    ).toEqual({
+      tools: [
+        {
+          name: "crop",
+          description: undefined,
+          inputSchema: { type: "object", properties: {} },
+          namespaced: { namespace: "mcp__img", name: "crop" },
+        },
+      ],
+      dropped: [
+        { type: "web_search" },
+        { type: "custom", name: "chat_freeform" },
+        { type: "image_generation", name: "mcp__img.draw" },
+        { type: "untyped" },
+      ],
+    });
   });
 
   it("implements none, required, named, and no-parallel choices", () => {
@@ -194,7 +230,9 @@ describe("tool normalization", () => {
   });
 
   it("rejects a required tool_choice when no callable tool is left", () => {
-    const builtinsOnly = parseOpenAiFunctionTools([{ type: "web_search" }]);
+    const builtinsOnly = parseOpenAiFunctionTools([
+      { type: "web_search" },
+    ]).tools;
     expect(() => resolveToolChoice(builtinsOnly, "required")).toThrow(
       /tool_choice "required" requires a tool call, but the request has no callable function tools/,
     );
@@ -205,19 +243,70 @@ describe("tool normalization", () => {
     expect(resolveToolChoice(builtinsOnly, "none").tools).toEqual([]);
   });
 
-  it("names Anthropic-defined tools but not client tools", () => {
+  it("drops Anthropic-defined tools and keeps client tools", () => {
     expect(
-      anthropicBuiltinToolNames([
+      parseAnthropicFunctionTools([
         { type: "web_search_20250305", name: "web_search", max_uses: 5 },
         { type: "bash_20250124", name: "bash" },
-        { type: "text_editor_20250124", name: "str_replace_editor" },
+        { type: "text_editor_20250728", name: "str_replace_based_edit_tool" },
+        { type: "code_execution_20250825", name: "code_execution" },
+        { type: "mcp_toolset", mcp_server_name: "docs" },
         { name: "lookup", input_schema: { type: "object" } },
         { type: "custom", name: "custom_tool", input_schema: {} },
-        { type: "computer_20250124" },
-        null,
       ]),
-    ).toEqual(new Set(["web_search", "bash", "str_replace_editor"]));
-    expect(anthropicBuiltinToolNames(undefined)).toEqual(new Set());
+    ).toEqual({
+      tools: [
+        {
+          name: "lookup",
+          description: undefined,
+          inputSchema: { type: "object" },
+        },
+        { name: "custom_tool", description: undefined, inputSchema: {} },
+      ],
+      dropped: [
+        { type: "web_search_20250305", name: "web_search" },
+        { type: "bash_20250124", name: "bash" },
+        { type: "text_editor_20250728", name: "str_replace_based_edit_tool" },
+        { type: "code_execution_20250825", name: "code_execution" },
+        { type: "mcp_toolset" },
+      ],
+    });
+    expect(parseAnthropicFunctionTools(undefined)).toEqual({
+      tools: [],
+      dropped: [],
+    });
+    expect(() => parseAnthropicFunctionTools([null])).toThrow(/missing name/);
+  });
+
+  it("rejects an Anthropic tool_choice only a server tool could satisfy", () => {
+    const serverOnly = parseAnthropicFunctionTools([
+      { type: "web_search_20250305", name: "web_search" },
+      { type: "bash_20250124", name: "bash" },
+    ]);
+    const choose = (parsed: ParsedClientTools, choice: unknown) =>
+      resolveToolChoice(parsed.tools, choice, { dropped: parsed.dropped });
+    const webSearch = { type: "tool", name: "web_search" };
+    expect(() => choose(serverOnly, { type: "any" })).toThrow(
+      'tool_choice "any" requires a tool call, but the request has no ' +
+        "callable function tools; the agent cannot run web_search " +
+        "(web_search_20250305), bash (bash_20250124)",
+    );
+    expect(() => choose(serverOnly, webSearch)).toThrow(
+      "tool_choice names web_search, a web_search_20250305 tool the agent " +
+        "cannot run",
+    );
+    expect(choose(serverOnly, { type: "auto" }).tools).toEqual([]);
+
+    const mixed = parseAnthropicFunctionTools([
+      { type: "web_search_20250305", name: "web_search" },
+      { name: "lookup" },
+    ]);
+    expect(() => choose(mixed, webSearch)).toThrow(
+      /web_search_20250305 tool the agent cannot run/,
+    );
+    expect(
+      choose(mixed, { type: "any" }).tools.map((tool) => tool.name),
+    ).toEqual(["lookup"]);
   });
 });
 

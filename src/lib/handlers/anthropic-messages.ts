@@ -52,7 +52,6 @@ import {
 } from "../win-cmdline-limit.js";
 import { abortOnClientDisconnect } from "../client-disconnect.js";
 import {
-  anthropicBuiltinToolNames,
   anthropicToolOutputs,
   parseAnthropicFunctionTools,
   resolveToolChoice,
@@ -262,12 +261,13 @@ export async function handleAnthropicMessages(
   let maxParallelToolCalls: number | undefined;
   let submittedToolOutputs;
   try {
-    const parsedTools = parseAnthropicFunctionTools(body.tools);
-    const choice = resolveToolChoice(parsedTools, body.tool_choice, {
+    const parsed = parseAnthropicFunctionTools(body.tools);
+    const choice = resolveToolChoice(parsed.tools, body.tool_choice, {
       parallelToolCalls:
         body.tool_choice?.disable_parallel_tool_use === true
           ? false
           : undefined,
+      dropped: parsed.dropped,
     });
     selectedTools = choice.tools;
     toolInstruction = choice.instruction;
@@ -329,12 +329,9 @@ export async function handleAnthropicMessages(
     config.useAcp &&
     selectedTools.length > 0 &&
     submittedToolOutputs.length === 0;
-  const builtinToolNames = anthropicBuiltinToolNames(body.tools);
   const toolsText = structuredToolStart
     ? undefined
-    : toolsToSystemText(
-        selectedTools.filter((tool) => !builtinToolNames.has(tool.name)),
-      );
+    : toolsToSystemText(selectedTools);
   const cleanSystemText =
     typeof cleanSystem === "string"
       ? cleanSystem

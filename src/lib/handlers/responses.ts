@@ -573,9 +573,10 @@ export async function handleResponses(
   let maxParallelToolCalls: number | undefined;
   let submittedToolOutputs;
   try {
-    const parsedTools = parseOpenAiFunctionTools(body.tools);
-    const choice = resolveToolChoice(parsedTools, body.tool_choice, {
+    const parsed = parseOpenAiFunctionTools(body.tools);
+    const choice = resolveToolChoice(parsed.tools, body.tool_choice, {
       parallelToolCalls: body.parallel_tool_calls,
+      dropped: parsed.dropped,
     });
     selectedTools = choice.tools;
     toolInstruction = choice.instruction;

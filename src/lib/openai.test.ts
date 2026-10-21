@@ -175,7 +175,7 @@ describe("toolsToSystemText", () => {
         parseOpenAiFunctionTools([
           { type: "web_search" },
           { type: "namespace", name: "multi_agent_v1", tools: [] },
-        ]),
+        ]).tools,
       ),
     ).toBeUndefined();
   });
@@ -191,7 +191,7 @@ describe("toolsToSystemText", () => {
             parameters: { type: "object", properties: {} },
           },
         ],
-      ),
+      ).tools,
     );
     expect(text).toBe(
       [
@@ -223,7 +223,7 @@ describe("toolsToSystemText", () => {
               },
             },
             { type: "function", name: "ping" },
-          ]),
+          ]).tools,
         ),
       ),
     ).toBe(
@@ -247,7 +247,7 @@ describe("toolsToSystemText", () => {
         { type: "file_search", vector_store_ids: ["vs_1"] },
         { type: "custom", name: "apply_patch", format: { type: "text" } },
         { description: "no name" },
-      ]),
+      ]).tools,
     );
     expect(functionLines(text)).toEqual([
       "Function: search",
@@ -272,7 +272,7 @@ describe("toolsToSystemText", () => {
               },
             },
             { type: "custom", name: "custom_tool", input_schema: { type: "object" } },
-          ]),
+          ]).tools,
         ),
       ),
     ).toBe(
@@ -287,11 +287,11 @@ describe("toolsToSystemText", () => {
   });
 
   it("renders nothing for tool_choice none and only the named tool otherwise", () => {
-    const openAi = parseOpenAiFunctionTools([weather, time]);
+    const openAi = parseOpenAiFunctionTools([weather, time]).tools;
     const anthropic = parseAnthropicFunctionTools([
       { name: "get_weather" },
       { name: "get_time" },
-    ]);
+    ]).tools;
     expect(
       toolsToSystemText(resolveToolChoice(openAi, "none").tools),
     ).toBeUndefined();
@@ -340,7 +340,7 @@ describe("toolsToSystemText", () => {
     });
 
     it("lists every tool and spends the rest on full schemas, in order", () => {
-      const tools = parseOpenAiFunctionTools(
+      const { tools } = parseOpenAiFunctionTools(
         Array.from({ length: 17 }, (_, index) => bigTool(index)),
       );
       const fullSize = tools
@@ -378,7 +378,7 @@ describe("toolsToSystemText", () => {
     it("counts the tools that do not fit even as brief entries", () => {
       const many = parseOpenAiFunctionTools(
         Array.from({ length: 60 }, (_, index) => bigTool(index)),
-      );
+      ).tools;
       const text = toolsToSystemText(many);
       const listed = functionLines(text).length;
       expect(listed).toBeGreaterThan(0);

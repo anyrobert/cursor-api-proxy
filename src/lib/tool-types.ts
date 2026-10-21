@@ -28,6 +28,22 @@ export type PendingClientToolCall = {
   namespaced?: NamespacedToolName;
 };
 
+/**
+ * A declared tool the agent cannot run: an OpenAI host-side builtin, an
+ * Anthropic server tool, or a type the API cannot report calls for.
+ */
+export type DroppedTool = {
+  type: string;
+  /** The client's name for it, `<namespace>.<name>` for a namespace member. */
+  name?: string;
+};
+
+/** A request's tools: those the agent can call, and those it cannot. */
+export type ParsedClientTools = {
+  tools: ClientToolDefinition[];
+  dropped: DroppedTool[];
+};
+
 export type ResolvedToolChoice = {
   tools: ClientToolDefinition[];
   instruction?: string;
@@ -51,19 +67,55 @@ function schemaOrDefault(value: unknown): Record<string, unknown> {
   );
 }
 
-function pushUnique(
-  out: ClientToolDefinition[],
-  seen: Set<string>,
-  definition: ClientToolDefinition,
-): void {
-  if (!definition.name.trim()) {
-    throw new Error("Function tool is missing name");
+/** Collects a request's tools under unique agent-visible names. */
+class ToolSet {
+  readonly #tools: ClientToolDefinition[] = [];
+  readonly #names = new Set<string>();
+  readonly #dropped: DroppedTool[] = [];
+
+  has(name: string): boolean {
+    return this.#names.has(name);
   }
-  if (seen.has(definition.name)) {
-    throw new Error(`Duplicate function tool name: ${definition.name}`);
+
+  /** Whether `namespace` already declared a member called `name`. */
+  hasMember(namespace: string, name: string): boolean {
+    return this.#tools.some(
+      (tool) =>
+        tool.namespaced?.namespace === namespace &&
+        tool.namespaced.name === name,
+    );
   }
-  seen.add(definition.name);
-  out.push(definition);
+
+  add(definition: ClientToolDefinition): void {
+    if (!definition.name.trim()) {
+      throw new Error("Function tool is missing name");
+    }
+    if (this.#names.has(definition.name)) {
+      throw new Error(`Duplicate function tool name: ${definition.name}`);
+    }
+    this.#names.add(definition.name);
+    this.#tools.push(definition);
+  }
+
+  /**
+   * Records a tool the agent cannot run. Its name is top-level or, as in
+   * Chat's `{type: "custom", custom: {name}}`, under a key named after its
+   * type.
+   */
+  drop(tool: Record<string, unknown>, namespace?: string): void {
+    const type = typeof tool.type === "string" ? tool.type : "untyped";
+    const name = tool.name ?? asRecord(tool[type])?.name;
+    this.#dropped.push({
+      type,
+      ...(typeof name === "string" && name
+        ? { name: namespace ? `${namespace}.${name}` : name }
+        : {}),
+    });
+  }
+
+  result(): ParsedClientTools {
+    return { tools: this.#tools, dropped: this.#dropped };
+  }
 }
 
 function functionDefinition(
@@ -82,9 +134,8 @@ function functionDefinition(
   };
 }
 
-function pushNamespaceMembers(
-  out: ClientToolDefinition[],
-  seen: Set<string>,
+function addNamespaceMembers(
+  set: ToolSet,
   topLevelNames: ReadonlySet<string>,
   group: Record<string, unknown>,
 ): void {
@@ -92,26 +143,24 @@ function pushNamespaceMembers(
   const members = Array.isArray(group.tools) ? group.tools : [];
   for (const member of members) {
     const nested = asRecord(member);
-    if (!nested || nested.type !== "function") continue;
+    if (!nested) continue;
+    if (nested.type !== "function") {
+      set.drop(nested, namespace || undefined);
+      continue;
+    }
     const definition = functionDefinition(nested);
     if (!namespace) {
-      pushUnique(out, seen, definition);
+      set.add(definition);
       continue;
     }
     const bare = definition.name;
-    if (
-      out.some(
-        (tool) =>
-          tool.namespaced?.namespace === namespace &&
-          tool.namespaced.name === bare,
-      )
-    ) {
+    if (set.hasMember(namespace, bare)) {
       throw new Error(`Duplicate function tool name: ${namespace}.${bare}`);
     }
-    pushUnique(out, seen, {
+    set.add({
       ...definition,
       name:
-        topLevelNames.has(bare) || seen.has(bare)
+        topLevelNames.has(bare) || set.has(bare)
           ? `${namespace}__${bare}`
           : bare,
       namespaced: { namespace, name: bare },
@@ -135,9 +184,8 @@ function pushNamespaceMembers(
 export function parseOpenAiFunctionTools(
   tools?: readonly unknown[],
   functions?: readonly unknown[],
-): ClientToolDefinition[] {
-  const out: ClientToolDefinition[] = [];
-  const seen = new Set<string>();
+): ParsedClientTools {
+  const set = new ToolSet();
   const records = (tools ?? []).map((value) => {
     const tool = asRecord(value);
     if (!tool) throw new Error("Invalid tool definition");
@@ -159,9 +207,11 @@ export function parseOpenAiFunctionTools(
 
   for (const tool of records) {
     if (tool.type === "function") {
-      pushUnique(out, seen, functionDefinition(tool));
+      set.add(functionDefinition(tool));
     } else if (tool.type === "namespace") {
-      pushNamespaceMembers(out, seen, topLevelNames, tool);
+      addNamespaceMembers(set, topLevelNames, tool);
+    } else {
+      set.drop(tool);
     }
   }
 
@@ -170,7 +220,7 @@ export function parseOpenAiFunctionTools(
     if (!fn || typeof fn.name !== "string") {
       throw new Error("Function is missing name");
     }
-    pushUnique(out, seen, {
+    set.add({
       name: fn.name,
       description:
         typeof fn.description === "string" ? fn.description : undefined,
@@ -178,51 +228,58 @@ export function parseOpenAiFunctionTools(
     });
   }
 
-  return out;
+  return set.result();
 }
 
+/**
+ * Anthropic-defined tools carry a versioned `type` (`web_search_20250305`,
+ * `bash_20250124`, `text_editor_20250728`, `mcp_toolset`, ...), while
+ * client tools have no `type` or `custom`. Anthropic runs some of them
+ * itself (web search, web fetch, code execution) and builds the schema of
+ * the rest (bash, text editor, computer use, memory) into Claude, so the
+ * request holds no schema the agent could call them with.
+ */
+function isAnthropicServerTool(tool: Record<string, unknown>): boolean {
+  return typeof tool.type === "string" && tool.type !== "custom";
+}
+
+/**
+ * Parse Anthropic Messages client tools. Anthropic-defined tools are
+ * dropped, as OpenAI host-side builtins are: offered to the agent without a
+ * schema, they would come back as `tool_use` blocks the client never
+ * expected to receive.
+ */
 export function parseAnthropicFunctionTools(
   tools?: readonly unknown[],
-): ClientToolDefinition[] {
-  const out: ClientToolDefinition[] = [];
-  const seen = new Set<string>();
+): ParsedClientTools {
+  const set = new ToolSet();
   for (const value of tools ?? []) {
     const tool = asRecord(value);
+    if (tool && isAnthropicServerTool(tool)) {
+      set.drop(tool);
+      continue;
+    }
     if (!tool || typeof tool.name !== "string") {
       throw new Error("Anthropic tool is missing name");
     }
-    pushUnique(out, seen, {
+    set.add({
       name: tool.name,
       description:
         typeof tool.description === "string" ? tool.description : undefined,
       inputSchema: schemaOrDefault(tool.input_schema),
     });
   }
-  return out;
+  return set.result();
 }
 
 /**
- * Names of the Anthropic-defined tools in a request (`web_search_20250305`,
- * `bash_20250124`, `text_editor_20250124`, ...). They carry a versioned
- * `type`, while client tools have no `type` or `custom`, and the request
- * holds no schema or description for them.
+ * Names dropped tools for a log line or an error, e.g.
+ * `web_search (web_search_20250305), file_search`.
  */
-export function anthropicBuiltinToolNames(
-  tools?: readonly unknown[],
-): Set<string> {
-  const names = new Set<string>();
-  for (const value of tools ?? []) {
-    const tool = asRecord(value);
-    if (
-      tool &&
-      typeof tool.type === "string" &&
-      tool.type !== "custom" &&
-      typeof tool.name === "string"
-    ) {
-      names.add(tool.name);
-    }
-  }
-  return names;
+export function describeDroppedTools(dropped: readonly DroppedTool[]): string {
+  return dropped
+    .map((tool) => (tool.name ? `${tool.name} (${tool.type})` : tool.type))
+    .join(", ");
 }
 
 function namedChoice(choice: unknown): string | undefined {
@@ -234,10 +291,20 @@ function namedChoice(choice: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * Apply `tool_choice` to the parsed tools. A choice that demands a call no
+ * callable tool can satisfy (`required` or `any` with none left, or a named
+ * tool the request lacks or the parser dropped) throws, so the handler
+ * answers 400 instead of starting a turn that cannot comply.
+ */
 export function resolveToolChoice(
   tools: readonly ClientToolDefinition[],
   choice: unknown,
-  opts: { parallelToolCalls?: boolean } = {},
+  opts: {
+    parallelToolCalls?: boolean;
+    /** What the parser dropped, named in the error when a choice needs it. */
+    dropped?: readonly DroppedTool[];
+  } = {},
 ): ResolvedToolChoice {
   if (choice === "none" || asRecord(choice)?.type === "none") {
     return { tools: [], required: false };
@@ -248,20 +315,30 @@ export function resolveToolChoice(
     choice === "any" ||
     asRecord(choice)?.type === "any";
   const selected = namedChoice(choice);
+  const dropped = opts.dropped ?? [];
   let resolved = [...tools];
   let instruction: string | undefined;
 
   if (selected) {
     const tool = tools.find((item) => item.name === selected);
-    if (!tool) throw new Error(`Unknown tool_choice function: ${selected}`);
+    if (!tool) {
+      const unsupported = dropped.find((item) => item.name === selected);
+      throw new Error(
+        unsupported
+          ? `tool_choice names ${selected}, a ${unsupported.type} tool the agent cannot run`
+          : `Unknown tool_choice function: ${selected}`,
+      );
+    }
     resolved = [tool];
     instruction = `You must call the ${selected} tool.`;
   } else if (required) {
     if (tools.length === 0) {
       throw new Error(
         `tool_choice "${typeof choice === "string" ? choice : "any"}" requires a tool call, ` +
-          "but the request has no callable function tools " +
-          "(host-side builtins such as web_search are not supported)",
+          "but the request has no callable function tools" +
+          (dropped.length > 0
+            ? `; the agent cannot run ${describeDroppedTools(dropped)}`
+            : ""),
       );
     }
     instruction = "You must call at least one available tool.";

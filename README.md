@@ -123,7 +123,7 @@ Set `CURSOR_BRIDGE_USE_ACP=true` to receive structured client tool calls. Tool-b
 - Chat Completions `tools` / legacy `functions` → `message.tool_calls`; resume with `role: "tool"` and `tool_call_id`.
 - Responses flat function tools → `function_call` output items; resume with `previous_response_id` and `function_call_output`, or resend the whole conversation with the `function_call_output` items appended and no `previous_response_id` (Codex CLI does this with `store: false`).
 - Responses `namespace` tool groups (Codex CLI) are flattened for the agent and reported back as the member's bare `name` plus `namespace`. Host-side builtins such as `web_search` are dropped, and `tool_choice: "required"` with no callable tool left returns `400`.
-- Anthropic tools with `input_schema` → `tool_use`; resume with `tool_result`.
+- Anthropic tools with `input_schema` → `tool_use`; resume with `tool_result`. Anthropic-defined tools (any `type` other than `custom`, such as `web_search_20250305` or `bash_20250124`) are dropped like host-side builtins. A `tool_choice` naming a dropped tool, or `any` with no client tool left, returns `400`.
 - Sync and streaming output, mixed text plus tools, parallel calls, multiple rounds, named/required/none choices.
 
 The proxy exposes each request's schemas through a random, bearer-authenticated MCP URL bound only to `127.0.0.1`. It never executes caller tools. It parks Cursor's MCP call, returns the native API tool call to your framework, then delivers your framework's result back to the same live ACP turn. Proxy-owned MCP permission is allowed once; built-in and other tool permissions remain rejected.

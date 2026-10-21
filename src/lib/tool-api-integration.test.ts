@@ -654,6 +654,65 @@ describe("ACP tool session errors", () => {
       expect(error.message).toMatch(/no callable function tools/);
     }
   });
+
+  it("keeps Anthropic server tools away from the agent", async () => {
+    const base = await start();
+    const reply = await post(base, "/v1/messages", {
+      model: "gpt-4",
+      max_tokens: 256,
+      messages: [{ role: "user", content: "Weather?" }],
+      tools: [
+        { type: "web_search_20250305", name: "web_search", max_uses: 3 },
+        { type: "bash_20250124", name: "bash" },
+        {
+          name: "weather",
+          input_schema: {
+            type: "object",
+            properties: { city: { type: "string" } },
+          },
+        },
+      ],
+    });
+    expect(reply.status).toBe(200);
+    const blocks = JSON.parse(reply.text).content;
+    expect(
+      blocks
+        .filter((block: any) => block.type === "tool_use")
+        .map((block: any) => block.name),
+    ).toEqual(["weather"]);
+  });
+
+  it("rejects an Anthropic tool_choice only server tools could satisfy", async () => {
+    const base = await start();
+    const request = (toolChoice: unknown) =>
+      post(base, "/v1/messages", {
+        model: "gpt-4",
+        max_tokens: 256,
+        messages: [{ role: "user", content: "Search" }],
+        tool_choice: toolChoice,
+        tools: [
+          { type: "web_search_20250305", name: "web_search" },
+          { type: "text_editor_20250728", name: "str_replace_based_edit_tool" },
+        ],
+      });
+    const cases: Array<[unknown, RegExp]> = [
+      [
+        { type: "any" },
+        /no callable function tools; the agent cannot run web_search \(web_search_20250305\)/,
+      ],
+      [
+        { type: "tool", name: "web_search" },
+        /tool_choice names web_search, a web_search_20250305 tool the agent cannot run/,
+      ],
+    ];
+    for (const [toolChoice, message] of cases) {
+      const reply = await request(toolChoice);
+      expect(reply.status).toBe(400);
+      const error = JSON.parse(reply.text).error;
+      expect(error.type).toBe("invalid_request_error");
+      expect(error.message).toMatch(message);
+    }
+  });
 });
 
 const weatherTool = {

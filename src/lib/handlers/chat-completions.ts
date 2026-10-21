@@ -245,12 +245,13 @@ export async function handleChatCompletions(
   let maxParallelToolCalls: number | undefined;
   let submittedToolOutputs;
   try {
-    const parsedTools = parseOpenAiFunctionTools(body.tools, body.functions);
+    const parsed = parseOpenAiFunctionTools(body.tools, body.functions);
     const choice = resolveToolChoice(
-      parsedTools,
+      parsed.tools,
       body.tool_choice ?? body.function_call,
       {
       parallelToolCalls: (body as any).parallel_tool_calls,
+      dropped: parsed.dropped,
       },
     );
     selectedTools = choice.tools;
