@@ -26,6 +26,13 @@ export type BridgeRequestRuntime = {
   toolSessions: ToolSessionRegistry;
 };
 
+/** The model APIs: POST routes that take a JSON body and run an agent turn. */
+const MODEL_APIS = new Map([
+  ["/v1/chat/completions", { handle: handleChatCompletions }],
+  ["/v1/responses", { handle: handleResponses }],
+  ["/v1/messages", { handle: handleAnthropicMessages }],
+]);
+
 export function createRequestListener(
   opts: BridgeServerOptions,
   runtime: BridgeRequestRuntime,
@@ -33,6 +40,12 @@ export function createRequestListener(
   const { config } = opts;
   const modelCacheRef: ModelCacheRef = { current: undefined };
   const lastRequestedModelRef: { current?: string } = {};
+  const apiCtx = {
+    config,
+    lastRequestedModelRef,
+    modelCacheRef,
+    toolSessions: runtime.toolSessions,
+  };
 
   return async (req: http.IncomingMessage, res: http.ServerResponse) => {
     const protocol = config.tlsCertPath && config.tlsKeyPath ? "https" : "http";
@@ -43,6 +56,7 @@ export function createRequestListener(
     const remoteAddress = req.socket?.remoteAddress ?? "unknown";
     const method = req.method ?? "?";
     const pathname = url.pathname;
+    const api = method === "POST" ? MODEL_APIS.get(pathname) : undefined;
 
     // Skip request logging for the admin dashboard's own traffic
     // (status/log/stats polls, asset loads, control actions). These are
@@ -100,60 +114,9 @@ export function createRequestListener(
         return;
       }
 
-      if (req.method === "POST" && pathname === "/v1/chat/completions") {
+      if (api) {
         const raw = await readBody(req);
-        await handleChatCompletions(
-          req,
-          res,
-          {
-            config,
-            lastRequestedModelRef,
-            modelCacheRef,
-            toolSessions: runtime.toolSessions,
-          },
-          raw,
-          method,
-          pathname,
-          remoteAddress,
-        );
-        return;
-      }
-
-      if (req.method === "POST" && pathname === "/v1/responses") {
-        const raw = await readBody(req);
-        await handleResponses(
-          req,
-          res,
-          {
-            config,
-            lastRequestedModelRef,
-            modelCacheRef,
-            toolSessions: runtime.toolSessions,
-          },
-          raw,
-          method,
-          pathname,
-          remoteAddress,
-        );
-        return;
-      }
-
-      if (req.method === "POST" && pathname === "/v1/messages") {
-        const raw = await readBody(req);
-        await handleAnthropicMessages(
-          req,
-          res,
-          {
-            config,
-            lastRequestedModelRef,
-            modelCacheRef,
-            toolSessions: runtime.toolSessions,
-          },
-          raw,
-          method,
-          pathname,
-          remoteAddress,
-        );
+        await api.handle(req, res, apiCtx, raw, method, pathname, remoteAddress);
         return;
       }
 
