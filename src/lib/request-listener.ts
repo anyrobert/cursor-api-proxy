@@ -18,7 +18,7 @@ import {
   adminDashboardMatches,
   handleAdminDashboard,
 } from "./admin-dashboard.js";
-import { extractBearerToken, json, readBody } from "./http.js";
+import { extractApiKey, json, readBody } from "./http.js";
 import {
   appendSessionError,
   appendSessionLine,
@@ -44,7 +44,8 @@ type ModelApi = {
 
 /**
  * The model APIs: POST routes that take a JSON body and run an agent turn.
- * An error a handler throws is answered in its API's error shape.
+ * A refused API key and an error a handler throws are answered in the API's
+ * error shape.
  */
 const MODEL_APIS = new Map<string, ModelApi>([
   ["/v1/chat/completions", { handle: handleChatCompletions, errorBody: openAiErrorBody }],
@@ -55,6 +56,50 @@ const MODEL_APIS = new Map<string, ModelApi>([
 /** The error shape of the proxy's own routes, such as /v1/models. */
 function proxyErrorBody(failure: AgentFailure) {
   return { error: { message: failure.message, code: failure.code } };
+}
+
+/**
+ * A request without the key CURSOR_BRIDGE_API_KEY requires. The code is the
+ * one OpenAI sends for a bad key, and Anthropic's error type for a 401 is
+ * authentication_error.
+ */
+const MISSING_API_KEY: AgentFailure = {
+  status: 401,
+  code: "invalid_api_key",
+  message:
+    "Missing API key. Send it in an 'Authorization: Bearer <key>' or an 'x-api-key: <key>' header.",
+};
+
+const INVALID_API_KEY: AgentFailure = {
+  status: 401,
+  code: "invalid_api_key",
+  message: "Invalid API key",
+};
+
+/**
+ * Compares two keys in constant time. Both are hashed first, so
+ * timingSafeEqual gets inputs of one length and the time taken does not
+ * reveal the required key's length either.
+ */
+function keysEqual(presented: string, required: string): boolean {
+  const digest = (key: string) =>
+    crypto.createHash("sha256").update(key, "utf8").digest();
+  return crypto.timingSafeEqual(digest(presented), digest(required));
+}
+
+/**
+ * Why a request's API key is refused, or undefined when it is accepted.
+ * Every route takes the key in either header: the key is the secret, not
+ * the header that carries it, and Anthropic SDKs send `x-api-key` to
+ * GET /v1/models as well as to /v1/messages.
+ */
+function apiKeyFailure(
+  req: http.IncomingMessage,
+  requiredKey: string,
+): AgentFailure | undefined {
+  const presented = extractApiKey(req);
+  if (presented === undefined) return MISSING_API_KEY;
+  return keysEqual(presented, requiredKey) ? undefined : INVALID_API_KEY;
 }
 
 /** What the client hears about an error nothing else answered. */
@@ -133,6 +178,7 @@ export function createRequestListener(
     const method = req.method ?? "?";
     const pathname = url.pathname;
     const api = method === "POST" ? MODEL_APIS.get(pathname) : undefined;
+    const errorBody = api?.errorBody ?? proxyErrorBody;
     let rawBody: string | undefined;
 
     // Skip request logging for the admin dashboard's own traffic
@@ -166,19 +212,12 @@ export function createRequestListener(
         return;
       }
 
-      if (config.requiredKey) {
-        const token = extractBearerToken(req) ?? "";
-        const expected = config.requiredKey;
-        const a = Buffer.from(token, "utf8");
-        const b = Buffer.from(expected, "utf8");
-        const match =
-          a.length === b.length && crypto.timingSafeEqual(a, b);
-        if (!match) {
-          json(res, 401, {
-            error: { message: "Invalid API key", code: "unauthorized" },
-          });
-          return;
-        }
+      const keyFailure = config.requiredKey
+        ? apiKeyFailure(req, config.requiredKey)
+        : undefined;
+      if (keyFailure) {
+        json(res, keyFailure.status, errorBody(keyFailure));
+        return;
       }
 
       if (req.method === "GET" && pathname === "/health") {
@@ -237,7 +276,6 @@ export function createRequestListener(
         );
       }
       if (!res.headersSent) {
-        const errorBody = api?.errorBody ?? proxyErrorBody;
         json(res, failure.status, errorBody(failure));
       } else {
         res.end();

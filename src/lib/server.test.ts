@@ -189,7 +189,8 @@ describe("startBridgeServer", () => {
     const { status, body } = await fetchServer(servers[0], "/health");
     expect(status).toBe(401);
     const data = JSON.parse(body);
-    expect(data.error.message).toBe("Invalid API key");
+    expect(data.error.message).toMatch(/^Missing API key\./);
+    expect(data.error.code).toBe("invalid_api_key");
   });
 
   it("GET /healthz bypasses requiredKey", async () => {

@@ -257,3 +257,151 @@ describe("model API body that is not JSON", () => {
     },
   );
 });
+
+describe("API key (#102)", () => {
+  // With CURSOR_BRIDGE_API_KEY set, the key is read from Authorization: Bearer
+  // (OpenAI SDKs) or x-api-key (Anthropic SDKs), and a refused request is
+  // answered in the error shape of the API that was called.
+  const KEY = "sk-proxy-secret";
+  const MISSING =
+    "Missing API key. Send it in an 'Authorization: Bearer <key>' or an 'x-api-key: <key>' header.";
+  const INVALID = "Invalid API key";
+  const BEARER = { authorization: `Bearer ${KEY}` };
+  const X_API_KEY = { "x-api-key": KEY };
+
+  /** The 401 each API's clients parse, as OpenAI and Anthropic send it. */
+  function unauthorizedBody(api: Api | "proxy", message: string) {
+    if (api === "anthropic") {
+      return {
+        type: "error",
+        error: { type: "authentication_error", message, code: "invalid_api_key" },
+      };
+    }
+    if (api === "proxy") return { error: { message, code: "invalid_api_key" } };
+    return {
+      error: { message, type: "invalid_request_error", param: null, code: "invalid_api_key" },
+    };
+  }
+
+  /**
+   * Sends `api` a body that is not JSON, so a request the key lets through
+   * is answered 400 invalid_json before any agent runs.
+   */
+  async function postApi(base: string, api: Api, headers: Record<string, string>) {
+    const [path] = API_REQUESTS[api];
+    const response = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: "{",
+    });
+    return { status: response.status, body: await response.json() };
+  }
+
+  async function get(base: string, path: string, headers: Record<string, string> = {}) {
+    const response = await fetch(`${base}${path}`, { headers });
+    return { status: response.status, text: await response.text() };
+  }
+
+  describe.each(["chat", "responses", "anthropic"] as const)("%s", (api) => {
+    let base: string;
+
+    beforeEach(async () => {
+      base = await start({ agentBin: join(workDir, "no-such-agent"), requiredKey: KEY });
+    });
+
+    it.each([
+      ["Authorization: Bearer", BEARER],
+      ["x-api-key", X_API_KEY],
+    ])("accepts the key in %s", async (_header, headers) => {
+      const { status, body } = await postApi(base, api, headers);
+
+      expect(status).toBe(400);
+      expect(body).toEqual(errorBody(api, 400, "invalid_json", expect.any(String)));
+    });
+
+    it("answers a request without a key with a 401 in the API's shape", async () => {
+      const { status, body } = await postApi(base, api, {});
+
+      expect(status).toBe(401);
+      expect(body).toEqual(unauthorizedBody(api, MISSING));
+    });
+
+    it.each([
+      ["a wrong Bearer token", { authorization: "Bearer sk-proxy-secreT" }],
+      ["a wrong x-api-key", { "x-api-key": "sk-proxy-secreT" }],
+      ["a key that only starts with the right one", { "x-api-key": `${KEY}x` }],
+      [
+        "a wrong Bearer token beside the right x-api-key",
+        { ...X_API_KEY, authorization: "Bearer sk-wrong" },
+      ],
+    ])("answers %s with a 401 in the API's shape", async (_case, headers) => {
+      const { status, body } = await postApi(base, api, headers);
+
+      expect(status).toBe(401);
+      expect(body).toEqual(unauthorizedBody(api, INVALID));
+    });
+  });
+
+  describe("the proxy's own routes", () => {
+    let base: string;
+
+    beforeEach(async () => {
+      base = await start({
+        agentBin: fakeAgent("agent-catalog-102", "echo 'auto - Auto'"),
+        requiredKey: KEY,
+      });
+    });
+
+    it.each([
+      ["no key", {}, MISSING],
+      ["a wrong Bearer token", { authorization: "Bearer sk-wrong" }, INVALID],
+      ["a wrong x-api-key", { "x-api-key": "sk-wrong" }, INVALID],
+    ])("answer %s with a 401 in the proxy's shape", async (_case, headers, message) => {
+      for (const path of ["/health", "/v1/models", "/v1/embeddings"]) {
+        const { status, text } = await get(base, path, headers);
+
+        expect(status).toBe(401);
+        expect(JSON.parse(text)).toEqual(unauthorizedBody("proxy", message));
+      }
+    });
+
+    it.each([
+      ["Authorization: Bearer", BEARER],
+      ["x-api-key", X_API_KEY],
+    ])("accept the key in %s", async (_header, headers) => {
+      expect((await get(base, "/health", headers)).status).toBe(200);
+      const models = await get(base, "/v1/models", headers);
+      expect(models.status).toBe(200);
+      expect(JSON.parse(models.text).data).toEqual([
+        expect.objectContaining({ id: "auto" }),
+      ]);
+      expect((await get(base, "/v1/embeddings", headers)).status).toBe(404);
+    });
+
+    it.each(["/healthz", "/", "/wiki", "/static/styles.css"])(
+      "serve GET %s without a key",
+      async (path) => {
+        expect((await get(base, path)).status).toBe(200);
+      },
+    );
+  });
+
+  describe("without CURSOR_BRIDGE_API_KEY", () => {
+    let base: string;
+
+    beforeEach(async () => {
+      base = await start({ agentBin: join(workDir, "no-such-agent") });
+    });
+
+    it.each([
+      ["no key", {}],
+      ["any Bearer token", { authorization: "Bearer anything" }],
+      ["any x-api-key", { "x-api-key": "anything" }],
+    ])("lets a request with %s through", async (_case, headers) => {
+      expect((await get(base, "/health", headers)).status).toBe(200);
+      for (const api of ["chat", "responses", "anthropic"] as const) {
+        expect((await postApi(base, api, headers)).status).toBe(400);
+      }
+    });
+  });
+});

@@ -1,11 +1,22 @@
 import * as http from "node:http";
 
-export function extractBearerToken(req: http.IncomingMessage): string | undefined {
-  const h = req.headers["authorization"];
-  if (!h) return undefined;
-  const val = Array.isArray(h) ? h[0] : h;
-  const match = val.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1] : undefined;
+/** A request header's first value, or undefined when it is absent or empty. */
+function headerValue(req: http.IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name];
+  return (Array.isArray(value) ? value[0] : value) || undefined;
+}
+
+function extractBearerToken(req: http.IncomingMessage): string | undefined {
+  return headerValue(req, "authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+}
+
+/**
+ * The API key a client sent: the `Authorization: Bearer` token that OpenAI
+ * SDKs send, or else the `x-api-key` header that Anthropic SDKs send. When a
+ * request has both, the Bearer token is the key.
+ */
+export function extractApiKey(req: http.IncomingMessage): string | undefined {
+  return extractBearerToken(req) ?? headerValue(req, "x-api-key");
 }
 
 export function json(

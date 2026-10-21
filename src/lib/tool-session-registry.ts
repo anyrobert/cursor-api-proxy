@@ -6,7 +6,7 @@ import type {
   ToolTurnEvent,
   ToolTurnResult,
 } from "./acp-tool-session.js";
-import { extractBearerToken } from "./http.js";
+import { extractApiKey } from "./http.js";
 import type { ClientToolOutput } from "./tool-types.js";
 
 export type ToolApi = "chat" | "responses" | "anthropic";
@@ -54,13 +54,17 @@ export class ToolSessionError extends Error {
   }
 }
 
+/**
+ * Who may continue a tool session: the API key the client sent, in either
+ * header, or else its remote address.
+ */
 export function toolSessionOwnerKey(
   req: http.IncomingMessage,
   remoteAddress: string,
 ): string {
-  const bearer = extractBearerToken(req);
+  const apiKey = extractApiKey(req);
   return createHash("sha256")
-    .update(bearer ? `bearer:${bearer}` : `remote:${remoteAddress}`)
+    .update(apiKey ? `key:${apiKey}` : `remote:${remoteAddress}`)
     .digest("hex");
 }
 
