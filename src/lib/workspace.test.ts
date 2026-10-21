@@ -8,11 +8,13 @@ import {
   linkMacKeychains,
   removeChatOnlyTempDir,
   resolveWorkspace,
+  WorkspaceError,
 } from "./workspace.js";
 import type { BridgeConfig } from "./config.js";
 
 const fsFault = vi.hoisted(() => ({
   writeFileSync: undefined as Error | undefined,
+  statSync: undefined as Error | undefined,
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -23,8 +25,22 @@ vi.mock("node:fs", async (importOriginal) => {
       if (fsFault.writeFileSync) throw fsFault.writeFileSync;
       actual.writeFileSync(...args);
     },
+    statSync: ((...args: Parameters<typeof actual.statSync>) => {
+      if (fsFault.statSync) throw fsFault.statSync;
+      return actual.statSync(...args);
+    }) as typeof actual.statSync,
   };
 });
+
+/** What resolveWorkspace threw, for checks on its type and message. */
+function thrownBy(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected a throw");
+}
 
 function baseConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
   return {
@@ -69,6 +85,7 @@ function makeTestDir(prefix: string): string {
 
 afterEach(() => {
   fsFault.writeFileSync = undefined;
+  fsFault.statSync = undefined;
   vi.unstubAllEnvs();
   for (const dir of testDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -170,8 +187,23 @@ describe("resolveWorkspace", () => {
     fsFault.writeFileSync = new Error("ENOSPC: no space left on device");
 
     const cfg = baseConfig({ chatOnlyWorkspace: true });
-    expect(() => resolveWorkspace(cfg, undefined)).toThrow(/ENOSPC/);
+    const error = thrownBy(() => resolveWorkspace(cfg, undefined));
+    expect(String(error)).toMatch(/ENOSPC/);
+    // A host fault, not a client mistake: handlers must not answer it as a 400.
+    expect(error).not.toBeInstanceOf(WorkspaceError);
     expect(fs.readdirSync(tmpRoot)).toEqual([]);
+  });
+
+  it("reports a chat-only temp dir that cannot be created as a host fault", () => {
+    const missing = path.join(makeTestDir("tmp-root-"), "gone");
+    vi.stubEnv("TMPDIR", missing);
+    vi.stubEnv("TMP", missing);
+    vi.stubEnv("TEMP", missing);
+
+    const cfg = baseConfig({ chatOnlyWorkspace: true });
+    const error = thrownBy(() => resolveWorkspace(cfg, undefined));
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    expect(error).not.toBeInstanceOf(WorkspaceError);
   });
 
   it("keeps HOME at the workspace for callers without an isolation root", () => {
@@ -193,9 +225,41 @@ describe("resolveWorkspace", () => {
     const tmp = makeTestDir("ws-base-");
     const outside = makeTestDir("ws-out-");
     const cfg = baseConfig({ workspace: tmp });
-    expect(() => resolveWorkspace(cfg, outside)).toThrow(
-      /under the configured workspace base/,
+    const error = thrownBy(() => resolveWorkspace(cfg, outside));
+    expect(error).toBeInstanceOf(WorkspaceError);
+    expect((error as Error).message).toBe(
+      "X-Cursor-Workspace must resolve to a directory under the configured workspace base",
     );
+  });
+
+  it.each([
+    ["does not exist", (dir: string) => path.join(dir, "missing")],
+    ["is a file", (dir: string) => path.join(dir, "file.txt")],
+    ["runs through a file", (dir: string) => path.join(dir, "file.txt", "sub")],
+  ])(
+    "rejects an X-Cursor-Workspace that %s without naming a path",
+    (_case, requested) => {
+      const tmp = makeTestDir("ws-base-");
+      fs.writeFileSync(path.join(tmp, "file.txt"), "x");
+      const cfg = baseConfig({ workspace: tmp });
+      const error = thrownBy(() => resolveWorkspace(cfg, requested(tmp)));
+      expect(error).toBeInstanceOf(WorkspaceError);
+      expect((error as Error).message).toBe(
+        "X-Cursor-Workspace must be an existing directory on the proxy host",
+      );
+    },
+  );
+
+  it("passes on a host fault while reading the requested directory", () => {
+    const tmp = makeTestDir("ws-base-");
+    fsFault.statSync = Object.assign(
+      new Error(`EMFILE: too many open files, stat '${tmp}'`),
+      { code: "EMFILE" },
+    );
+    const cfg = baseConfig({ workspace: tmp });
+    const error = thrownBy(() => resolveWorkspace(cfg, tmp));
+    expect(error).not.toBeInstanceOf(WorkspaceError);
+    expect((error as NodeJS.ErrnoException).code).toBe("EMFILE");
   });
 
   it("allows header path under workspace base", () => {

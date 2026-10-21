@@ -1,17 +1,27 @@
 import { EventEmitter } from "node:events";
-import { existsSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { execFileMock, lookupMock, requestMock } = vi.hoisted(() => ({
+const { execFileMock, lookupMock, requestMock, rmFault } = vi.hoisted(() => ({
   execFileMock: vi.fn(),
   lookupMock: vi.fn(),
   requestMock: vi.fn(),
+  rmFault: { error: undefined as Error | undefined },
 }));
 vi.mock("node:child_process", () => ({ execFile: execFileMock }));
 vi.mock("node:dns/promises", () => ({ lookup: lookupMock }));
 vi.mock("node:https", () => ({ request: requestMock }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rm: (...args: Parameters<typeof actual.rm>) =>
+      rmFault.error ? Promise.reject(rmFault.error) : actual.rm(...args),
+  };
+});
 
 import { isPublicAddress, prepareRequestMedia } from "./media-input.js";
 
@@ -96,7 +106,13 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
+  rmFault.error = undefined;
 });
+
+/** Runs the ACP media path without turning a client rejection into a throw. */
+const prepare = (items: unknown[]) =>
+  prepareRequestMedia(items, { useAcp: true, resumesToolSession: false });
 
 describe("prepareRequestMedia with ACP", () => {
   it("preserves OpenAI image bytes for ACP instead of reducing them to text", async () => {
@@ -242,6 +258,29 @@ describe("remote media fetch", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await assertion;
   });
+
+  it("reports a failed connection by its code, without the address it reached", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.215.14", family: 4 }]);
+    serve((req) =>
+      req.emit("error", Object.assign(
+        new Error("connect ECONNREFUSED 93.184.215.14:443"),
+        { code: "ECONNREFUSED" },
+      )),
+    );
+    await expect(prepare(imagePart("https://img.example/red.png"))).resolves.toEqual({
+      ok: false,
+      error: "media fetch failed (ECONNREFUSED)",
+    });
+  });
+
+  it("rejects a redirect whose location does not parse instead of throwing", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.215.14", family: 4 }]);
+    serve((req) => req.respond(302, { location: "http://[" }));
+    await expect(prepare(imagePart("https://img.example/red.png"))).resolves.toEqual({
+      ok: false,
+      error: "media redirect location is invalid",
+    });
+  });
 });
 
 describe("video frame sampling", () => {
@@ -286,6 +325,51 @@ describe("video frame sampling", () => {
     });
     await expect(blocksFor(videoPart("video/mp4")))
       .rejects.toThrow("video input requires ffmpeg on the proxy host");
+  });
+
+  it("reports a video ffmpeg cannot decode as the client's media", async () => {
+    execFileMock.mockImplementation((_cmd: string, _args: string[], _opts: unknown, cb: (error: Error) => void) => {
+      cb(Object.assign(new Error("Command failed: ffmpeg ... Invalid data found"), { code: 1 }));
+    });
+    await expect(prepare(videoPart("video/mp4"))).resolves.toEqual({
+      ok: false,
+      error: "video decoding failed",
+    });
+  });
+
+  // Host faults: their messages can hold temp paths, and the client cannot
+  // fix them, so they are thrown for the request listener's 500.
+  it("throws when the video's temp dir cannot be created", async () => {
+    const missing = join(mkdtempSync(join(tmpdir(), "media-tmp-")), "gone");
+    try {
+      vi.stubEnv("TMPDIR", missing);
+      vi.stubEnv("TMP", missing);
+      vi.stubEnv("TEMP", missing);
+      await expect(prepare(videoPart("video/mp4"))).rejects.toMatchObject({
+        code: "ENOENT",
+        syscall: "mkdtemp",
+      });
+      expect(execFileMock).not.toHaveBeenCalled();
+    } finally {
+      rmSync(dirname(missing), { recursive: true, force: true });
+    }
+  });
+
+  it("throws when ffmpeg cannot be started for a reason other than a missing binary", async () => {
+    execFileMock.mockImplementation((_cmd: string, _args: string[], _opts: unknown, cb: (error: Error) => void) => {
+      cb(Object.assign(new Error("spawn ffmpeg EACCES"), { code: "EACCES", syscall: "spawn ffmpeg" }));
+    });
+    await expect(prepare(videoPart("video/mp4"))).rejects.toMatchObject({ code: "EACCES" });
+  });
+
+  it("keeps the frames when the temp dir cannot be removed afterwards", async () => {
+    ffmpegWritesOneFrame();
+    rmFault.error = Object.assign(new Error("EBUSY: resource busy or locked, rm"), { code: "EBUSY" });
+    const blocks = await blocksFor(videoPart("video/mp4"));
+    expect(blocks).toHaveLength(2);
+    rmFault.error = undefined;
+    const [, args] = execFileMock.mock.calls[0] as [string, string[]];
+    rmSync(dirname(args[args.indexOf("-i") + 1]), { recursive: true, force: true });
   });
 });
 

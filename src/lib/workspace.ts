@@ -11,6 +11,53 @@ export type WorkspaceResult = {
 };
 
 /**
+ * A workspace the client asked for that the proxy will not use, such as an
+ * X-Cursor-Workspace outside the configured base. Its message names no path
+ * on the proxy host, so a handler can answer it as the client's mistake.
+ * Any other error from resolveWorkspace, such as a chat-only workspace that
+ * could not be created, is the proxy's own fault.
+ */
+export class WorkspaceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkspaceError";
+  }
+}
+
+const NOT_A_DIRECTORY =
+  "X-Cursor-Workspace must be an existing directory on the proxy host";
+
+/**
+ * Errors that mean the requested path itself cannot be used: it does not
+ * exist, crosses a file, loops or is not readable by the proxy. Anything
+ * else (out of file descriptors, I/O errors) is a fault of the host.
+ */
+const UNUSABLE_PATH_CODES = new Set([
+  "EACCES",
+  "ELOOP",
+  "ENAMETOOLONG",
+  "ENOENT",
+  "ENOTDIR",
+  "EPERM",
+]);
+
+/** The real path of the directory a client named in X-Cursor-Workspace. */
+function requestedDirectory(candidate: string): string {
+  try {
+    if (!fs.statSync(candidate).isDirectory()) {
+      throw new WorkspaceError(NOT_A_DIRECTORY);
+    }
+    return fs.realpathSync(candidate);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code !== undefined && UNUSABLE_PATH_CODES.has(code)) {
+      throw new WorkspaceError(NOT_A_DIRECTORY);
+    }
+    throw error;
+  }
+}
+
+/**
  * A chat-only request's temp dir holds two siblings: the agent's empty
  * `workspace` (its cwd and `--workspace`) and a private `home` for `HOME`,
  * Cursor's config and, on macOS, the link to the real keychains. Keeping
@@ -140,6 +187,10 @@ function createChatOnlyWorkspace(): Required<WorkspaceResult> {
  * fresh temp dir (`tempDir`) that the caller owns: hand it to an agent runner,
  * which removes it when the run ends, or remove it with
  * `removeChatOnlyTempDir` when returning without running the agent.
+ *
+ * Throws WorkspaceError for an X-Cursor-Workspace the proxy will not use.
+ * Anything else it throws is a fault of the proxy host, and its message can
+ * hold paths on that host.
  */
 export function resolveWorkspace(
   config: BridgeConfig,
@@ -162,18 +213,11 @@ export function resolveWorkspace(
     return { workspaceDir: base };
   }
 
-  const candidate = path.resolve(headerWs);
-  if (!fs.existsSync(candidate) || !fs.statSync(candidate).isDirectory()) {
-    throw new Error(
-      "X-Cursor-Workspace must be an existing directory on the proxy host",
-    );
-  }
-
+  const realRequested = requestedDirectory(path.resolve(headerWs));
   const realBase = fs.existsSync(base) ? fs.realpathSync(base) : base;
-  const realRequested = fs.realpathSync(candidate);
   const rel = path.relative(realBase, realRequested);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    throw new Error(
+    throw new WorkspaceError(
       "X-Cursor-Workspace must resolve to a directory under the configured workspace base",
     );
   }

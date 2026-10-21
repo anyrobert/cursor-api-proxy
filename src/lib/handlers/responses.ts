@@ -34,7 +34,11 @@ import {
 import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
 import { sanitizeMessages } from "../sanitize.js";
-import { removeChatOnlyTempDir, resolveWorkspace } from "../workspace.js";
+import {
+  removeChatOnlyTempDir,
+  resolveWorkspace,
+  WorkspaceError,
+} from "../workspace.js";
 import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
@@ -221,6 +225,15 @@ async function classifyTranscriptTurn(
   return { kind: turnOutputs.length > 0 ? "rebuild" : "new" };
 }
 
+/**
+ * An `output_text` content part. The agent reports no citations or token
+ * log probabilities, so both lists are empty rather than missing, which
+ * clients that parse OpenAI's types expect (#103).
+ */
+function outputTextPart(text: string) {
+  return { type: "output_text", text, annotations: [], logprobs: [] };
+}
+
 function structuredResponseObject(opts: {
   body: OpenAiResponsesRequest;
   id: string;
@@ -238,13 +251,7 @@ function structuredResponseObject(opts: {
       type: "message",
       status: "completed",
       role: "assistant",
-      content: [
-        {
-          type: "output_text",
-          text: opts.result.text,
-          annotations: [],
-        },
-      ],
+      content: [outputTextPart(opts.result.text)],
     });
   }
   if (opts.result.status === "tool_calls") {
@@ -353,7 +360,7 @@ async function writeStructuredResponseTurn(
           item_id: messageId,
           output_index: 0,
           content_index: 0,
-          part: { type: "output_text", text: "", annotations: [] },
+          part: outputTextPart(""),
         });
       }
       emittedText += text;
@@ -363,6 +370,7 @@ async function writeStructuredResponseTurn(
         output_index: 0,
         content_index: 0,
         delta: text,
+        logprobs: [],
       });
     };
     const result = await opts.run((event) => {
@@ -379,13 +387,14 @@ async function writeStructuredResponseTurn(
         output_index: 0,
         content_index: 0,
         text: result.text,
+        logprobs: [],
       });
       events.write("response.content_part.done", {
         response_id: opts.id,
         item_id: messageId,
         output_index: 0,
         content_index: 0,
-        part: { type: "output_text", text: result.text, annotations: [] },
+        part: outputTextPart(result.text),
       });
       events.write("response.output_item.done", {
         response_id: opts.id,
@@ -395,9 +404,7 @@ async function writeStructuredResponseTurn(
           type: "message",
           status: "completed",
           role: "assistant",
-          content: [
-            { type: "output_text", text: result.text, annotations: [] },
-          ],
+          content: [outputTextPart(result.text)],
         },
       });
     }
@@ -505,13 +512,7 @@ function createOutputItem(itemId: string, status: ResponseStatus, text: string) 
     type: "message",
     status,
     role: "assistant",
-    content: [
-      {
-        type: "output_text",
-        text,
-        annotations: [],
-      },
-    ],
+    content: [outputTextPart(text)],
   };
 }
 
@@ -756,13 +757,11 @@ export async function handleResponses(
     { useAcp: config.useAcp, resumesToolSession: resuming },
   );
   if (!media.ok) {
-    json(res, 422, {
-      error: {
-        message: media.error,
-        code: "unsupported_media",
-        type: "invalid_request_error",
-      },
-    });
+    json(
+      res,
+      422,
+      openAiErrorBody({ status: 422, code: "unsupported_media", message: media.error }),
+    );
     return;
   }
   const mediaBlocks = media.blocks;
@@ -905,9 +904,15 @@ export async function handleResponses(
     const ws = resolveWorkspace(config, headerWs, effectiveChatOnly);
     workspaceDir = ws.workspaceDir;
     tempDir = ws.tempDir;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Invalid workspace";
-    json(res, 400, { error: { message: msg, code: "invalid_workspace" } });
+  } catch (error) {
+    // Anything else is the proxy's fault: the request listener answers it
+    // as a 500 and logs the detail.
+    if (!(error instanceof WorkspaceError)) throw error;
+    json(
+      res,
+      400,
+      openAiErrorBody({ status: 400, code: "invalid_workspace", message: error.message }),
+    );
     return;
   }
 
@@ -1064,7 +1069,7 @@ export async function handleResponses(
         item_id: itemId,
         output_index: 0,
         content_index: 0,
-        part: { type: "output_text", text: "", annotations: [] },
+        part: outputTextPart(""),
       });
     };
     await streamPlainTurn(
@@ -1092,6 +1097,7 @@ export async function handleResponses(
             output_index: 0,
             content_index: 0,
             delta,
+            logprobs: [],
           });
         },
         complete: (text) => {
@@ -1103,6 +1109,7 @@ export async function handleResponses(
             output_index: 0,
             content_index: 0,
             text,
+            logprobs: [],
           });
           events.write("response.content_part.done", {
             response_id: id,

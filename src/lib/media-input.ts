@@ -23,7 +23,33 @@ export type AcpPromptBlock =
   | { type: "text"; text: string }
   | { type: "image"; mimeType: string; data: string };
 
-class MediaInputError extends Error {}
+/**
+ * Media the client sent that the proxy cannot use: an unsupported type, an
+ * oversized or unreachable source, a video that does not decode. Its message
+ * is safe to return to the client; any other error while preparing media is
+ * a fault of the proxy host (temp files, ffmpeg not starting).
+ */
+class MediaInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MediaInputError";
+  }
+}
+
+/**
+ * A fetch of the client's media URL that failed on the network or in TLS.
+ * Only the error code reaches the client: the message can name the address
+ * the proxy connected to.
+ */
+function mediaFetchError(error: unknown): MediaInputError {
+  if (error instanceof MediaInputError) return error;
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return new MediaInputError(
+    typeof code === "string" && /^[A-Z][A-Z0-9_]*$/.test(code)
+      ? `media fetch failed (${code})`
+      : "media fetch failed",
+  );
+}
 
 /**
  * Special-purpose ranges that must never be fetched: loopback, private,
@@ -122,7 +148,10 @@ async function download(
         const location = res.headers.location;
         res.resume();
         if (!location || redirects >= 2) { reject(new MediaInputError("media redirect limit exceeded")); return; }
-        download(new URL(location, url).href, limit, redirects + 1, deadline).then(resolve, reject);
+        // A throw here would escape the response callback and crash the proxy.
+        let next: string;
+        try { next = new URL(location, url).href; } catch { reject(new MediaInputError("media redirect location is invalid")); return; }
+        download(next, limit, redirects + 1, deadline).then(resolve, reject);
         return;
       }
       if (res.statusCode !== 200) { res.resume(); reject(new MediaInputError(`media fetch returned HTTP ${res.statusCode}`)); return; }
@@ -138,7 +167,7 @@ async function download(
         chunks.push(chunk);
       });
       res.on("end", () => resolve({ data: Buffer.concat(chunks), mime: String(res.headers["content-type"] ?? "").split(";")[0].toLowerCase() }));
-      res.on("error", reject);
+      res.on("error", (error) => reject(mediaFetchError(error)));
     });
     // The socket `timeout` option only fires on idle sockets, so a server that
     // drips bytes could hold the request open indefinitely; enforce a total
@@ -148,7 +177,7 @@ async function download(
       remainingMs,
     );
     req.on("timeout", () => req.destroy(new MediaInputError("media download timed out")));
-    req.on("error", reject);
+    req.on("error", (error) => reject(mediaFetchError(error)));
     req.end();
   });
 }
@@ -197,9 +226,12 @@ async function videoFrames(data: Buffer, mime: string): Promise<AcpPromptBlock[]
         "-vf", "fps=1/5:round=up,scale=768:-2:force_original_aspect_ratio=decrease", "-frames:v", String(MAX_VIDEO_FRAMES),
         join(dir, "frame-%02d.jpg")], { timeout: 20_000, maxBuffer: 64 * 1024 });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      const { code, syscall } = (error ?? {}) as NodeJS.ErrnoException;
+      if (code === "ENOENT") {
         throw new MediaInputError("video input requires ffmpeg on the proxy host");
       }
+      // ffmpeg could not be started at all, which says nothing about the video.
+      if (syscall?.startsWith("spawn")) throw error;
       throw new MediaInputError("video decoding failed");
     }
     const files = (await readdir(dir)).filter((name) => name.startsWith("frame-")).sort();
@@ -207,7 +239,10 @@ async function videoFrames(data: Buffer, mime: string): Promise<AcpPromptBlock[]
     const frames: AcpPromptBlock[] = [];
     for (const file of files) frames.push(imageBlock(await readFile(join(dir, file)), "image/jpeg"));
     return frames;
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  } finally {
+    // Best effort: a leftover temp dir must not fail a request that succeeded.
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 type MediaKind = "image" | "video";
@@ -240,7 +275,11 @@ export type PreparedMedia<T> =
       /** The request items with forwarded media replaced by transcript labels. */
       items: T[];
     }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      /** Why the client's media cannot be used; safe to return to it. */
+      error: string;
+    };
 
 /**
  * Turns the media in a request into ACP prompt blocks.
@@ -249,6 +288,10 @@ export type PreparedMedia<T> =
  * text placeholders the prompt builders already emit and one warning is
  * logged for the request. A resumed ACP tool session already received its
  * media with the opening prompt, so nothing is fetched or decoded again.
+ *
+ * Media the client got wrong comes back as `ok: false`. A fault of the proxy
+ * host, such as a temp file that cannot be written, is thrown instead: its
+ * message can hold paths on the host and is not the client's to fix.
  */
 export async function prepareRequestMedia<T>(
   items: readonly T[],
@@ -266,7 +309,8 @@ export async function prepareRequestMedia<T>(
   try {
     return { ok: true, ...(await attachRecentMedia(items)) };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : "invalid media input" };
+    if (!(error instanceof MediaInputError)) throw error;
+    return { ok: false, error: error.message };
   }
 }
 
