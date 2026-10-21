@@ -205,7 +205,7 @@ export function appendSessionLine(
  * One ERROR line in the sessions log: the failure's tag and the first 200
  * characters of its detail, on one line.
  */
-function appendSessionError(
+export function appendSessionError(
   logPath: string,
   method: string,
   pathname: string,

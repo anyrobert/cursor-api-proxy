@@ -1,5 +1,77 @@
-import { describe, it, expect } from "vitest";
-import { parseCursorCliModels } from "./cursor-cli.js";
+import * as fs from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeAll, describe, it, expect } from "vitest";
+import {
+  CursorCliModelsError,
+  listCursorCliModels,
+  parseCursorCliModels,
+} from "./cursor-cli.js";
+
+const CLIENT_SAFE =
+  "The Cursor CLI could not list models. See server logs for details.";
+const SECRET_STDERR = "agent: token=secret-models-detail";
+
+let workDir: string;
+
+beforeAll(() => {
+  workDir = fs.mkdtempSync(join(tmpdir(), "cursor-cli-test-"));
+});
+
+afterAll(() => {
+  fs.rmSync(workDir, { recursive: true, force: true });
+});
+
+/** A stand-in `agent` that runs `script` (sh) and never talks to Cursor. */
+function fakeAgent(name: string, script: string): string {
+  const bin = join(workDir, name);
+  fs.writeFileSync(bin, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+  return bin;
+}
+
+async function modelsError(agentBin: string): Promise<CursorCliModelsError> {
+  const error = await listCursorCliModels({ agentBin, timeoutMs: 10_000 }).then(
+    () => undefined,
+    (reason: unknown) => reason,
+  );
+  expect(error).toBeInstanceOf(CursorCliModelsError);
+  return error as CursorCliModelsError;
+}
+
+describe("listCursorCliModels", () => {
+  it("returns the parsed catalog", async () => {
+    const bin = fakeAgent("agent-ok", "echo 'auto - Auto (default)'\necho 'gpt-5 - GPT-5'");
+    await expect(listCursorCliModels({ agentBin: bin, timeoutMs: 10_000 })).resolves.toEqual([
+      { id: "auto", name: "Auto" },
+      { id: "gpt-5", name: "GPT-5" },
+    ]);
+  });
+
+  it("keeps the path and stderr of a failed check out of the message (#89)", async () => {
+    const bin = fakeAgent("agent-exit", `echo '${SECRET_STDERR}' >&2\nexit 3`);
+    const error = await modelsError(bin);
+    expect(error.message).toBe(CLIENT_SAFE);
+    expect(error.diagnostics).toContain(JSON.stringify(bin));
+    expect(error.diagnostics).toContain("--list-models exited 3");
+    expect(error.diagnostics).toContain(SECRET_STDERR);
+  });
+
+  it("reports a binary that cannot be run without its path", async () => {
+    const bin = join(workDir, "missing-agent");
+    const error = await modelsError(bin);
+    expect(error.message).toBe(CLIENT_SAFE);
+    expect(error.diagnostics).toContain(bin);
+    expect(error.diagnostics).toContain("could not run");
+  });
+
+  it("reports a binary that prints no catalog without its output", async () => {
+    const bin = fakeAgent("agent-other", `echo 'Usage: agent ${SECRET_STDERR}'`);
+    const error = await modelsError(bin);
+    expect(error.message).toBe(CLIENT_SAFE);
+    expect(error.diagnostics).toContain("did not return a Cursor model catalog");
+    expect(error.diagnostics).toContain(SECRET_STDERR);
+  });
+});
 
 describe("parseCursorCliModels", () => {
   it("parses model lines with id and name", () => {
