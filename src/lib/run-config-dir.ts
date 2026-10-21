@@ -1,13 +1,15 @@
 /**
- * A private Cursor config dir for each `agent acp` run (#63).
+ * A private Cursor config dir for each agent run, plain CLI or `agent acp`.
  *
- * The CLI saves every model choice to its config dir: `--model` at startup
- * (`model`, `hasChangedDefaultModel`, `maxMode` in cli-config.json) and
- * `session/set_config_option` (`selectedModel`, `modelParameters`,
- * `modelSelectionHistory`, `maxMode`, ... plus acp-config.json). Neither
- * has a session-only switch (CLI 2026.10.19), and each session also leaves
- * an `acp-sessions/<id>/` store there. Run on an account's own config dir,
- * every proxy request would change the model that account then uses
+ * The CLI saves every model choice to its config dir, with no session-only
+ * switch (CLI 2026.10.19). `agent acp` does it for `--model` at startup
+ * (`model`, `hasChangedDefaultModel`, `maxMode` in cli-config.json) and for
+ * every `session/set_config_option` (`selectedModel`, `modelParameters`,
+ * `modelSelectionHistory`, `maxMode`, ... plus acp-config.json) (#63).
+ * The plain chat command does it too: its `--model` goes through the same
+ * `ModelManager.handleInitialModel` (#87). Each session also leaves a store
+ * there (`chats/`, `acp-sessions/<id>/`). Run on an account's own config
+ * dir, every proxy request would change the model that account then uses
  * interactively. A run instead gets a copy of the config files, deleted
  * when it ends: it starts from the account's settings, and nothing it
  * writes reaches the account. Concurrent runs never share a copy, so there
@@ -19,7 +21,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { debuglog } from "node:util";
 
-const debugAcp = debuglog("cursor-api-proxy:acp");
+const debugConfig = debuglog("cursor-api-proxy:config");
 
 /**
  * The files the CLI reads from its config dir. The rest of that dir is
@@ -65,7 +67,7 @@ export function createRunConfigDir(sourceDir: string): RunConfigDir {
     } catch (error) {
       // The CLI starts from defaults for a missing or unreadable file too.
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        debugAcp("ACP: run config dir: cannot copy %s: %s", name, String(error));
+        debugConfig("run config dir: cannot copy %s: %s", name, String(error));
       }
     }
   }

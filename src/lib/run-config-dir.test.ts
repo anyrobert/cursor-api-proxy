@@ -11,6 +11,7 @@ import {
 } from "./run-config-dir.js";
 import { runAgentStream, runAgentSync, startAgentToolSession } from "./agent-runner.js";
 import type { BridgeConfig } from "./config.js";
+import { resolveWorkspace } from "./workspace.js";
 
 // Runs with an account dir cache its token; never read the real keychain.
 vi.mock("./token-cache.js", () => ({
@@ -25,6 +26,7 @@ const fakeServerPath = path.join(
   "__tests__",
   "fake-acp-server.mjs",
 );
+const fakeCliPath = path.join(process.cwd(), "src", "lib", "__tests__", "fake-cli-agent.mjs");
 
 /** What `agent login` and interactive use leave in an account's config dir. */
 const ACCOUNT_CLI_CONFIG = {
@@ -45,6 +47,7 @@ function tempDir(prefix: string): string {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const dir of created.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -282,5 +285,182 @@ describe("ACP runs do not change the account's saved model (#63)", () => {
     expect(out.code).toBe(0);
     expect(report(out.stdout).configDir).toBe(path.join(root, "home", ".cursor"));
     expect(fs.existsSync(root)).toBe(false);
+  });
+});
+
+describe("plain CLI runs do not change the account's saved model (#87)", () => {
+  /** The plain CLI path, run by the fake `agent` that saves `--model`. */
+  function cliConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
+    return config({ useAcp: false, agentBin: process.execPath, ...overrides });
+  }
+
+  function cliArgs(mode: "ask" | "agent", stream = false): string[] {
+    const args = [fakeCliPath, "--print", "--mode", mode, "--model", "gpt-4"];
+    return stream ? [...args, "--output-format", "stream-json"] : args;
+  }
+
+  /** The run report in one stream-json assistant line. */
+  function streamReport(line: string): RunReport {
+    const event = JSON.parse(line) as { message: { content: { text: string }[] } };
+    return report(event.message.content[0]!.text);
+  }
+
+  it("keeps a pool account's config dir untouched by a sync run", async () => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", "persist_model_config");
+    const account = makeConfigDir(tempDir("account-"));
+    const before = snapshot(account);
+    const out = await runAgentSync(
+      cliConfig(),
+      process.cwd(),
+      false,
+      cliArgs("agent"),
+      undefined,
+      "hi",
+      account,
+    );
+    expect(out.code).toBe(0);
+    expectPrivateCopy(report(out.stdout), account);
+    expect(snapshot(account)).toEqual(before);
+  });
+
+  it("keeps a pool account's config dir untouched by a chat-only streamed run", async () => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", "persist_model_config");
+    const account = makeConfigDir(tempDir("account-"));
+    const before = snapshot(account);
+    const { tempDir: root, workspaceDir } = chatOnlyRoot();
+    const lines: string[] = [];
+    const out = await runAgentStream(
+      cliConfig(),
+      workspaceDir,
+      true,
+      cliArgs("ask", true),
+      (line) => lines.push(line),
+      root,
+      "hi",
+      account,
+    );
+    expect(out.code).toBe(0);
+    expectPrivateCopy(streamReport(lines[0]!), account);
+    expect(snapshot(account)).toEqual(before);
+    expect(fs.existsSync(root)).toBe(false);
+  });
+
+  it("keeps the user's own config dir untouched without chat-only or a pool", async () => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", "persist_model_config");
+    const home = tempDir("home-");
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+    const userConfig = makeConfigDir(path.join(home, ".cursor"));
+    const before = snapshot(userConfig);
+    const out = await runAgentSync(
+      cliConfig(),
+      process.cwd(),
+      false,
+      cliArgs("agent"),
+      undefined,
+      "hi",
+    );
+    expect(out.code).toBe(0);
+    expectPrivateCopy(report(out.stdout), userConfig);
+    expect(snapshot(userConfig)).toEqual(before);
+  });
+
+  it("removes the copy when the run fails", async () => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", "persist_model_config_fail");
+    const account = makeConfigDir(tempDir("account-"));
+    const before = snapshot(account);
+    const out = await runAgentSync(
+      cliConfig(),
+      process.cwd(),
+      false,
+      cliArgs("agent"),
+      undefined,
+      "hi",
+      account,
+    );
+    expect(out.code).toBe(1);
+    expectPrivateCopy(report(out.stdout), account);
+    expect(snapshot(account)).toEqual(before);
+  });
+
+  it("removes the copy and the chat-only temp dir when the run is aborted", async () => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", "persist_model_config_hang");
+    const account = makeConfigDir(tempDir("account-"));
+    const before = snapshot(account);
+    const { tempDir: root, workspaceDir } = chatOnlyRoot();
+    const controller = new AbortController();
+    let run: RunReport | undefined;
+    const out = await runAgentStream(
+      cliConfig(),
+      workspaceDir,
+      true,
+      cliArgs("ask", true),
+      (line) => {
+        run = streamReport(line);
+        controller.abort();
+      },
+      root,
+      "hi",
+      account,
+      controller.signal,
+    );
+    expect(out.code).not.toBe(0);
+    expect(run).toBeDefined();
+    expectPrivateCopy(run!, account);
+    expect(snapshot(account)).toEqual(before);
+    expect(fs.existsSync(root)).toBe(false);
+  });
+
+  it("keeps using the chat-only temp home when there is no pool", async () => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", "persist_model_config");
+    const { tempDir: root, workspaceDir } = chatOnlyRoot();
+    const out = await runAgentSync(cliConfig(), workspaceDir, true, cliArgs("ask"), root, "hi");
+    expect(out.code).toBe(0);
+    expect(report(out.stdout).configDir).toBe(path.join(root, "home", ".cursor"));
+    expect(fs.existsSync(root)).toBe(false);
+  });
+
+  it("writes max mode into the run's copy, never into the account", async () => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", "persist_model_config");
+    const account = makeConfigDir(tempDir("account-"));
+    const before = snapshot(account);
+    const out = await runAgentSync(
+      cliConfig({ maxMode: true }),
+      process.cwd(),
+      false,
+      cliArgs("agent"),
+      undefined,
+      "hi",
+      account,
+    );
+    expect(out.code).toBe(0);
+    const run = report(out.stdout);
+    expect(path.resolve(run.configDir)).not.toBe(path.resolve(account));
+    expect(run.seen).toEqual({
+      ...ACCOUNT_CLI_CONFIG,
+      maxMode: true,
+      model: { ...ACCOUNT_CLI_CONFIG.model, maxMode: true },
+    });
+    expect(fs.existsSync(run.configDir)).toBe(false);
+    expect(snapshot(account)).toEqual(before);
+  });
+
+  it("writes max mode into the chat-only temp home when there is no pool", async () => {
+    vi.stubEnv("FAKE_CLI_SCENARIO", "persist_model_config");
+    const { workspaceDir, tempDir: root } = resolveWorkspace(config(), undefined, true);
+    created.push(root!);
+    const out = await runAgentSync(
+      cliConfig({ maxMode: true }),
+      workspaceDir,
+      true,
+      cliArgs("ask"),
+      root,
+      "hi",
+    );
+    expect(out.code).toBe(0);
+    const run = report(out.stdout);
+    expect(run.configDir).toBe(path.join(root!, "home", ".cursor"));
+    expect(run.seen).toMatchObject({ version: 1, maxMode: true });
+    expect(fs.existsSync(root!)).toBe(false);
   });
 });

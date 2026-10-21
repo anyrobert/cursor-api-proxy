@@ -1,16 +1,18 @@
 import { runAcpStream, runAcpSync, type AcpRunOptions } from "./acp-client.js";
-import {
-  createRunConfigDir,
-  cursorConfigDir,
-  type RunConfigDir,
-} from "./run-config-dir.js";
 import type { AcpModelOptions } from "./acp-model.js";
 import { buildAcpSpawnEnv } from "./acp-spawn.js";
 import type { AcpPromptBlock } from "./media-input.js";
 import { AcpToolSession } from "./acp-tool-session.js";
 import type { BridgeConfig } from "./config.js";
+import { agentChildEnv, resolveAgentCommand } from "./env.js";
 import type { CursorExecutionMode } from "./execution-mode.js";
+import { enableMaxMode } from "./max-mode-preflight.js";
 import { run, runStreaming } from "./process.js";
+import {
+  createRunConfigDir,
+  cursorConfigDir,
+  type RunConfigDir,
+} from "./run-config-dir.js";
 import type { ClientToolDefinition } from "./tool-types.js";
 import {
   chatOnlyHomeDir,
@@ -79,8 +81,8 @@ function extractModeFromCmdArgs(cmdArgs: string[]): CursorExecutionMode {
   return "ask";
 }
 
-/** What every ACP run is started from. */
-type AcpRunContext = {
+/** What every agent run, plain CLI or ACP, is started from. */
+type RunContext = {
   config: BridgeConfig;
   workspaceDir: string;
   effectiveChatOnly: boolean;
@@ -91,6 +93,62 @@ type AcpRunContext = {
   tempDir?: string;
 };
 
+/** The private dirs one agent run owns until `release`. */
+type RunDirs = {
+  /** Variables the run sets on its agent child. */
+  env: Record<string, string> & { CURSOR_CONFIG_DIR: string };
+  /** Remove the run's private dirs; call once its agent is gone. */
+  release: () => void;
+};
+
+/**
+ * The config dir an agent run's child gets, for the plain CLI and ACP alike.
+ * The CLI saves each model choice in its config dir, `agent acp` (#63) and
+ * the chat command (#87) both, so every run gets a config dir of its own:
+ * the chat-only temp home when there is no account pool, else a private
+ * copy of the dir the child would have used (the account's, or the user's).
+ * `childEnv` turns the run's variables into the child's whole env, the way
+ * its spawn path does. On failure it removes `tempDir`.
+ */
+function runDirs(
+  ctx: RunContext,
+  childEnv: (env: Record<string, string>) => NodeJS.ProcessEnv,
+): RunDirs {
+  const { workspaceDir, effectiveChatOnly, configDir, tempDir } = ctx;
+  const env: Record<string, string> = effectiveChatOnly
+    ? getChatOnlyEnvOverrides(chatOnlyHomeDir(workspaceDir, tempDir), configDir)
+    : configDir
+      ? { CURSOR_CONFIG_DIR: configDir }
+      : {};
+  let runConfig: RunConfigDir;
+  try {
+    const source = cursorConfigDir(childEnv(env));
+    runConfig =
+      effectiveChatOnly && !configDir
+        ? { dir: source, dispose: () => {} }
+        : createRunConfigDir(source);
+  } catch (error) {
+    removeChatOnlyTempDir(tempDir);
+    throw error;
+  }
+  return {
+    env: { ...env, CURSOR_CONFIG_DIR: runConfig.dir },
+    release: () => {
+      runConfig.dispose();
+      removeChatOnlyTempDir(tempDir);
+    },
+  };
+}
+
+/** One plain CLI run's dirs; with max mode on, its config dir gets maxMode. */
+function cliRunDirs(ctx: RunContext): RunDirs {
+  const { config, cmdArgs } = ctx;
+  const command = resolveAgentCommand(config.agentBin, cmdArgs);
+  const dirs = runDirs(ctx, (env) => agentChildEnv(command, env));
+  if (config.maxMode) enableMaxMode(dirs.env.CURSOR_CONFIG_DIR);
+  return dirs;
+}
+
 type AcpInvocation = {
   args: string[];
   env: Record<string, string | undefined>;
@@ -99,71 +157,47 @@ type AcpInvocation = {
   release: () => void;
 };
 
-/**
- * Args and env for one `agent acp` run. The CLI saves each model choice in
- * its config dir (#63), so the run always gets a config dir of its own: the
- * chat-only temp home when there is no account pool, else a copy of the
- * account's (or the user's) config dir. On failure it removes `tempDir`.
- */
-function acpInvocation(ctx: AcpRunContext): AcpInvocation {
-  const { config, workspaceDir, effectiveChatOnly, cmdArgs, configDir, tempDir } = ctx;
+/** Args and env for one `agent acp` run, on its own dirs (see runDirs). */
+function acpInvocation(ctx: RunContext): AcpInvocation {
+  const { config, workspaceDir, cmdArgs } = ctx;
   const model = extractModelFromCmdArgs(cmdArgs);
   const mode = extractModeFromCmdArgs(cmdArgs);
   let args = acpArgsWithWorkspace(config.acpArgs, workspaceDir);
   args = model ? acpArgsWithModel(args, model) : args;
   args = acpArgsWithMode(args, mode);
-  const env = { ...config.acpEnv };
-  if (effectiveChatOnly) {
-    Object.assign(
-      env,
-      getChatOnlyEnvOverrides(chatOnlyHomeDir(workspaceDir, tempDir), configDir),
-    );
-  } else if (configDir) {
-    env.CURSOR_CONFIG_DIR = configDir;
-  }
-  if (effectiveChatOnly && !configDir) {
-    return { args, env, model, release: () => removeChatOnlyTempDir(tempDir) };
-  }
-  let runConfig: RunConfigDir;
-  try {
-    runConfig = createRunConfigDir(cursorConfigDir(buildAcpSpawnEnv(env)));
-  } catch (error) {
-    removeChatOnlyTempDir(tempDir);
-    throw error;
-  }
-  env.CURSOR_CONFIG_DIR = runConfig.dir;
-  return {
-    args,
-    env,
-    model,
-    release: () => {
-      runConfig.dispose();
-      removeChatOnlyTempDir(tempDir);
-    },
-  };
+  const acpEnv = (env: Record<string, string>) => ({ ...config.acpEnv, ...env });
+  const dirs = runDirs(ctx, (env) => buildAcpSpawnEnv(acpEnv(env)));
+  return { args, env: acpEnv(dirs.env), model, release: dirs.release };
 }
 
-/** Run one plain ACP turn; its dirs are released however it ends. */
-function withAcpRun<T>(
-  ctx: AcpRunContext,
-  run: (invocation: AcpInvocation) => Promise<T>,
+/**
+ * Run one plain turn on the dirs `prepare` makes for it. They are released
+ * however the turn ends, also when `start` throws.
+ */
+function withRun<D extends { release: () => void }, T>(
+  ctx: RunContext,
+  prepare: (ctx: RunContext) => D,
+  start: (dirs: D) => Promise<T>,
 ): Promise<T> {
-  let invocation: AcpInvocation;
+  let dirs: D | undefined;
+  let running: Promise<T>;
   try {
-    invocation = acpInvocation(ctx);
+    dirs = prepare(ctx);
+    running = start(dirs);
   } catch (error) {
+    dirs?.release();
     return Promise.reject(error);
   }
-  return run(invocation)
+  return running
     .then((out) => {
       cacheTokenForAccount(ctx.configDir);
       return out;
     })
-    .finally(invocation.release);
+    .finally(dirs.release);
 }
 
 function acpRunOptions(
-  ctx: AcpRunContext,
+  ctx: RunContext,
   invocation: AcpInvocation,
   request: {
     signal?: AbortSignal;
@@ -202,9 +236,9 @@ export function runAgentSync(
     removeChatOnlyTempDir(tempDir);
     return Promise.reject(new Error("multimodal input requires Cursor ACP mode"));
   }
+  const ctx = { config, workspaceDir, effectiveChatOnly, cmdArgs, configDir, tempDir };
   if (config.useAcp && typeof stdinPrompt === "string") {
-    const ctx = { config, workspaceDir, effectiveChatOnly, cmdArgs, configDir, tempDir };
-    return withAcpRun(ctx, (invocation) =>
+    return withRun(ctx, acpInvocation, (invocation) =>
       runAcpSync(
         config.acpCommand,
         invocation.args,
@@ -213,23 +247,15 @@ export function runAgentSync(
       ),
     );
   }
-  const runEnvOverrides = effectiveChatOnly
-    ? getChatOnlyEnvOverrides(chatOnlyHomeDir(workspaceDir, tempDir), configDir)
-    : undefined;
-  return run(config.agentBin, cmdArgs, {
-    cwd: workspaceDir,
-    timeoutMs: config.timeoutMs,
-    maxMode: config.maxMode,
-    stdinContent: stdinPrompt,
-    envOverrides: runEnvOverrides,
-    configDir,
-    signal,
-  })
-    .then((out) => {
-      cacheTokenForAccount(configDir);
-      return out;
-    })
-    .finally(() => removeChatOnlyTempDir(tempDir));
+  return withRun(ctx, cliRunDirs, (dirs) =>
+    run(config.agentBin, cmdArgs, {
+      cwd: workspaceDir,
+      timeoutMs: config.timeoutMs,
+      stdinContent: stdinPrompt,
+      envOverrides: dirs.env,
+      signal,
+    }),
+  );
 }
 
 type StreamLineHandler = (line: string) => void;
@@ -251,9 +277,9 @@ export function runAgentStream(
     removeChatOnlyTempDir(tempDir);
     return Promise.reject(new Error("multimodal input requires Cursor ACP mode"));
   }
+  const ctx = { config, workspaceDir, effectiveChatOnly, cmdArgs, configDir, tempDir };
   if (config.useAcp && typeof stdinPrompt === "string") {
-    const ctx = { config, workspaceDir, effectiveChatOnly, cmdArgs, configDir, tempDir };
-    return withAcpRun(ctx, (invocation) =>
+    return withRun(ctx, acpInvocation, (invocation) =>
       runAcpStream(
         config.acpCommand,
         invocation.args,
@@ -263,24 +289,16 @@ export function runAgentStream(
       ),
     );
   }
-  const streamEnvOverrides = effectiveChatOnly
-    ? getChatOnlyEnvOverrides(chatOnlyHomeDir(workspaceDir, tempDir), configDir)
-    : undefined;
-  return runStreaming(config.agentBin, cmdArgs, {
-    cwd: workspaceDir,
-    timeoutMs: config.timeoutMs,
-    maxMode: config.maxMode,
-    onLine,
-    stdinContent: stdinPrompt,
-    envOverrides: streamEnvOverrides,
-    configDir,
-    signal,
-  })
-    .then((result) => {
-      cacheTokenForAccount(configDir);
-      return result;
-    })
-    .finally(() => removeChatOnlyTempDir(tempDir));
+  return withRun(ctx, cliRunDirs, (dirs) =>
+    runStreaming(config.agentBin, cmdArgs, {
+      cwd: workspaceDir,
+      timeoutMs: config.timeoutMs,
+      onLine,
+      stdinContent: stdinPrompt,
+      envOverrides: dirs.env,
+      signal,
+    }),
+  );
 }
 
 export async function startAgentToolSession(opts: {

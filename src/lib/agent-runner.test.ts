@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { BridgeConfig } from "./config.js";
 import { runAgentSync, runAgentStream } from "./agent-runner.js";
 import { runAcpStream, runAcpSync } from "./acp-client.js";
+import { run, runStreaming } from "./process.js";
 
 vi.mock("./acp-client.js", () => ({
   runAcpSync: vi.fn().mockResolvedValue({ code: 0, stdout: "ok", stderr: "" }),
@@ -181,5 +182,107 @@ describe("ACP requestTimeoutMs", () => {
       timeoutMs: 123_456,
       requestTimeoutMs: 123_456,
     });
+  });
+});
+
+describe("plain CLI runs get their own config dir (#87)", () => {
+  const CLI_ARGS = ["--print", "--mode", "ask", "--model", "auto"];
+
+  beforeEach(() => {
+    vi.mocked(run).mockClear();
+    vi.mocked(runStreaming).mockClear();
+  });
+
+  /** A pool account dir and a chat-only isolation root, removed afterwards. */
+  function dirs() {
+    const account = fs.mkdtempSync(path.join(os.tmpdir(), "account-"));
+    fs.writeFileSync(path.join(account, "cli-config.json"), '{"version":1}');
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-proxy-"));
+    return {
+      account,
+      tempDir,
+      cleanup: () => {
+        for (const dir of [account, tempDir]) {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    };
+  }
+
+  it("runs a pool account on a private copy of its config dir", async () => {
+    const { account, cleanup } = dirs();
+    let seen: { dir?: string; config?: string } = {};
+    vi.mocked(run).mockImplementationOnce(async (_cmd, _args, opts) => {
+      const dir = opts?.envOverrides?.CURSOR_CONFIG_DIR;
+      seen = { dir, config: fs.readFileSync(path.join(dir!, "cli-config.json"), "utf8") };
+      return { code: 0, stdout: "cli", stderr: "" };
+    });
+    try {
+      await runAgentSync(
+        config({ useAcp: false }),
+        "/tmp/ws",
+        false,
+        CLI_ARGS,
+        undefined,
+        "hello",
+        account,
+      );
+      expect(seen.dir).toMatch(/cursor-proxy-config-/);
+      expect(seen.config).toBe('{"version":1}');
+      expect(fs.existsSync(seen.dir!)).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("removes the copy and the temp dir when the CLI cannot start", async () => {
+    const { account, tempDir, cleanup } = dirs();
+    vi.mocked(runStreaming).mockRejectedValueOnce(new Error("Command not found: agent"));
+    try {
+      await expect(
+        runAgentStream(
+          config({ useAcp: false }),
+          path.join(tempDir, "workspace"),
+          true,
+          CLI_ARGS,
+          () => {},
+          tempDir,
+          "hello",
+          account,
+        ),
+      ).rejects.toThrow("Command not found");
+      const runConfigDir = vi.mocked(runStreaming).mock.calls[0][2].envOverrides?.CURSOR_CONFIG_DIR;
+      expect(runConfigDir).toMatch(/cursor-proxy-config-/);
+      expect(fs.existsSync(runConfigDir!)).toBe(false);
+      expect(fs.existsSync(tempDir)).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("removes the copy and the temp dir when starting the CLI throws", async () => {
+    const { account, tempDir, cleanup } = dirs();
+    vi.mocked(run).mockImplementationOnce(() => {
+      throw new Error("spawn EINVAL");
+    });
+    try {
+      await expect(
+        runAgentSync(
+          config({ useAcp: false }),
+          path.join(tempDir, "workspace"),
+          true,
+          CLI_ARGS,
+          tempDir,
+          "hello",
+          account,
+        ),
+      ).rejects.toThrow("spawn EINVAL");
+      const runConfigDir = vi.mocked(run).mock.calls[0][2]?.envOverrides?.CURSOR_CONFIG_DIR;
+      expect(runConfigDir).toMatch(/cursor-proxy-config-/);
+      expect(fs.existsSync(runConfigDir!)).toBe(false);
+      expect(fs.existsSync(tempDir)).toBe(false);
+    } finally {
+      cleanup();
+    }
   });
 });

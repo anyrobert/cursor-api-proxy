@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { resolveAgentCommand } from "./env.js";
+import { agentChildEnv, resolveAgentCommand } from "./env.js";
 import { DETACH_CHILDREN, killProcessTree } from "./process-tree-kill.js";
-import { runMaxModePreflight } from "./max-mode-preflight.js";
 
 export type RunResult = {
   code: number;
@@ -12,14 +11,10 @@ export type RunResult = {
 export type RunOptions = {
   cwd?: string;
   timeoutMs?: number;
-  /** Enable Cursor Max Mode (preflight writes maxMode to cli-config.json). */
-  maxMode?: boolean;
   /** When set, pass this string to the child process stdin and close it (avoids long prompt in argv on Windows). */
   stdinContent?: string;
   /** Env overrides for the child (e.g. HOME, CURSOR_CONFIG_DIR to isolate from global rules). */
   envOverrides?: Record<string, string>;
-  /** Custom config dir for round-robin account rotation */
-  configDir?: string;
   /** Abort signal — when aborted, the child process is killed immediately */
   signal?: AbortSignal;
 };
@@ -54,43 +49,18 @@ export function trackChildProcess(child: ChildProcess): void {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-function spawnChild(
-  cmd: string,
-  args: string[],
-  opts?: {
-    cwd?: string;
-    maxMode?: boolean;
-    stdinContent?: string;
-    envOverrides?: Record<string, string>;
-    configDir?: string;
-  },
-) {
+function spawnChild(cmd: string, args: string[], opts: RunOptions) {
   const resolved = resolveAgentCommand(cmd, args);
-
-  if (opts?.maxMode) {
-    runMaxModePreflight(resolved.agentScriptPath, opts?.configDir);
-  }
-
-  const env = { ...resolved.env };
-  if (opts?.configDir) {
-    env.CURSOR_CONFIG_DIR = opts.configDir;
-  } else if (resolved.configDir && !env.CURSOR_CONFIG_DIR) {
-    env.CURSOR_CONFIG_DIR = resolved.configDir;
-  }
-  if (opts?.envOverrides) {
-    Object.assign(env, opts.envOverrides);
-  }
-
-  const useStdin = typeof opts?.stdinContent === "string";
+  const useStdin = typeof opts.stdinContent === "string";
   const child = spawn(resolved.command, resolved.args, {
-    cwd: opts?.cwd,
-    env,
+    cwd: opts.cwd,
+    env: agentChildEnv(resolved, opts.envOverrides),
     stdio: useStdin ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: resolved.windowsVerbatimArguments,
     detached: DETACH_CHILDREN,
   });
 
-  if (useStdin && opts!.stdinContent !== undefined && child.stdin) {
+  if (useStdin && opts.stdinContent !== undefined && child.stdin) {
     child.stdin.write(opts.stdinContent, "utf8");
     child.stdin.end();
   }
@@ -108,13 +78,7 @@ export function runStreaming(
   opts: RunStreamingOptions,
 ): Promise<{ code: number; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawnChild(cmd, args, {
-      cwd: opts.cwd,
-      maxMode: opts.maxMode,
-      stdinContent: opts.stdinContent,
-      envOverrides: opts.envOverrides,
-      configDir: opts.configDir,
-    });
+    const child = spawnChild(cmd, args, opts);
 
     activeChildren.add(child);
 
@@ -188,13 +152,7 @@ export function run(
   opts: RunOptions = {},
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawnChild(cmd, args, {
-      cwd: opts.cwd,
-      maxMode: opts.maxMode,
-      stdinContent: opts.stdinContent,
-      envOverrides: opts.envOverrides,
-      configDir: opts.configDir,
-    });
+    const child = spawnChild(cmd, args, opts);
 
     activeChildren.add(child);
 
