@@ -16,6 +16,9 @@
  *    apply only the options that map cleanly onto its configOptions
  * 3. neither: "missing"; strict mode turns it into an error naming the id
  *
+ * A context size named by the id or its display name ("Claude Sonnet 4.6 1M")
+ * is set on either plan only when the row's `context` select offers it.
+ *
  * Catalog shapes:
  * - parameterized (client advertises `_meta.parameterizedModelPicker`): one
  *   family row (`glm-5.2`, `grok-4.6`) plus effort/thinking/fast selects
@@ -69,9 +72,20 @@ export type AcpModelPlan =
   /** No catalog to match against: hand the id to ACP as-is. */
   | { action: "passthrough"; modelId: string }
   /** The proxy matched a catalog row. */
-  | { action: "set"; modelId: string; parameters?: AcpModelParameters }
+  | {
+      action: "set";
+      modelId: string;
+      parameters?: AcpModelParameters;
+      /** Context size the id or display name names, e.g. "1m". */
+      context?: string;
+    }
   /** The proxy missed, but the CLI already selected this catalog row. */
-  | { action: "keep"; modelId: string; parameters?: AcpModelParameters }
+  | {
+      action: "keep";
+      modelId: string;
+      parameters?: AcpModelParameters;
+      context?: string;
+    }
   /** Neither the catalog nor the CLI produced a model. */
   | { action: "missing"; candidates: string[]; sessionModelId?: string };
 
@@ -99,6 +113,9 @@ const EFFORT_SUFFIXES = [
 
 /** Effort/reasoning select ids seen in the ACP catalog and in bracket rows. */
 const LEVEL_OPTION_IDS = ["reasoning", "effort", "reasoning_effort"] as const;
+
+/** A standalone context size token: "1M" in "Claude Sonnet 4.6 1M", "-1m". */
+const CONTEXT_SIZE_TOKEN = /(?<![a-z0-9.])(\d+[km])(?![a-z0-9])/i;
 
 function norm(value: string): string {
   return value.trim().toLowerCase();
@@ -363,14 +380,11 @@ function cliSelectedModel(
   return row && !isAutoRow(row) ? row.modelId : undefined;
 }
 
-/**
- * The one model decision shared by every ACP path. Catalog match first; on a
- * miss, trust the row the CLI already selected for `--model <requested>`.
- */
-export function decideAcpModel(
+/** Catalog match first; on a miss, the row the CLI selected, if any. */
+function matchOrKeepCliModel(
   requested: string,
   session: AcpSessionModelState | undefined,
-  aliases: readonly string[] = [],
+  aliases: readonly string[],
 ): AcpModelPlan {
   const plan = planAcpModelSelection(
     requested,
@@ -388,6 +402,31 @@ export function decideAcpModel(
     modelId: selected,
     ...(parameters ? { parameters } : {}),
   };
+}
+
+/** The first context size the id, then its display names, name ("1m"). */
+function labelledContext(labels: readonly string[]): string | undefined {
+  for (const label of labels) {
+    const size = label.match(CONTEXT_SIZE_TOKEN)?.[1];
+    if (size) return norm(size);
+  }
+  return undefined;
+}
+
+/**
+ * The one model decision shared by every ACP path. Catalog match first; on a
+ * miss, trust the row the CLI already selected for `--model <requested>`.
+ * Either way, carry the context size the id or display name names.
+ */
+export function decideAcpModel(
+  requested: string,
+  session: AcpSessionModelState | undefined,
+  aliases: readonly string[] = [],
+): AcpModelPlan {
+  const plan = matchOrKeepCliModel(requested, session, aliases);
+  if (plan.action !== "set" && plan.action !== "keep") return plan;
+  const context = labelledContext([requested, ...aliases]);
+  return context ? { ...plan, context } : plan;
 }
 
 export function acpModelSelectionError(
@@ -487,11 +526,28 @@ function booleanChange(
   return changeTo(option, value);
 }
 
+/** Only a hint from the id or display name, so a row without it is left alone. */
+function contextChange(
+  options: readonly AcpConfigOption[],
+  context: string,
+): OptionChange {
+  const option = findOption(options, "context");
+  const value = option
+    ? optionValues(option).find((item) => norm(item) === context)
+    : undefined;
+  if (!option || !value) {
+    debugAcp("ACP model: no context=%s option, leaving context as is", context);
+    return undefined;
+  }
+  return changeTo(option, value);
+}
+
 /**
  * Apply a plan. `sessionOptions` are the `configOptions` from `session/new`;
  * a "keep" plan applies its parameters against them and skips any parameter
  * that does not map cleanly, while a "set" plan re-selects the row and fails
- * on any parameter the row cannot honour.
+ * on any parameter the row cannot honour. Either plan sets its context only
+ * when the row offers that value.
  */
 export async function applyAcpModelPlan(
   plan: AcpModelPlan,
@@ -508,7 +564,6 @@ export async function applyAcpModelPlan(
     plan.action === "set"
       ? readAcpConfigOptions(await setOption("model", plan.modelId))
       : sessionOptions;
-  if (!plan.parameters) return;
 
   const fail = (detail: string): Error => {
     const publicId = requested?.trim();
@@ -522,12 +577,16 @@ export async function applyAcpModelPlan(
     );
   };
 
-  const { effort, thinking, fast } = plan.parameters;
-  const changes = [
-    effort ? effortChange(options, effort) : undefined,
-    booleanChange(options, "thinking", thinking),
-    booleanChange(options, "fast", fast),
-  ];
+  const changes: OptionChange[] = [];
+  if (plan.parameters) {
+    const { effort, thinking, fast } = plan.parameters;
+    changes.push(
+      effort ? effortChange(options, effort) : undefined,
+      booleanChange(options, "thinking", thinking),
+      booleanChange(options, "fast", fast),
+    );
+  }
+  if (plan.context) changes.push(contextChange(options, plan.context));
   for (const change of changes) {
     if (!change) continue;
     if ("problem" in change) {
@@ -552,7 +611,7 @@ function describePlan(plan: AcpModelPlan): string {
     case "passthrough":
       return `passthrough ${plan.modelId}`;
     default:
-      return `${plan.action} ${plan.modelId}${plan.parameters ? ` ${JSON.stringify(plan.parameters)}` : ""}`;
+      return `${plan.action} ${plan.modelId}${plan.parameters ? ` ${JSON.stringify(plan.parameters)}` : ""}${plan.context ? ` context=${plan.context}` : ""}`;
   }
 }
 

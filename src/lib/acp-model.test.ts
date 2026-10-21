@@ -89,33 +89,45 @@ async function simulate(
   };
 }
 
-const ISSUE_57_IDS: Array<[id: string, model: string, values: Record<string, string>]> = [
-  ["claude-4.6-sonnet-medium", "claude-sonnet-4-6", { thinking: "false", effort: "medium" }],
-  ["claude-4.6-sonnet-medium-thinking", "claude-sonnet-4-6", { thinking: "true", effort: "medium" }],
-  ["claude-4.6-opus-high", "claude-opus-4-6", { thinking: "false", effort: "high" }],
-  ["claude-4.6-opus-max", "claude-opus-4-6", { thinking: "false", effort: "max" }],
-  ["claude-4.6-opus-high-thinking", "claude-opus-4-6", { thinking: "true", effort: "high" }],
-  ["claude-4.6-opus-max-thinking", "claude-opus-4-6", { thinking: "true", effort: "max" }],
-  ["claude-4.5-opus-high", "claude-opus-4-5", { thinking: "false" }],
-  ["claude-4.5-opus-high-thinking", "claude-opus-4-5", { thinking: "true" }],
-  ["claude-4.5-sonnet-thinking", "claude-sonnet-4-5", { thinking: "true" }],
-  ["claude-4-sonnet-thinking", "claude-sonnet-4", { thinking: "true" }],
+/** Whether the captured family row offers `configId=value`. */
+function offers(family: string, configId: string, value: string): boolean {
+  return (catalog.familyOptions[family] ?? []).some(
+    (option) =>
+      option.id === configId &&
+      (option.options ?? []).some((item) => item.value === value),
+  );
+}
+
+/** Issue #57 ids; the "1M" ones also get the context their name says (#73). */
+const ISSUE_57_IDS: Array<
+  [id: string, model: string, values: Record<string, string>, calls: string[]]
+> = [
+  ["claude-4.6-sonnet-medium", "claude-sonnet-4-6", { thinking: "false", effort: "medium", context: "1m" }, ["context=1m"]],
+  ["claude-4.6-sonnet-medium-thinking", "claude-sonnet-4-6", { thinking: "true", effort: "medium", context: "1m" }, ["context=1m"]],
+  ["claude-4.6-opus-high", "claude-opus-4-6", { thinking: "false", effort: "high", context: "1m" }, ["context=1m"]],
+  ["claude-4.6-opus-max", "claude-opus-4-6", { thinking: "false", effort: "max", context: "1m" }, ["context=1m"]],
+  ["claude-4.6-opus-high-thinking", "claude-opus-4-6", { thinking: "true", effort: "high", context: "1m" }, ["context=1m"]],
+  ["claude-4.6-opus-max-thinking", "claude-opus-4-6", { thinking: "true", effort: "max", context: "1m" }, ["context=1m"]],
+  ["claude-4.5-opus-high", "claude-opus-4-5", { thinking: "false" }, []],
+  ["claude-4.5-opus-high-thinking", "claude-opus-4-5", { thinking: "true" }, []],
+  ["claude-4.5-sonnet-thinking", "claude-sonnet-4-5", { thinking: "true" }, []],
+  ["claude-4-sonnet-thinking", "claude-sonnet-4", { thinking: "true" }, []],
 ];
 
 describe("decideAcpModel with the real ACP catalog", () => {
   it.each(ISSUE_57_IDS)(
     "keeps the CLI's row for %s (issue #57)",
-    async (id, model, values) => {
+    async (id, model, values, calls) => {
       const plan = decideAcpModel(id, realSession(id), aliases(id));
       expect(plan).toMatchObject({ action: "keep", modelId: model });
       const final = await simulate(id, plan);
-      expect(final.calls).toEqual([]);
+      expect(final.calls).toEqual(calls);
       expect(final.model).toBe(model);
       expect(final.values).toMatchObject(values);
     },
   );
 
-  it("resolves every listed public id to the model and options the CLI selected", async () => {
+  it("resolves every listed public id to the CLI's model and options, with 1M context where the name says 1M", async () => {
     const failures: string[] = [];
     for (const id of publicIds) {
       const session = realSession(id);
@@ -130,13 +142,17 @@ describe("decideAcpModel with the real ACP catalog", () => {
       }
       try {
         const final = await simulate(id, plan);
-        const cliModel = session.models!.currentModelId;
+        const cliModel = session.models!.currentModelId!;
         if (final.model !== cliModel) {
           failures.push(`${id}: ${final.model} != ${cliModel}`);
         }
-        for (const [configId, cli] of Object.entries(catalog.sessions[id]!.values)) {
-          if (final.values[configId] !== cli) {
-            failures.push(`${id}: ${configId}=${final.values[configId]} != ${cli}`);
+        const expected = { ...catalog.sessions[id]!.values };
+        if (/\b1M\b/.test(catalog.listModels[id]!) && offers(cliModel, "context", "1m")) {
+          expected.context = "1m";
+        }
+        for (const [configId, want] of Object.entries(expected)) {
+          if (final.values[configId] !== want) {
+            failures.push(`${id}: ${configId}=${final.values[configId]} != ${want}`);
           }
         }
       } catch (error) {
@@ -159,7 +175,7 @@ describe("decideAcpModel with the real ACP catalog", () => {
         return {};
       },
     );
-    expect(calls).toEqual(["effort=medium"]);
+    expect(calls).toEqual(["effort=medium", "context=1m"]);
   });
 
   it("skips an option the CLI-selected row does not offer", async () => {
@@ -207,6 +223,69 @@ describe("decideAcpModel with the real ACP catalog", () => {
     );
     expect(plan.action).toBe("missing");
     expect(calls).toEqual([]);
+  });
+});
+
+describe("context size from the id or display name (issue #73)", () => {
+  /** Strict configure; set_config_option(model) answers with `configOptions`. */
+  async function configure(
+    id: string,
+    session: AcpSessionModelState,
+    configOptions: AcpConfigOption[] = [],
+  ): Promise<{ plan: AcpModelPlan; calls: string[] }> {
+    const calls: string[] = [];
+    const plan = await configureAcpSessionModel(
+      { model: id, modelAliases: aliases(id), strictModel: true },
+      session,
+      async (configId, value) => {
+        calls.push(`${configId}=${value}`);
+        return { configOptions };
+      },
+    );
+    return { plan, calls };
+  }
+
+  it.each([
+    ["claude-opus-5-5-medium", "Claude Opus 5.5 1M", "claude-opus-5-5", "1m", ["model=claude-opus-5-5", "context=1m"]],
+    ["gpt-5.5-medium", "GPT-5.5 1M", "gpt-5.5", "1m", ["model=gpt-5.5", "context=1m"]],
+    ["gpt-5.5-medium-fast", "GPT-5.5 Fast", "gpt-5.5", "272k", ["model=gpt-5.5"]],
+    ["claude-sonnet-5-5-medium", "Claude Sonnet 5.5  Medium", "claude-sonnet-5-5", "300k", ["model=claude-sonnet-5-5"]],
+  ])("sets %s (%s) on %s with context=%s", async (id, name, model, context, calls) => {
+    expect(aliases(id)).toEqual([name]);
+    const final = await simulate(id, decideAcpModel(id, realSession(id), aliases(id)));
+    expect(final).toMatchObject({ model, calls });
+    expect(final.values.context).toBe(context);
+  });
+
+  it("reads the size from the requested id too", () => {
+    expect(decideAcpModel("claude-opus-4-6-1m", realSession("claude-4.6-opus-high"))).toEqual({
+      action: "keep",
+      modelId: "claude-opus-4-6",
+      context: "1m",
+    });
+  });
+
+  it("leaves the context alone when the CLI's row does not offer 1m", async () => {
+    const id = "claude-4.6-sonnet-medium";
+    const session = realSession(id);
+    session.configOptions!.find((option) => option.id === "context")!.options = [
+      { value: "200k" },
+    ];
+    const { plan, calls } = await configure(id, session);
+    expect(plan).toMatchObject({ action: "keep", context: "1m" });
+    expect(calls).toEqual([]);
+  });
+
+  it("leaves the context alone when the matched row has no context option", async () => {
+    const id = "claude-opus-5-5-medium";
+    const session = realSession(id);
+    const { plan, calls } = await configure(
+      id,
+      session,
+      session.configOptions!.filter((option) => option.id !== "context"),
+    );
+    expect(plan).toMatchObject({ action: "set", modelId: "claude-opus-5-5", context: "1m" });
+    expect(calls).toEqual(["model=claude-opus-5-5"]);
   });
 });
 
@@ -290,12 +369,12 @@ describe("ACP client and tool paths", () => {
     expect(await toolPath(id)).toEqual(client);
   });
 
-  it("keep the CLI's selection for claude-4.6-sonnet-medium", async () => {
+  it("keep the CLI's row for claude-4.6-sonnet-medium and set its 1M context", async () => {
     expect(await clientPath("claude-4.6-sonnet-medium")).toEqual({
       ok: true,
       model: "claude-sonnet-4-6",
-      values: { thinking: "false", context: "200k", effort: "medium" },
-      calls: [],
+      values: { thinking: "false", context: "1m", effort: "medium" },
+      calls: ["context=1m"],
     });
   });
 

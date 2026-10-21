@@ -90,12 +90,14 @@ async function post(base: string, path: string, body: Record<string, unknown>) {
 }
 
 describe.each([false, true])("ACP model selection over HTTP, stream=%s", (stream) => {
-  it.each(requests)("%s runs on the model the CLI selected", async (path, body) => {
+  it.each(requests)("%s runs on the model the CLI selected, at 1M context", async (path, body) => {
     const base = await start();
     const response = await post(base, path, { ...body, stream });
     expect(response.status).toBe(200);
     // The fake CLI answers with the selection the turn ran on.
     expect(response.text).toContain("claude-sonnet-4-6");
+    // Issue #73: the "1M" display name reaches the model decision.
+    expect(response.text).toContain("context=1m");
     expect(response.text).not.toContain("cursor_cli_error");
   });
 
