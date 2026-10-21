@@ -95,14 +95,6 @@ export type AcpConnectionOptions = AcpSpawnOptions & {
     params: AcpPermissionParams,
   ) => string | undefined | Promise<string | undefined>;
   /**
-   * Answer a `cursor/*` extension request. Return undefined to send the
-   * documented default (first option, plan accepted, empty result).
-   */
-  onExtensionRequest?: (
-    method: string,
-    params: Record<string, unknown>,
-  ) => Record<string, unknown> | undefined;
-  /**
    * Log the CLI's output tail when the child exits on its own (default
    * true). Callers that log AcpChildExitError.diagnostics themselves turn
    * it off.
@@ -226,33 +218,64 @@ export function extractAcpUpdateText(content: unknown): string {
     .join("");
 }
 
-/** Documented answers (cursor.com/docs/cli/acp) for blocking cursor/* requests. */
-function defaultExtensionResponse(
+/**
+ * cursor/* methods the CLI sends as requests but documents as notifications:
+ * it ignores the reply, so they need no answer beyond an empty result.
+ */
+const CURSOR_PROGRESS_REQUESTS = new Set([
+  "cursor/update_todos",
+  "cursor/task",
+  "cursor/generate_image",
+]);
+
+/** The CLI hands this to the agent as the reason its questions went unanswered. */
+const NO_USER_TO_ASK =
+  "No interactive user is available to answer; proceed with your best judgement and state your assumptions.";
+
+/** `id "prompt"` for each question, for the server log. */
+function describeQuestions(questions: unknown): string {
+  if (!Array.isArray(questions) || questions.length === 0) {
+    return "(no questions)";
+  }
+  return questions
+    .map((question) => {
+      const { id, prompt } = (question ?? {}) as { id?: unknown; prompt?: unknown };
+      const label = typeof id === "string" ? id : "(no id)";
+      return typeof prompt === "string" ? `${label} ${JSON.stringify(prompt)}` : label;
+    })
+    .join(", ");
+}
+
+/**
+ * Answer Cursor's own requests in the shapes documented at
+ * cursor.com/docs/cli/acp, on both ACP paths. Nobody can answer a turn
+ * interactively, so questions are skipped with a reason that tells the
+ * agent to go on with its own judgement (choosing an option would invent
+ * the user's decision), and a plan is accepted (the CLI then saves it to
+ * ~/.cursor/plans itself).
+ */
+function answerCursorRequest(
   method: string,
   params: Record<string, unknown>,
 ): Record<string, unknown> {
   if (method === "cursor/ask_question") {
-    const questions = Array.isArray(params.questions)
-      ? (params.questions as Array<Record<string, unknown>>)
-      : [];
-    return {
-      outcome: {
-        outcome: "answered",
-        answers: questions.map((question) => {
-          const options = Array.isArray(question.options)
-            ? (question.options as Array<Record<string, unknown>>)
-            : [];
-          return {
-            questionId: String(question.id ?? ""),
-            selectedOptionIds:
-              options.length > 0 ? [String(options[0]?.id ?? "")] : [],
-          };
-        }),
-      },
-    };
+    console.warn(
+      "[cursor-api-proxy:acp] cursor/ask_question skipped, no interactive user to answer: %s",
+      describeQuestions(params.questions),
+    );
+    return { outcome: { outcome: "skipped", reason: NO_USER_TO_ASK } };
   }
   if (method === "cursor/create_plan") {
+    debugAcp("cursor/create_plan: accepting the plan");
     return { outcome: { outcome: "accepted" } };
+  }
+  if (CURSOR_PROGRESS_REQUESTS.has(method)) {
+    debugAcp("%s: acknowledged", method);
+  } else {
+    console.warn(
+      "[cursor-api-proxy:acp] auto-responding to unknown %s with empty result",
+      method,
+    );
   }
   return {};
 }
@@ -566,11 +589,9 @@ export class AcpConnection {
     }
 
     if (message.id != null && message.method?.startsWith("cursor/")) {
-      const params = message.params ?? {};
       this.#respond(
         message.id,
-        this.#opts.onExtensionRequest?.(message.method, params) ??
-          defaultExtensionResponse(message.method, params),
+        answerCursorRequest(message.method, message.params ?? {}),
       );
     }
   }
