@@ -154,7 +154,6 @@ export function extractAcpUpdateText(
 
 /**
  * Handle ACP server→client notifications (session/update chunks, permissions, cursor/*).
- * Returns true if the message was consumed as a notification.
  *
  * Thought and message are separate channels: callers must not mix them into content.
  */
@@ -165,7 +164,7 @@ function handleAcpNotification(
     onAgentTextChunk?: (text: string) => void;
     onAgentThoughtChunk?: (text: string) => void;
   },
-): boolean {
+): void {
   if (msg.method === "session/update") {
     const update = (msg.params?.update ?? msg.params) as {
       sessionUpdate?: string;
@@ -194,7 +193,7 @@ function handleAcpNotification(
         }),
       );
     }
-    return true;
+    return;
   }
 
   if (msg.method === "session/request_permission") {
@@ -203,7 +202,7 @@ function handleAcpNotification(
         outcome: { outcome: "selected", optionId: "reject-once" },
       });
     }
-    return true;
+    return;
   }
 
   if (msg.id != null && msg.method && opts.stdin) {
@@ -228,11 +227,8 @@ function handleAcpNotification(
         );
         respond(opts.stdin, msg.id, {});
       }
-      return true;
     }
   }
-
-  return false;
 }
 
 function appendAcpFailure(stderr: string, error: unknown): string {

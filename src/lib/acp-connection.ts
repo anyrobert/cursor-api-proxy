@@ -247,10 +247,6 @@ export class AcpConnection {
     return this.#stderr.trim();
   }
 
-  get closed(): boolean {
-    return this.#closed;
-  }
-
   async initialize(): Promise<AcpInitializeResult> {
     debugAcp("ACP step: initialize");
     return (await this.request("initialize", {
@@ -304,7 +300,7 @@ export class AcpConnection {
     );
   }
 
-  notify(method: string, params: Record<string, unknown>): void {
+  #notify(method: string, params: Record<string, unknown>): void {
     const stdin = this.child.stdin;
     if (!stdin || this.#closed) return;
     stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
@@ -345,7 +341,7 @@ export class AcpConnection {
   }
 
   async cancelSession(sessionId: string): Promise<void> {
-    this.notify("session/cancel", { sessionId });
+    this.#notify("session/cancel", { sessionId });
   }
 
   async close(signal: NodeJS.Signals = "SIGKILL"): Promise<void> {
