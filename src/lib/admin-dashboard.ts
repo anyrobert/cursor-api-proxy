@@ -1,4 +1,4 @@
-import { execSync, spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
@@ -72,13 +72,22 @@ function serveFile(res: http.ServerResponse, filePath: string): void {
   });
 }
 
-function launchdLoadedSync(): boolean {
-  try {
-    const out = execSync("launchctl list 2>/dev/null", { encoding: "utf8" });
-    return out.split("\n").some((l) => l.trim().endsWith(PLIST_LABEL));
-  } catch {
-    return false;
-  }
+const LAUNCHCTL_TIMEOUT_MS = 2_000;
+
+// /api/status is polled every few seconds by each open dashboard, so the
+// launchctl probe runs async: a blocking exec here would stall the event
+// loop, and every in-flight completion stream with it, on each poll.
+function checkLaunchdLoaded(cb: (loaded: boolean) => void): void {
+  if (process.platform !== "darwin") return cb(false);
+  execFile(
+    "launchctl",
+    ["list"],
+    { encoding: "utf8", timeout: LAUNCHCTL_TIMEOUT_MS },
+    (err, stdout) => {
+      if (err) return cb(false);
+      cb(stdout.split("\n").some((l) => l.trim().endsWith(PLIST_LABEL)));
+    },
+  );
 }
 
 function storagePaths(config: BridgeConfig) {
@@ -131,31 +140,32 @@ function getStatus(
 
   const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
   const plistPath = path.join(home, "Library/LaunchAgents", `${PLIST_LABEL}.plist`);
-  const launchdLoaded = process.platform === "darwin" ? launchdLoadedSync() : false;
 
   const env = process.env;
-  cb({
-    running,
-    pid,
-    port: config.port,
-    host: config.host,
-    version,
-    uptimeSeconds: Math.floor((Date.now() - START_TIME) / 1000),
-    launchdLoaded,
-    plistPath,
-    packageRoot: root,
-    publicDir,
-    docsDir,
-    storageDir,
-    sessionsLogPath: config.sessionsLogPath,
-    serviceLog,
-    pidFile,
-    apiKeyConfigured: Boolean(env.CURSOR_API_KEY ?? env.CURSOR_AUTH_TOKEN),
-    bridgeApiKeyRequired: Boolean(config.requiredKey),
-    node: process.version,
-    platform: `${process.platform} ${process.arch}`,
-    startedAt: new Date(START_TIME).toISOString(),
-  });
+  checkLaunchdLoaded((launchdLoaded) =>
+    cb({
+      running,
+      pid,
+      port: config.port,
+      host: config.host,
+      version,
+      uptimeSeconds: Math.floor((Date.now() - START_TIME) / 1000),
+      launchdLoaded,
+      plistPath,
+      packageRoot: root,
+      publicDir,
+      docsDir,
+      storageDir,
+      sessionsLogPath: config.sessionsLogPath,
+      serviceLog,
+      pidFile,
+      apiKeyConfigured: Boolean(env.CURSOR_API_KEY ?? env.CURSOR_AUTH_TOKEN),
+      bridgeApiKeyRequired: Boolean(config.requiredKey),
+      node: process.version,
+      platform: `${process.platform} ${process.arch}`,
+      startedAt: new Date(START_TIME).toISOString(),
+    }),
+  );
 }
 
 function sanitizedBridgeConfig(config: BridgeConfig): Record<string, unknown> {
