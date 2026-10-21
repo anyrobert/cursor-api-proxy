@@ -264,7 +264,6 @@ export async function handleAnthropicMessages(
   try {
     const parsedTools = parseAnthropicFunctionTools(body.tools);
     const choice = resolveToolChoice(parsedTools, body.tool_choice, {
-      anthropic: true,
       parallelToolCalls:
         body.tool_choice?.disable_parallel_tool_use === true
           ? false

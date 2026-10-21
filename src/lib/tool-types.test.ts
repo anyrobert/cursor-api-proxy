@@ -198,9 +198,9 @@ describe("tool normalization", () => {
     expect(() => resolveToolChoice(builtinsOnly, "required")).toThrow(
       /tool_choice "required" requires a tool call, but the request has no callable function tools/,
     );
-    expect(() =>
-      resolveToolChoice([], { type: "any" }, { anthropic: true }),
-    ).toThrow(/tool_choice "any" requires a tool call/);
+    expect(() => resolveToolChoice([], { type: "any" })).toThrow(
+      /tool_choice "any" requires a tool call/,
+    );
     expect(resolveToolChoice(builtinsOnly, "auto").tools).toEqual([]);
     expect(resolveToolChoice(builtinsOnly, "none").tools).toEqual([]);
   });

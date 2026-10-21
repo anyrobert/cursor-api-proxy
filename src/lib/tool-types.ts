@@ -237,7 +237,7 @@ function namedChoice(choice: unknown): string | undefined {
 export function resolveToolChoice(
   tools: readonly ClientToolDefinition[],
   choice: unknown,
-  opts: { parallelToolCalls?: boolean; anthropic?: boolean } = {},
+  opts: { parallelToolCalls?: boolean } = {},
 ): ResolvedToolChoice {
   if (choice === "none" || asRecord(choice)?.type === "none") {
     return { tools: [], required: false };

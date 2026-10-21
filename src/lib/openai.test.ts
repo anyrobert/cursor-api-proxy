@@ -297,8 +297,7 @@ describe("toolsToSystemText", () => {
     ).toBeUndefined();
     expect(
       toolsToSystemText(
-        resolveToolChoice(anthropic, { type: "none" }, { anthropic: true })
-          .tools,
+        resolveToolChoice(anthropic, { type: "none" }).tools,
       ),
     ).toBeUndefined();
     expect(
@@ -314,11 +313,8 @@ describe("toolsToSystemText", () => {
     expect(
       functionLines(
         toolsToSystemText(
-          resolveToolChoice(
-            anthropic,
-            { type: "tool", name: "get_weather" },
-            { anthropic: true },
-          ).tools,
+          resolveToolChoice(anthropic, { type: "tool", name: "get_weather" })
+            .tools,
         ),
       ),
     ).toEqual(["Function: get_weather"]);
