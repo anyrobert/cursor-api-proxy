@@ -154,10 +154,6 @@ export class AcpToolSession {
     return this.bridge.has(callId);
   }
 
-  pendingCalls(): PendingClientToolCall[] {
-    return this.bridge.pendingCalls();
-  }
-
   async collect(
     listener?: (event: ToolTurnEvent) => void,
   ): Promise<ToolTurnResult> {

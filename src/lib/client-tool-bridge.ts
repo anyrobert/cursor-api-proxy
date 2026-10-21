@@ -222,12 +222,6 @@ export class ClientToolBridge {
     return [...this.#pending.values()].map(pendingView);
   }
 
-  unexposedCalls(): PendingClientToolCall[] {
-    return [...this.#pending.values()]
-      .filter((call) => !call.exposed)
-      .map(pendingView);
-  }
-
   markExposed(callIds: readonly string[]): void {
     for (const callId of callIds) {
       const call = this.#pending.get(callId);
