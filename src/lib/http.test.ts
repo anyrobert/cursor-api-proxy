@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Readable } from "node:stream";
 import { IncomingMessage, ServerResponse } from "node:http";
 import {
-  extractBearerToken,
+  extractApiKey,
   json,
   readBody,
   setDefaultSseKeepaliveIntervalMsForTests,
@@ -20,30 +20,62 @@ function mockRequestBody(body: string): IncomingMessage {
   return Object.assign(stream, { headers: {} }) as IncomingMessage;
 }
 
-describe("extractBearerToken", () => {
+describe("extractApiKey", () => {
   it("returns token when Authorization header has Bearer prefix", () => {
     const req = mockRequest({ authorization: "Bearer sk-abc123" });
-    expect(extractBearerToken(req)).toBe("sk-abc123");
+    expect(extractApiKey(req)).toBe("sk-abc123");
   });
 
   it("is case-insensitive for Bearer", () => {
     const req = mockRequest({ authorization: "bearer sk-xyz789" });
-    expect(extractBearerToken(req)).toBe("sk-xyz789");
+    expect(extractApiKey(req)).toBe("sk-xyz789");
   });
 
-  it("returns undefined when Authorization header is missing", () => {
+  it("returns undefined when no key header is sent", () => {
     const req = mockRequest({});
-    expect(extractBearerToken(req)).toBeUndefined();
+    expect(extractApiKey(req)).toBeUndefined();
   });
 
   it("returns undefined when Authorization is not Bearer", () => {
     const req = mockRequest({ authorization: "Basic dXNlcjpwYXNz" });
-    expect(extractBearerToken(req)).toBeUndefined();
+    expect(extractApiKey(req)).toBeUndefined();
   });
 
   it("handles array Authorization header", () => {
     const req = mockRequest({ authorization: ["Bearer token-from-array"] });
-    expect(extractBearerToken(req)).toBe("token-from-array");
+    expect(extractApiKey(req)).toBe("token-from-array");
+  });
+
+  it("returns undefined for an empty Authorization array", () => {
+    const req = mockRequest({ authorization: [] });
+    expect(extractApiKey(req)).toBeUndefined();
+  });
+
+  // Issue #102: Anthropic SDKs send the key as x-api-key.
+  it("returns the x-api-key header", () => {
+    const req = mockRequest({ "x-api-key": "sk-ant-123" });
+    expect(extractApiKey(req)).toBe("sk-ant-123");
+  });
+
+  it("returns x-api-key when Authorization is not Bearer", () => {
+    const req = mockRequest({
+      authorization: "Basic dXNlcjpwYXNz",
+      "x-api-key": "sk-ant-123",
+    });
+    expect(extractApiKey(req)).toBe("sk-ant-123");
+  });
+
+  it("prefers the Bearer token when both headers are sent", () => {
+    const req = mockRequest({
+      authorization: "Bearer sk-bearer",
+      "x-api-key": "sk-ant-123",
+    });
+    expect(extractApiKey(req)).toBe("sk-bearer");
+  });
+
+  it("treats an empty x-api-key as no key", () => {
+    const req = mockRequest({ "x-api-key": "" });
+    expect(extractApiKey(req)).toBeUndefined();
   });
 });
 

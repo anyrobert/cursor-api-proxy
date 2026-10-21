@@ -111,6 +111,7 @@ export function openAiErrorBody(failure: AgentFailure) {
 
 function anthropicErrorType(status: number): string {
   if (status >= 500) return "api_error";
+  if (status === 401) return "authentication_error";
   if (status === 429) return "rate_limit_error";
   return "invalid_request_error";
 }

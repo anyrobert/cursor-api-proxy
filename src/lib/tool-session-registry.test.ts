@@ -1,9 +1,11 @@
+import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 
 import type { AcpToolSession } from "./acp-tool-session.js";
 import {
   ToolSessionError,
   ToolSessionRegistry,
+  toolSessionOwnerKey,
 } from "./tool-session-registry.js";
 
 /**
@@ -61,6 +63,27 @@ async function settled(promise: Promise<unknown>): Promise<boolean> {
   await new Promise((resolve) => setImmediate(resolve));
   return done;
 }
+
+describe("toolSessionOwnerKey (#102)", () => {
+  const owner = (headers: IncomingHttpHeaders, remoteAddress = "10.0.0.1") =>
+    toolSessionOwnerKey({ headers } as IncomingMessage, remoteAddress);
+
+  it("keys an owner by its API key, whichever header carries it", () => {
+    expect(owner({ "x-api-key": "key-a" }, "10.0.0.1")).toBe(
+      owner({ authorization: "Bearer key-a" }, "10.0.0.2"),
+    );
+  });
+
+  it("tells clients with different x-api-key values apart", () => {
+    expect(owner({ "x-api-key": "key-a" })).not.toBe(owner({ "x-api-key": "key-b" }));
+  });
+
+  it("keys a client without an API key by its remote address", () => {
+    expect(owner({}, "10.0.0.1")).toBe(owner({}, "10.0.0.1"));
+    expect(owner({}, "10.0.0.1")).not.toBe(owner({}, "10.0.0.2"));
+    expect(owner({}, "10.0.0.1")).not.toBe(owner({ "x-api-key": "10.0.0.1" }));
+  });
+});
 
 describe("ToolSessionRegistry.closeAll (#90)", () => {
   it("closes parked sessions and waits for every teardown", async () => {

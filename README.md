@@ -64,7 +64,7 @@ To expose on your network (e.g. Tailscale):
 npx cursor-api-proxy --tailscale
 ```
 
-By default the server listens on http://127.0.0.1:8765. Set `CURSOR_BRIDGE_API_KEY` to require `Authorization: Bearer <key>` on requests.
+By default the server listens on http://127.0.0.1:8765. Set `CURSOR_BRIDGE_API_KEY` to require that key on requests, sent as `Authorization: Bearer <key>` (OpenAI SDKs) or `x-api-key: <key>` (Anthropic SDKs). A missing or wrong key gets a `401` in the error shape of the API that was called. `/healthz` and the dashboard need no key.
 
 ### HTTPS with Tailscale (MagicDNS)
 
@@ -279,7 +279,7 @@ One module resolves aliases, defaults, path resolution, platform fallbacks, and 
 |----------|---------|-------------|
 | `CURSOR_BRIDGE_HOST` | `127.0.0.1` | Bind address |
 | `CURSOR_BRIDGE_PORT` | `8765` | Port |
-| `CURSOR_BRIDGE_API_KEY` | — | If set, require `Authorization: Bearer <key>` on requests |
+| `CURSOR_BRIDGE_API_KEY` | — | If set, require this key on requests, as `Authorization: Bearer <key>` or `x-api-key: <key>`. When a request sends both, the Bearer token is the key. `/healthz` and the dashboard need no key. |
 | `CURSOR_API_KEY` / `CURSOR_AUTH_TOKEN` | — | Cursor access token passed to spawned CLI/ACP children (automation, headless). Same value can be used for both names. |
 | `CURSOR_BRIDGE_WORKSPACE` | process cwd | Base workspace directory for Cursor CLI. With `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=false`, header `X-Cursor-Workspace` must point to an existing directory under this path (after resolving real paths), or the request fails with `400` `invalid_workspace`. |
 | `CURSOR_BRIDGE_MODE` | — | Server default for Cursor CLI `--mode`: `agent`, `ask`, or `plan`. If unset, default is `ask`. Env wins over CLI `--mode` when both are set. Per request, JSON body `mode` or header `X-Cursor-Mode` overrides (precedence: body → header → DSH auto-mode → this env → `--mode` → `ask`). Invalid value → startup error. With `agent` (or `plan`) and real workspace, the CLI may read/write files under `CURSOR_BRIDGE_WORKSPACE` / cwd. See `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE`. |
