@@ -27,7 +27,11 @@ import {
 } from "../request-log.js";
 import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
-import { removeChatOnlyTempDir, resolveWorkspace } from "../workspace.js";
+import {
+  removeChatOnlyTempDir,
+  resolveWorkspace,
+  WorkspaceError,
+} from "../workspace.js";
 import { sanitizeMessages, sanitizeSystem } from "../sanitize.js";
 import { getNextAccountConfigDir } from "../account-pool.js";
 import {
@@ -494,9 +498,11 @@ export async function handleAnthropicMessages(
     const ws = resolveWorkspace(config, headerWs, effectiveChatOnly);
     workspaceDir = ws.workspaceDir;
     tempDir = ws.tempDir;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Invalid workspace";
-    rejectRequest(res, 400, msg, "invalid_workspace");
+  } catch (error) {
+    // Anything else is the proxy's fault: the request listener answers it
+    // as a 500 and logs the detail.
+    if (!(error instanceof WorkspaceError)) throw error;
+    rejectRequest(res, 400, error.message, "invalid_workspace");
     return;
   }
 

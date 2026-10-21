@@ -178,6 +178,7 @@ With `CURSOR_BRIDGE_USE_ACP=true`, images are forwarded to the model as native A
 - `data:` URLs and public `https://` URLs on port 443. Remote URLs that resolve to loopback, private, link-local, or other non-public addresses are rejected, every redirect is re-checked, and downloads are capped at 10 MiB per image (40 MiB per video) with a 30 s deadline.
 - PNG, JPEG, WebP, and GIF images. MP4, QuickTime, and WebM video is sampled into up to 3 frames (about 5 s apart), which needs `ffmpeg` on the proxy host (included in the Docker image).
 - At most 12 images per request, newest first; each video counts as 3. Older images in the history become text placeholders, so long conversations keep working. Only a latest message that cannot fit on its own returns `422`.
+- Media the proxy cannot use (an unsupported type, a source that is too large or cannot be fetched, a video that does not decode) returns `422` `unsupported_media` with the reason. A failure on the proxy host itself, such as a temp directory it cannot create, returns `500` `internal_error`; the detail goes to the server log only.
 
 Without ACP, media stays a text placeholder in the prompt and the proxy logs a warning; the request still succeeds.
 
@@ -280,7 +281,7 @@ One module resolves aliases, defaults, path resolution, platform fallbacks, and 
 | `CURSOR_BRIDGE_PORT` | `8765` | Port |
 | `CURSOR_BRIDGE_API_KEY` | — | If set, require `Authorization: Bearer <key>` on requests |
 | `CURSOR_API_KEY` / `CURSOR_AUTH_TOKEN` | — | Cursor access token passed to spawned CLI/ACP children (automation, headless). Same value can be used for both names. |
-| `CURSOR_BRIDGE_WORKSPACE` | process cwd | Base workspace directory for Cursor CLI. With `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=false`, header `X-Cursor-Workspace` must point to an existing directory under this path (after resolving real paths). |
+| `CURSOR_BRIDGE_WORKSPACE` | process cwd | Base workspace directory for Cursor CLI. With `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE=false`, header `X-Cursor-Workspace` must point to an existing directory under this path (after resolving real paths), or the request fails with `400` `invalid_workspace`. |
 | `CURSOR_BRIDGE_MODE` | — | Server default for Cursor CLI `--mode`: `agent`, `ask`, or `plan`. If unset, default is `ask`. Env wins over CLI `--mode` when both are set. Per request, JSON body `mode` or header `X-Cursor-Mode` overrides (precedence: body → header → DSH auto-mode → this env → `--mode` → `ask`). Invalid value → startup error. With `agent` (or `plan`) and real workspace, the CLI may read/write files under `CURSOR_BRIDGE_WORKSPACE` / cwd. See `CURSOR_BRIDGE_CHAT_ONLY_WORKSPACE`. |
 | `CURSOR_BRIDGE_DSH_AUTO_MODE` | `false` | When enabled, requests whose system/developer content contains the DSH system marker use Cursor `plan` while the plan marker is present and `agent` otherwise. Ordinary user content is never inspected. Explicit body/header modes still win. |
 | `CURSOR_BRIDGE_DSH_SYSTEM_MARKER` | `You are an AI agent powered by DeepSeek Harness.` | Exact substring identifying trusted DSH-owned system/developer content for auto-mode. |

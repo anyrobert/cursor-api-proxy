@@ -34,7 +34,11 @@ import {
 import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
 import { sanitizeMessages } from "../sanitize.js";
-import { removeChatOnlyTempDir, resolveWorkspace } from "../workspace.js";
+import {
+  removeChatOnlyTempDir,
+  resolveWorkspace,
+  WorkspaceError,
+} from "../workspace.js";
 import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
@@ -756,13 +760,11 @@ export async function handleResponses(
     { useAcp: config.useAcp, resumesToolSession: resuming },
   );
   if (!media.ok) {
-    json(res, 422, {
-      error: {
-        message: media.error,
-        code: "unsupported_media",
-        type: "invalid_request_error",
-      },
-    });
+    json(
+      res,
+      422,
+      openAiErrorBody({ status: 422, code: "unsupported_media", message: media.error }),
+    );
     return;
   }
   const mediaBlocks = media.blocks;
@@ -905,9 +907,15 @@ export async function handleResponses(
     const ws = resolveWorkspace(config, headerWs, effectiveChatOnly);
     workspaceDir = ws.workspaceDir;
     tempDir = ws.tempDir;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Invalid workspace";
-    json(res, 400, { error: { message: msg, code: "invalid_workspace" } });
+  } catch (error) {
+    // Anything else is the proxy's fault: the request listener answers it
+    // as a 500 and logs the detail.
+    if (!(error instanceof WorkspaceError)) throw error;
+    json(
+      res,
+      400,
+      openAiErrorBody({ status: 400, code: "invalid_workspace", message: error.message }),
+    );
     return;
   }
 
