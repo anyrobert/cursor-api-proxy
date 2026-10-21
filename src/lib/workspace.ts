@@ -85,17 +85,24 @@ export function linkMacKeychains(tempHome: string, realHome = os.homedir()): voi
   }
 }
 
-export function resolveWorkspace(
-  config: BridgeConfig,
-  workspaceHeader?: string | string[] | null,
-  effectiveChatOnly?: boolean,
-): WorkspaceResult {
-  const useChatOnly =
-    effectiveChatOnly !== undefined
-      ? effectiveChatOnly
-      : config.chatOnlyWorkspace;
-  if (useChatOnly) {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-proxy-"));
+/**
+ * Remove a chat-only request's isolation root. Whoever holds `tempDir` owns
+ * it: an agent runner removes it once its run settles, and a handler removes
+ * it itself on any path that returns before it hands the dir to a runner.
+ * `rmSync` unlinks the keychain link without following it.
+ */
+export function removeChatOnlyTempDir(tempDir: string | undefined): void {
+  if (!tempDir) return;
+  try {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  } catch {
+    /* best effort */
+  }
+}
+
+function createChatOnlyWorkspace(): Required<WorkspaceResult> {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-proxy-"));
+  try {
     const workspaceDir = path.join(tempDir, CHAT_ONLY_WORKSPACE);
     const homeDir = chatOnlyHomeDir(workspaceDir, tempDir);
     fs.mkdirSync(workspaceDir);
@@ -122,6 +129,29 @@ export function resolveWorkspace(
       linkMacKeychains(homeDir);
     }
     return { workspaceDir, tempDir };
+  } catch (error) {
+    removeChatOnlyTempDir(tempDir);
+    throw error;
+  }
+}
+
+/**
+ * The agent's workspace for one request. In chat-only mode this creates a
+ * fresh temp dir (`tempDir`) that the caller owns: hand it to an agent runner,
+ * which removes it when the run ends, or remove it with
+ * `removeChatOnlyTempDir` when returning without running the agent.
+ */
+export function resolveWorkspace(
+  config: BridgeConfig,
+  workspaceHeader?: string | string[] | null,
+  effectiveChatOnly?: boolean,
+): WorkspaceResult {
+  const useChatOnly =
+    effectiveChatOnly !== undefined
+      ? effectiveChatOnly
+      : config.chatOnlyWorkspace;
+  if (useChatOnly) {
+    return createChatOnlyWorkspace();
   }
   const headerWs =
     typeof workspaceHeader === "string" && workspaceHeader.trim()

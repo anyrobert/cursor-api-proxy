@@ -36,7 +36,7 @@ import {
 } from "../request-log.js";
 import { rememberResolvedModel, resolveModel } from "../resolve-model.js";
 import { resolveRequestMode } from "../resolve-mode.js";
-import { resolveWorkspace } from "../workspace.js";
+import { removeChatOnlyTempDir, resolveWorkspace } from "../workspace.js";
 import { buildBridgeContextPreamble, BRIDGE_AGENT_PROMPT_SEPARATOR } from "../bridge-context-preamble.js";
 import { sanitizeMessages } from "../sanitize.js";
 import { prepareRequestMedia } from "../media-input.js";
@@ -499,6 +499,7 @@ export async function handleChatCompletions(
     cwd: workspaceDir,
   });
   if (!fit.ok) {
+    removeChatOnlyTempDir(tempDir);
     json(res, 500, {
       error: {
         message: fit.error,
