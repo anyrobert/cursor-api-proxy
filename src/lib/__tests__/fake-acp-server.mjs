@@ -486,6 +486,20 @@ function isToolScenario() {
   return scenario.startsWith("tool_");
 }
 
+/**
+ * Fail like a CLI that rejects its flags or login: plain text on stdout and
+ * stderr, exit 1, no JSON-RPC reply. Exit only once both writes flushed.
+ */
+function failStartup() {
+  let unflushed = 2;
+  const exit = () => {
+    unflushed -= 1;
+    if (unflushed === 0) process.exit(1);
+  };
+  process.stdout.write("Error: Authentication required.\n", exit);
+  process.stderr.write("agent: unknown option '--bogus-flag'\n", exit);
+}
+
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   let msg;
@@ -523,6 +537,10 @@ rl.on("line", (line) => {
   }
 
   if (msg.method === "initialize") {
+    if (scenario === "start_failure") {
+      failStartup();
+      return;
+    }
     if (scenario === "closed_stdin_after_initialize") {
       // Close before acknowledging initialize, so the parent cannot write
       // session/new until the pipe reader is already gone.

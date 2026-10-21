@@ -118,6 +118,8 @@ function runAcpTurn(
       onAgentTextChunk: output.onText,
       onAgentThoughtChunk: output.onThought,
       onExtensionRequest: plainExtensionResponse,
+      // The diagnostics go back in `stderr`, which callers log (logAgentError).
+      logUnexpectedExit: false,
     });
 
     let settled = false;

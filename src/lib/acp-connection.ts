@@ -96,6 +96,12 @@ export type AcpConnectionOptions = AcpSpawnOptions & {
     method: string,
     params: Record<string, unknown>,
   ) => Record<string, unknown> | undefined;
+  /**
+   * Log the CLI's output tail when the child exits on its own (default
+   * true). Callers that log AcpChildExitError.diagnostics themselves turn
+   * it off.
+   */
+  logUnexpectedExit?: boolean;
 };
 
 export type AcpSessionOptions = AcpModelOptions & {
@@ -107,21 +113,24 @@ export type AcpSessionOptions = AcpModelOptions & {
 
 /**
  * The ACP child exited on its own (bad flag, auth failure, crash at startup)
- * while the proxy still needed it. `diagnostics` holds the CLI's stderr and
- * stdout noise for server logs.
+ * while the proxy still needed it. The message is safe to show clients;
+ * `diagnostics` (the CLI's stderr and stdout noise) is for server logs only.
  */
 export class AcpChildExitError extends Error {
   constructor(
     readonly exitCode: number,
     readonly diagnostics: string,
   ) {
-    super(`ACP child exited with code ${exitCode}`);
+    super(
+      `The Cursor agent process exited with code ${exitCode} before responding. See server logs for details.`,
+    );
     this.name = "AcpChildExitError";
   }
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 const MAX_STDOUT_NOISE = 4000;
+const MAX_LOGGED_DIAGNOSTICS = 4000;
 
 /** Updates the proxy consumes without needing their text, kept out of debug logs. */
 const QUIET_SESSION_UPDATES = new Set([
@@ -172,6 +181,17 @@ function describeAcpExit(
     out = appendAcpFailure(out, `ACP child exited with code ${code} before responding`);
   }
   return out;
+}
+
+/** Server-side record of an unexpected exit, as logAgentError keeps for CLI runs. */
+function logChildExit(exit: AcpChildExitError): void {
+  const output =
+    exit.diagnostics.length > MAX_LOGGED_DIAGNOSTICS
+      ? `…${exit.diagnostics.slice(-MAX_LOGGED_DIAGNOSTICS)}`
+      : exit.diagnostics || "(no output)";
+  console.error(
+    `[${new Date().toISOString()}] Agent error: Cursor ACP agent exited with code ${exit.exitCode}: ${output}`,
+  );
 }
 
 /** Extract the text payload from an ACP session/update `content` field. */
@@ -466,15 +486,20 @@ export class AcpConnection {
     if (unexpected) {
       // The CLI's helpers can outlive it inside its process group.
       killProcessTree(this.child, "SIGKILL");
-      this.#failure ??= new AcpChildExitError(
-        code,
-        describeAcpExit(
-          this.stderr,
-          this.#stdoutNoise,
+      // A spawn error, if any, stays the reported failure.
+      if (!this.#failure) {
+        const exit = new AcpChildExitError(
           code,
-          this.#pending.size > 0,
-        ),
-      );
+          describeAcpExit(
+            this.stderr,
+            this.#stdoutNoise,
+            code,
+            this.#pending.size > 0,
+          ),
+        );
+        if (this.#opts.logUnexpectedExit !== false) logChildExit(exit);
+        this.#failure = exit;
+      }
       this.#failPending(this.#failure);
     }
     this.#resolveExit(code);
