@@ -97,7 +97,6 @@ function anthropicToolUse(call: PendingClientToolCall) {
 }
 
 function structuredAnthropicResponse(opts: {
-  body: AnthropicMessagesRequest;
   id: string;
   model: string | undefined;
   result: ToolTurnResult;
@@ -134,7 +133,6 @@ function writeAnthropicEvent(
 
 async function writeStructuredAnthropicTurn(opts: {
   res: http.ServerResponse;
-  body: AnthropicMessagesRequest;
   stream: boolean;
   id: string;
   model: string | undefined;
@@ -149,7 +147,6 @@ async function writeStructuredAnthropicTurn(opts: {
       opts.res,
       200,
       structuredAnthropicResponse({
-        body: opts.body,
         id: opts.id,
         model: opts.model,
         result,
@@ -183,21 +180,18 @@ async function writeStructuredAnthropicTurn(opts: {
     let emittedText = "";
     const emit = (event: ToolTurnEvent) => {
       if (event.type !== "text") return;
-      if (event.type === "text") {
-        if (textIndex === undefined) {
-          textIndex = nextIndex++;
-          writeAnthropicEvent(opts.res, "content_block_start", {
-            index: textIndex,
-            content_block: { type: "text", text: "" },
-          });
-        }
-        emittedText += event.text;
-        writeAnthropicEvent(opts.res, "content_block_delta", {
+      if (textIndex === undefined) {
+        textIndex = nextIndex++;
+        writeAnthropicEvent(opts.res, "content_block_start", {
           index: textIndex,
-          delta: { type: "text_delta", text: event.text },
+          content_block: { type: "text", text: "" },
         });
-        return;
       }
+      emittedText += event.text;
+      writeAnthropicEvent(opts.res, "content_block_delta", {
+        index: textIndex,
+        delta: { type: "text_delta", text: event.text },
+      });
     };
 
     const result = await opts.run(emit);
@@ -444,7 +438,6 @@ export async function handleAnthropicMessages(
     try {
       const result = await writeStructuredAnthropicTurn({
         res,
-        body,
         stream: !!body.stream,
         id: msgId,
         model: displayModel,
@@ -612,7 +605,6 @@ export async function handleAnthropicMessages(
       );
       const result = await writeStructuredAnthropicTurn({
         res,
-        body,
         stream: !!body.stream,
         id: msgId,
         model: displayModel,
