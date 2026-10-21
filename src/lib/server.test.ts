@@ -47,6 +47,7 @@ vi.mock("./request-log.js", () => ({
   logModelResolution: vi.fn(),
   logToolSession: vi.fn(),
   logAgentError: vi.fn().mockReturnValue("agent error"),
+  logTurnFailure: vi.fn(),
   appendSessionLine: vi.fn(),
   logAccountAssigned: vi.fn(),
   logAccountStats: vi.fn(),

@@ -6,13 +6,8 @@ import type { CursorExecutionMode } from "../execution-mode.js";
 import type { ModelCacheRef } from "./models.js";
 import { getCachedCursorModels } from "./models.js";
 import { buildAgentFixedArgs } from "../agent-cmd-args.js";
-import {
-  runAgentStream,
-  runAgentSync,
-  startAgentToolSession,
-} from "../agent-runner.js";
+import { startAgentToolSession } from "../agent-runner.js";
 import type { ToolTurnEvent, ToolTurnResult } from "../acp-tool-session.js";
-import { createStreamParser } from "../cli-stream-parser.js";
 import { json, startSseKeepalive, writeSseHeaders } from "../http.js";
 import {
   resolveModelForExecution,
@@ -25,9 +20,6 @@ import {
   type OpenAiChatCompletionRequest,
 } from "../openai.js";
 import {
-  logAgentError,
-  logAccountAssigned,
-  logAccountStats,
   logModelResolution,
   logToolSession,
   logTrafficRequest,
@@ -40,16 +32,7 @@ import { removeChatOnlyTempDir, resolveWorkspace } from "../workspace.js";
 import { buildBridgeContextPreamble, BRIDGE_AGENT_PROMPT_SEPARATOR } from "../bridge-context-preamble.js";
 import { sanitizeMessages } from "../sanitize.js";
 import { prepareRequestMedia } from "../media-input.js";
-import {
-  getNextAccountConfigDir,
-  reportRequestStart,
-  reportRequestEnd,
-  reportRateLimit,
-  reportRequestSuccess,
-  reportRequestError,
-  getAccountStats,
-} from "../account-pool.js";
-import { abortOnClientDisconnect } from "../client-disconnect.js";
+import { getNextAccountConfigDir } from "../account-pool.js";
 import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
@@ -63,15 +46,18 @@ import {
   type PendingClientToolCall,
 } from "../tool-types.js";
 import {
-  ToolSessionError,
   toolSessionOwnerKey,
   type ToolSessionRecord,
   type ToolSessionRegistry,
 } from "../tool-session-registry.js";
-
-function isRateLimited(stderr: string): boolean {
-  return /\b429\b|rate.?limit|too many requests/i.test(stderr);
-}
+import { openAiErrorBody, type AgentFailure } from "./agent-failure.js";
+import {
+  AccountUse,
+  failToolTurn,
+  runPlainTurn,
+  streamPlainTurn,
+  type PlainTurn,
+} from "./agent-turn.js";
 
 export type ChatCompletionsCtx = {
   config: BridgeConfig;
@@ -95,6 +81,67 @@ function chatToolCallWire(call: PendingClientToolCall) {
       };
 }
 
+/** Usage estimated at four characters a token, as the proxy reports it. */
+function chatUsage(promptLength: number, completionLength: number) {
+  const promptTokens = Math.max(1, Math.round(promptLength / 4));
+  const completionTokens = Math.max(1, Math.round(completionLength / 4));
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: promptTokens + completionTokens,
+  };
+}
+
+/** Writes the `chat.completion.chunk` events of one streamed completion. */
+function chatChunkWriter(
+  res: http.ServerResponse,
+  id: string,
+  created: number,
+  model: string | undefined,
+) {
+  return (
+    delta: Record<string, unknown>,
+    finishReason: string | null = null,
+    usage?: Record<string, number>,
+  ) => {
+    res.write(
+      `data: ${JSON.stringify({
+        id,
+        object: "chat.completion.chunk",
+        created,
+        model,
+        choices: [{ index: 0, delta, finish_reason: finishReason }],
+        ...(usage ? { usage } : {}),
+      })}\n\n`,
+    );
+  };
+}
+
+/**
+ * Ends a stream the way OpenAI reports a mid-stream failure: a chunk that
+ * holds only the error (the SDKs raise it), then `[DONE]`.
+ */
+function writeChatStreamError(
+  res: http.ServerResponse,
+  failure: AgentFailure,
+): void {
+  res.write(`data: ${JSON.stringify(openAiErrorBody(failure))}\n\n`);
+  res.write("data: [DONE]\n\n");
+}
+
+/** Answers with an error response, or ends a started stream with it. */
+function writeChatFailure(
+  res: http.ServerResponse,
+  failure: AgentFailure,
+): void {
+  if (!res.headersSent) {
+    json(res, failure.status, openAiErrorBody(failure));
+  } else if (!res.writableEnded) {
+    writeChatStreamError(res, failure);
+    res.end();
+  }
+}
+
 function chatToolResponse(opts: {
   id: string;
   created: number;
@@ -103,11 +150,6 @@ function chatToolResponse(opts: {
   promptLength: number;
 }) {
   const completionText = opts.result.text;
-  const promptTokens = Math.max(1, Math.round(opts.promptLength / 4));
-  const completionTokens = Math.max(
-    1,
-    Math.round(completionText.length / 4),
-  );
   const calls =
     opts.result.status === "tool_calls"
       ? opts.result.toolCalls.map(chatToolCallWire)
@@ -131,11 +173,7 @@ function chatToolResponse(opts: {
         finish_reason: calls ? "tool_calls" : "stop",
       },
     ],
-    usage: {
-      prompt_tokens: promptTokens,
-      completion_tokens: completionTokens,
-      total_tokens: promptTokens + completionTokens,
-    },
+    usage: chatUsage(opts.promptLength, completionText.length),
   };
 }
 
@@ -169,22 +207,12 @@ async function writeStructuredChatTurn(opts: {
   writeSseHeaders(opts.res);
   const stopKeepalive = startSseKeepalive(opts.res);
   try {
-    const writeChunk = (
-      delta: Record<string, unknown>,
-      finishReason: string | null = null,
-      usage?: Record<string, number>,
-    ) => {
-      opts.res.write(
-        `data: ${JSON.stringify({
-          id: opts.id,
-          object: "chat.completion.chunk",
-          created: opts.created,
-          model: opts.model,
-          choices: [{ index: 0, delta, finish_reason: finishReason }],
-          ...(usage ? { usage } : {}),
-        })}\n\n`,
-      );
-    };
+    const writeChunk = chatChunkWriter(
+      opts.res,
+      opts.id,
+      opts.created,
+      opts.model,
+    );
     writeChunk({ role: "assistant" });
     let emittedText = "";
     let emittedReasoning = "";
@@ -212,16 +240,10 @@ async function writeStructuredChatTurn(opts: {
         });
       });
     }
-    const promptTokens = Math.max(1, Math.round(opts.promptLength / 4));
-    const completionTokens = Math.max(1, Math.round(result.text.length / 4));
     writeChunk(
       {},
       result.status === "tool_calls" ? "tool_calls" : "stop",
-      {
-        prompt_tokens: promptTokens,
-        completion_tokens: completionTokens,
-        total_tokens: promptTokens + completionTokens,
-      },
+      chatUsage(opts.promptLength, result.text.length),
     );
     opts.res.write("data: [DONE]\n\n");
     opts.res.end();
@@ -241,6 +263,7 @@ export async function handleChatCompletions(
   remoteAddress: string,
 ): Promise<void> {
   const { config, lastRequestedModelRef, modelCacheRef } = ctx;
+  const turnRequest = { config, method, pathname, remoteAddress };
   const body = JSON.parse(rawBody || "{}") as OpenAiChatCompletionRequest;
   let selectedTools;
   let toolInstruction: string | undefined;
@@ -382,17 +405,10 @@ export async function handleChatCompletions(
       });
       return;
     }
-    const configDir = record.configDir;
-    logAccountAssigned(configDir);
-    reportRequestStart(configDir);
-    const startedAt = Date.now();
-    const abortController = new AbortController();
-    abortOnClientDisconnect(res, abortController);
-    abortController.signal.addEventListener(
-      "abort",
-      () => void record.session.close(),
-      { once: true },
-    );
+    const use = new AccountUse(res, config.verbose, record.configDir);
+    use.signal.addEventListener("abort", () => void record.session.close(), {
+      once: true,
+    });
     try {
       const result = await writeStructuredChatTurn({
         res,
@@ -404,7 +420,7 @@ export async function handleChatCompletions(
         run: (listener) =>
           ctx.toolSessions.resume(record, submittedToolOutputs, listener),
       });
-      reportRequestSuccess(configDir, Date.now() - startedAt);
+      use.succeeded();
       logTrafficResponse(
         config.verbose,
         model ?? cursorModel,
@@ -412,32 +428,9 @@ export async function handleChatCompletions(
         !!body.stream,
       );
     } catch (error) {
-      reportRequestError(configDir, Date.now() - startedAt);
-      if (!res.headersSent) {
-        json(res, error instanceof ToolSessionError ? error.status : 500, {
-          error: {
-            message: error instanceof Error ? error.message : String(error),
-            code:
-              error instanceof ToolSessionError
-                ? error.code
-                : "tool_session_error",
-          },
-        });
-      } else if (!res.writableEnded) {
-        res.write(
-          `data: ${JSON.stringify({
-            error: {
-              message: error instanceof Error ? error.message : String(error),
-              code: "tool_session_error",
-            },
-          })}\n\n`,
-        );
-        res.write("data: [DONE]\n\n");
-        res.end();
-      }
+      writeChatFailure(res, failToolTurn(turnRequest, use, error));
     } finally {
-      reportRequestEnd(configDir);
-      logAccountStats(config.verbose, getAccountStats());
+      use.end();
     }
     return;
   }
@@ -526,12 +519,7 @@ export async function handleChatCompletions(
     : undefined;
 
   if (structuredToolStart) {
-    const configDir = getNextAccountConfigDir();
-    logAccountAssigned(configDir);
-    reportRequestStart(configDir);
-    const startedAt = Date.now();
-    const abortController = new AbortController();
-    abortOnClientDisconnect(res, abortController);
+    const use = new AccountUse(res, config.verbose, getNextAccountConfigDir());
     let record: ToolSessionRecord | undefined;
     try {
       const session = await startAgentToolSession({
@@ -543,8 +531,8 @@ export async function handleChatCompletions(
         mediaBlocks,
         tools: selectedTools,
         tempDir,
-        configDir,
-        signal: abortController.signal,
+        configDir: use.configDir,
+        signal: use.signal,
         modelDisplayName: modelCatalogName,
         requireToolCall,
         maxParallelToolCalls,
@@ -553,14 +541,12 @@ export async function handleChatCompletions(
         api: "chat",
         ownerKey,
         model: displayModel ?? cursorModel,
-        configDir,
+        configDir: use.configDir,
         session,
       });
-      abortController.signal.addEventListener(
-        "abort",
-        () => void session.close(),
-        { once: true },
-      );
+      use.signal.addEventListener("abort", () => void session.close(), {
+        once: true,
+      });
       const result = await writeStructuredChatTurn({
         res,
         stream: !!body.stream,
@@ -570,14 +556,8 @@ export async function handleChatCompletions(
         promptLength: agentPrompt.length,
         run: (listener) => ctx.toolSessions.collect(record!, listener),
       });
-      reportRequestSuccess(configDir, Date.now() - startedAt);
-      if (
-        result.status === "completed" &&
-        result.stderr &&
-        isRateLimited(result.stderr)
-      ) {
-        reportRateLimit(configDir, 60_000);
-      }
+      use.succeeded();
+      if (result.status === "completed") use.checkRateLimit(result.stderr);
       logTrafficResponse(
         config.verbose,
         model ?? cursorModel,
@@ -589,335 +569,51 @@ export async function handleChatCompletions(
         ctx.toolSessions.remove(record);
         await record.session.close().catch(() => undefined);
       }
-      reportRequestError(configDir, Date.now() - startedAt);
-      if (!res.headersSent) {
-        json(res, 500, {
-          error: {
-            message: error instanceof Error ? error.message : String(error),
-            code: "tool_session_error",
-            type: "api_error",
-          },
-        });
-      } else if (!res.writableEnded) {
-        res.write(
-          `data: ${JSON.stringify({
-            error: {
-              message: error instanceof Error ? error.message : String(error),
-              code: "tool_session_error",
-            },
-          })}\n\n`,
-        );
-        res.write("data: [DONE]\n\n");
-        res.end();
-      }
+      writeChatFailure(res, failToolTurn(turnRequest, use, error));
     } finally {
-      reportRequestEnd(configDir);
-      logAccountStats(config.verbose, getAccountStats());
+      use.end();
     }
     return;
   }
 
-  if (body.stream) {
-    const configDir = getNextAccountConfigDir();
-    logAccountAssigned(configDir);
-    reportRequestStart(configDir);
-    const streamStart = Date.now();
-
-    const abortController = new AbortController();
-    abortOnClientDisconnect(res, abortController);
-
-    writeSseHeaders(res, truncatedHeaders);
-    const stopKeepalive = startSseKeepalive(res);
-    res.on("error", () => {
-      /* client disconnected mid-stream */
-    });
-    res.write(
-      `data: ${JSON.stringify({
-        id,
-        object: "chat.completion.chunk",
-        created,
-        model: displayModel,
-        choices: [
-          {
-            index: 0,
-            delta: { role: "assistant", content: "" },
-            finish_reason: null,
-          },
-        ],
-      })}\n\n`,
-    );
-
-    if (config.useAcp && typeof promptForAgent === "string") {
-      let accumulated = "";
-      runAgentStream(
-        config,
-        workspaceDir,
-        effectiveChatOnly,
-        cmdArgs,
-        (chunk) => {
-          accumulated += chunk;
-          res.write(
-            `data: ${JSON.stringify({
-              id,
-              object: "chat.completion.chunk",
-              created,
-              model: displayModel,
-              choices: [
-                { index: 0, delta: { content: chunk }, finish_reason: null },
-              ],
-            })}\n\n`,
-          );
-        },
-        tempDir,
-        promptForAgent,
-        configDir,
-        abortController.signal,
-        modelCatalogName,
-        mediaBlocks,
-      )
-        .then(({ code, stderr: stderrOut, error }) => {
-          stopKeepalive();
-          const latencyMs = Date.now() - streamStart;
-          reportRequestEnd(configDir);
-
-          if (stderrOut && isRateLimited(stderrOut)) {
-            reportRateLimit(configDir, 60000);
-          }
-
-          if (abortController.signal.aborted) {
-            /* client disconnected — do not count as success or failure */
-          } else if (code !== 0) {
-            reportRequestError(configDir, latencyMs);
-            const publicMsg = logAgentError(
-              config.sessionsLogPath,
-              method,
-              pathname,
-              remoteAddress,
-              code,
-              stderrOut,
-              error,
-            );
-            res.write(
-              `data: ${JSON.stringify({
-                error: { message: publicMsg, code: "cursor_cli_error" },
-              })}\n\n`,
-            );
-            res.write("data: [DONE]\n\n");
-            logAccountStats(config.verbose, getAccountStats());
-            res.end();
-            return;
-          } else {
-            reportRequestSuccess(configDir, latencyMs);
-          }
-          logAccountStats(config.verbose, getAccountStats());
-          logTrafficResponse(
-            config.verbose,
-            model ?? cursorModel,
-            accumulated,
-            true,
-          );
-          const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
-          const completionTokens = Math.max(
-            1,
-            Math.round(accumulated.length / 4),
-          );
-          res.write(
-            `data: ${JSON.stringify({
-              id,
-              object: "chat.completion.chunk",
-              created,
-              model: displayModel,
-              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-              usage: {
-                prompt_tokens: promptTokens,
-                completion_tokens: completionTokens,
-                total_tokens: promptTokens + completionTokens,
-              },
-            })}\n\n`,
-          );
-          res.write("data: [DONE]\n\n");
-          res.end();
-        })
-        .catch((err) => {
-          stopKeepalive();
-          reportRequestEnd(configDir);
-          if (!abortController.signal.aborted) {
-            reportRequestError(configDir, Date.now() - streamStart);
-            res.write(
-              `data: ${JSON.stringify({
-                error: {
-                  message:
-                    "The Cursor agent stream failed. See server logs for details.",
-                  code: "cursor_cli_error",
-                },
-              })}\n\n`,
-            );
-            res.write("data: [DONE]\n\n");
-          }
-          console.error(
-            `[${new Date().toISOString()}] Agent stream error:`,
-            err,
-          );
-          res.end();
-        });
-      return;
-    }
-
-    let accumulated = "";
-    const parseLine = createStreamParser(
-      (text) => {
-        accumulated += text;
-        res.write(
-          `data: ${JSON.stringify({
-            id,
-            object: "chat.completion.chunk",
-            created,
-            model: displayModel,
-            choices: [
-              { index: 0, delta: { content: text }, finish_reason: null },
-            ],
-          })}\n\n`,
-        );
-      },
-      () => {
-        logTrafficResponse(
-          config.verbose,
-          model ?? cursorModel,
-          accumulated,
-          true,
-        );
-        const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
-        const completionTokens = Math.max(
-          1,
-          Math.round(accumulated.length / 4),
-        );
-        res.write(
-          `data: ${JSON.stringify({
-            id,
-            object: "chat.completion.chunk",
-            created,
-            model: displayModel,
-            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-            usage: {
-              prompt_tokens: promptTokens,
-              completion_tokens: completionTokens,
-              total_tokens: promptTokens + completionTokens,
-            },
-          })}\n\n`,
-        );
-        res.write("data: [DONE]\n\n");
-      },
-    );
-
-    runAgentStream(
-      config,
-      workspaceDir,
-      effectiveChatOnly,
-      cmdArgs,
-      parseLine,
-      tempDir,
-      promptForAgent,
-      configDir,
-      abortController.signal,
-      modelCatalogName,
-      mediaBlocks,
-    )
-      .then(({ code, stderr: stderrOut }) => {
-        stopKeepalive();
-        const latencyMs = Date.now() - streamStart;
-        reportRequestEnd(configDir);
-
-        if (stderrOut && isRateLimited(stderrOut)) {
-          reportRateLimit(configDir, 60000);
-        }
-
-        if (abortController.signal.aborted) {
-          /* client disconnected — do not count as success or failure */
-        } else if (code !== 0) {
-          reportRequestError(configDir, latencyMs);
-          logAgentError(
-            config.sessionsLogPath,
-            method,
-            pathname,
-            remoteAddress,
-            code,
-            stderrOut,
-          );
-        } else {
-          reportRequestSuccess(configDir, latencyMs);
-        }
-        logAccountStats(config.verbose, getAccountStats());
-        res.end();
-      })
-      .catch((err) => {
-        stopKeepalive();
-        reportRequestEnd(configDir);
-        if (!abortController.signal.aborted) {
-          reportRequestError(configDir, Date.now() - streamStart);
-        }
-        console.error(
-          `[${new Date().toISOString()}] Agent stream error:`,
-          err,
-        );
-        res.end();
-      });
-    return;
-  }
-
-  const configDir = getNextAccountConfigDir();
-  logAccountAssigned(configDir);
-  reportRequestStart(configDir);
-  const syncStart = Date.now();
-
-  const abortController = new AbortController();
-  abortOnClientDisconnect(res, abortController);
-
-  const out = await runAgentSync(
-    config,
+  const turn: PlainTurn = {
+    ...turnRequest,
+    res,
+    logModel: model ?? cursorModel,
     workspaceDir,
     effectiveChatOnly,
     cmdArgs,
     tempDir,
     promptForAgent,
-    configDir,
-    abortController.signal,
     modelCatalogName,
     mediaBlocks,
-  );
-  const syncLatency = Date.now() - syncStart;
-  reportRequestEnd(configDir);
+  };
 
-  if (out.stderr && isRateLimited(out.stderr)) {
-    reportRateLimit(configDir, 60000);
-  }
-
-  if (out.code !== 0) {
-    reportRequestError(configDir, syncLatency);
-    logAccountStats(config.verbose, getAccountStats());
-    const errMsg = logAgentError(
-      config.sessionsLogPath,
-      method,
-      pathname,
-      remoteAddress,
-      out.code,
-      out.stderr,
-      out.error,
+  if (body.stream) {
+    const writeChunk = chatChunkWriter(res, id, created, displayModel);
+    await streamPlainTurn(
+      turn,
+      {
+        // Clients wait on the assistant role, so it goes out before the agent answers.
+        open: () => writeChunk({ role: "assistant", content: "" }),
+        text: (delta) => writeChunk({ content: delta }),
+        complete: (text) => {
+          writeChunk({}, "stop", chatUsage(agentPrompt.length, text.length));
+          res.write("data: [DONE]\n\n");
+        },
+        fail: (failure) => writeChatStreamError(res, failure),
+      },
+      truncatedHeaders,
     );
-    json(res, 500, {
-      error: { message: errMsg, code: "cursor_cli_error" },
-    });
     return;
   }
 
-  reportRequestSuccess(configDir, syncLatency);
-  const content = out.stdout.trim();
-  logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
-
-  const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
-  const completionTokens = Math.max(1, Math.round(content.length / 4));
-  const totalTokens = promptTokens + completionTokens;
-
-  logAccountStats(config.verbose, getAccountStats());
+  const outcome = await runPlainTurn(turn);
+  if (!outcome) return;
+  if (!outcome.ok) {
+    json(res, outcome.failure.status, openAiErrorBody(outcome.failure));
+    return;
+  }
   json(
     res,
     200,
@@ -929,15 +625,11 @@ export async function handleChatCompletions(
       choices: [
         {
           index: 0,
-          message: { role: "assistant", content },
+          message: { role: "assistant", content: outcome.text },
           finish_reason: "stop",
         },
       ],
-      usage: {
-        prompt_tokens: promptTokens,
-        completion_tokens: completionTokens,
-        total_tokens: totalTokens,
-      },
+      usage: chatUsage(agentPrompt.length, outcome.text.length),
     },
     truncatedHeaders,
   );

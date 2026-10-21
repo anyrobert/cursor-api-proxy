@@ -3,15 +3,7 @@ import * as http from "node:http";
 
 import { buildAgentFixedArgs } from "../agent-cmd-args.js";
 import { prepareRequestMedia } from "../media-input.js";
-import {
-  getAccountStats,
-  getNextAccountConfigDir,
-  reportRateLimit,
-  reportRequestEnd,
-  reportRequestError,
-  reportRequestStart,
-  reportRequestSuccess,
-} from "../account-pool.js";
+import { getNextAccountConfigDir } from "../account-pool.js";
 import {
   BRIDGE_AGENT_PROMPT_SEPARATOR,
   buildBridgeContextPreamble,
@@ -19,13 +11,8 @@ import {
 import type { BridgeConfig } from "../config.js";
 import type { CursorExecutionMode } from "../execution-mode.js";
 import { json, startSseKeepalive, writeSseHeaders } from "../http.js";
-import {
-  runAgentStream,
-  runAgentSync,
-  startAgentToolSession,
-} from "../agent-runner.js";
+import { startAgentToolSession } from "../agent-runner.js";
 import type { ToolTurnEvent, ToolTurnResult } from "../acp-tool-session.js";
-import { createStreamParser } from "../cli-stream-parser.js";
 import {
   resolveModelForExecution,
   UnsupportedReasoningEffortError,
@@ -38,9 +25,6 @@ import {
   type OpenAiResponsesRequest,
 } from "../openai.js";
 import {
-  logAccountAssigned,
-  logAccountStats,
-  logAgentError,
   logModelResolution,
   logToolSession,
   logTrafficRequest,
@@ -55,7 +39,6 @@ import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
 } from "../win-cmdline-limit.js";
-import { abortOnClientDisconnect } from "../client-disconnect.js";
 import {
   droppedToolsNote,
   freeformInput,
@@ -74,11 +57,15 @@ import {
   type ToolSessionRecord,
   type ToolSessionRegistry,
 } from "../tool-session-registry.js";
+import { openAiErrorBody, type AgentFailure } from "./agent-failure.js";
+import {
+  AccountUse,
+  failToolTurn,
+  runPlainTurn,
+  streamPlainTurn,
+  type PlainTurn,
+} from "./agent-turn.js";
 import { getCachedCursorModels, type ModelCacheRef } from "./models.js";
-
-function isRateLimited(stderr: string): boolean {
-  return /\b429\b|rate.?limit|too many requests/i.test(stderr);
-}
 
 export type ResponsesCtx = {
   config: BridgeConfig;
@@ -475,33 +462,15 @@ async function writeStructuredResponseTurn(opts: {
 function createResponseObject(opts: {
   body: OpenAiResponsesRequest;
   id: string;
-  itemId: string;
   createdAt: number;
   model: string | undefined;
   status: ResponseStatus;
+  output: ReturnType<typeof createOutputItem>[];
   text: string;
   promptTokens: number;
   completionTokens: number;
   error?: { message: string; code: string } | null;
 }) {
-  const output =
-    opts.status === "completed"
-      ? [
-          {
-            id: opts.itemId,
-            type: "message",
-            status: "completed",
-            role: "assistant",
-            content: [
-              {
-                type: "output_text",
-                text: opts.text,
-                annotations: [],
-              },
-            ],
-          },
-        ]
-      : [];
   const totalTokens = opts.promptTokens + opts.completionTokens;
 
   return {
@@ -515,7 +484,7 @@ function createResponseObject(opts: {
     instructions: opts.body.instructions ?? null,
     max_output_tokens: opts.body.max_output_tokens ?? null,
     model: opts.model,
-    output,
+    output: opts.output,
     output_text: opts.text,
     parallel_tool_calls: opts.body.parallel_tool_calls ?? true,
     previous_response_id: opts.body.previous_response_id ?? null,
@@ -565,6 +534,56 @@ function writeResponseEvent(
   res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
 }
 
+/** The response a failure reports on. */
+type ResponseFrame = {
+  body: OpenAiResponsesRequest;
+  id: string;
+  createdAt: number;
+  model: string | undefined;
+  promptLength: number;
+};
+
+/**
+ * Ends a stream the way the Responses API reports a failed response: one
+ * `response.failed` event carrying the response with `status: "failed"`,
+ * its `error` and no output, as in OpenAI's reference; items already
+ * announced are not closed. No `[DONE]`, which belongs to Chat Completions.
+ */
+function writeResponseFailed(
+  res: http.ServerResponse,
+  frame: ResponseFrame,
+  failure: AgentFailure,
+): void {
+  writeResponseEvent(res, "response.failed", {
+    response: createResponseObject({
+      body: frame.body,
+      id: frame.id,
+      createdAt: frame.createdAt,
+      model: frame.model,
+      status: "failed",
+      output: [],
+      text: "",
+      promptTokens: Math.max(1, Math.round(frame.promptLength / 4)),
+      completionTokens: 0,
+      error: { code: failure.code, message: failure.message },
+    }),
+  });
+}
+
+/** Answers with an error response, or ends a started stream with it. */
+function writeResponsesFailure(
+  res: http.ServerResponse,
+  frame: ResponseFrame,
+  failure: AgentFailure,
+): void {
+  if (!res.headersSent) {
+    json(res, failure.status, openAiErrorBody(failure));
+  } else if (!res.writableEnded) {
+    writeResponseFailed(res, frame, failure);
+    res.end();
+  }
+}
+
 function responseContentText(message: any): string {
   const content = message?.content;
   if (typeof content === "string") return content;
@@ -592,6 +611,7 @@ export async function handleResponses(
   remoteAddress: string,
 ): Promise<void> {
   const { config, lastRequestedModelRef, modelCacheRef } = ctx;
+  const turnRequest = { config, method, pathname, remoteAddress };
   const body = JSON.parse(rawBody || "{}") as OpenAiResponsesRequest;
   let selectedTools;
   let toolInstruction: string | undefined;
@@ -801,17 +821,10 @@ export async function handleResponses(
       config.verbose,
       `${record.id} resumed with ${outputs.map((output) => output.callId).join(", ")} (matched by ${transcriptResume ? "call_id" : "previous_response_id"})`,
     );
-    const configDir = record.configDir;
-    logAccountAssigned(configDir);
-    reportRequestStart(configDir);
-    const startedAt = Date.now();
-    const abortController = new AbortController();
-    abortOnClientDisconnect(res, abortController);
-    abortController.signal.addEventListener(
-      "abort",
-      () => void record.session.close(),
-      { once: true },
-    );
+    const use = new AccountUse(res, config.verbose, record.configDir);
+    use.signal.addEventListener("abort", () => void record.session.close(), {
+      once: true,
+    });
     try {
       const result = await writeStructuredResponseTurn({
         res,
@@ -835,7 +848,7 @@ export async function handleResponses(
           return turn;
         },
       });
-      reportRequestSuccess(configDir, Date.now() - startedAt);
+      use.succeeded();
       logTrafficResponse(
         config.verbose,
         model ?? cursorModel,
@@ -843,34 +856,13 @@ export async function handleResponses(
         !!body.stream,
       );
     } catch (error) {
-      reportRequestError(configDir, Date.now() - startedAt);
-      if (!res.headersSent) {
-        json(res, error instanceof ToolSessionError ? error.status : 500, {
-          error: {
-            message: error instanceof Error ? error.message : String(error),
-            code:
-              error instanceof ToolSessionError
-                ? error.code
-                : "tool_session_error",
-          },
-        });
-      } else if (!res.writableEnded) {
-        writeResponseEvent(res, "response.failed", {
-          response: {
-            id,
-            object: "response",
-            status: "failed",
-            error: {
-              message: error instanceof Error ? error.message : String(error),
-              code: "tool_session_error",
-            },
-          },
-        });
-        res.end();
-      }
+      writeResponsesFailure(
+        res,
+        { body, id, createdAt, model: displayModel, promptLength: prompt.length },
+        failToolTurn(turnRequest, use, error),
+      );
     } finally {
-      reportRequestEnd(configDir);
-      logAccountStats(config.verbose, getAccountStats());
+      use.end();
     }
     return;
   }
@@ -959,12 +951,7 @@ export async function handleResponses(
     : undefined;
 
   if (structuredToolStart) {
-    const configDir = getNextAccountConfigDir();
-    logAccountAssigned(configDir);
-    reportRequestStart(configDir);
-    const startedAt = Date.now();
-    const abortController = new AbortController();
-    abortOnClientDisconnect(res, abortController);
+    const use = new AccountUse(res, config.verbose, getNextAccountConfigDir());
     let record: ToolSessionRecord | undefined;
     try {
       const session = await startAgentToolSession({
@@ -976,8 +963,8 @@ export async function handleResponses(
         mediaBlocks,
         tools: selectedTools,
         tempDir,
-        configDir,
-        signal: abortController.signal,
+        configDir: use.configDir,
+        signal: use.signal,
         modelDisplayName: modelCatalogName,
         requireToolCall,
         maxParallelToolCalls,
@@ -986,14 +973,12 @@ export async function handleResponses(
         api: "responses",
         ownerKey,
         model: displayModel ?? cursorModel,
-        configDir,
+        configDir: use.configDir,
         session,
       });
-      abortController.signal.addEventListener(
-        "abort",
-        () => void session.close(),
-        { once: true },
-      );
+      use.signal.addEventListener("abort", () => void session.close(), {
+        once: true,
+      });
       const result = await writeStructuredResponseTurn({
         res,
         body,
@@ -1012,14 +997,8 @@ export async function handleResponses(
           return turn;
         },
       });
-      reportRequestSuccess(configDir, Date.now() - startedAt);
-      if (
-        result.status === "completed" &&
-        result.stderr &&
-        isRateLimited(result.stderr)
-      ) {
-        reportRateLimit(configDir, 60_000);
-      }
+      use.succeeded();
+      if (result.status === "completed") use.checkRateLimit(result.stderr);
       logTrafficResponse(
         config.verbose,
         model ?? cursorModel,
@@ -1031,334 +1010,158 @@ export async function handleResponses(
         ctx.toolSessions.remove(record);
         await record.session.close().catch(() => undefined);
       }
-      reportRequestError(configDir, Date.now() - startedAt);
-      if (!res.headersSent) {
-        json(res, 500, {
-          error: {
-            message: error instanceof Error ? error.message : String(error),
-            code: "tool_session_error",
-            type: "api_error",
-          },
-        });
-      } else if (!res.writableEnded) {
-        writeResponseEvent(res, "response.failed", {
-          response: {
-            id,
-            object: "response",
-            status: "failed",
-            error: {
-              message: error instanceof Error ? error.message : String(error),
-              code: "tool_session_error",
-            },
-          },
-        });
-        res.end();
-      }
-    } finally {
-      reportRequestEnd(configDir);
-      logAccountStats(config.verbose, getAccountStats());
-    }
-    return;
-  }
-
-  if (body.stream) {
-    const configDir = getNextAccountConfigDir();
-    logAccountAssigned(configDir);
-    reportRequestStart(configDir);
-    const streamStart = Date.now();
-
-    const abortController = new AbortController();
-    abortOnClientDisconnect(res, abortController);
-
-    writeSseHeaders(res, truncatedHeaders);
-    const stopKeepalive = startSseKeepalive(res);
-    res.on("error", () => {
-      /* client disconnected mid-stream */
-    });
-
-    const initialResponse = createResponseObject({
-      body,
-      id,
-      itemId,
-      createdAt,
-      model: displayModel,
-      status: "in_progress",
-      text: "",
-      promptTokens: Math.max(1, Math.round(agentPrompt.length / 4)),
-      completionTokens: 0,
-    });
-    writeResponseEvent(res, "response.created", { response: initialResponse });
-    writeResponseEvent(res, "response.output_item.added", {
-      response_id: id,
-      output_index: 0,
-      item: createOutputItem(itemId, "in_progress", ""),
-    });
-    writeResponseEvent(res, "response.content_part.added", {
-      response_id: id,
-      item_id: itemId,
-      output_index: 0,
-      content_index: 0,
-      part: { type: "output_text", text: "", annotations: [] },
-    });
-
-    const writeChunk = (chunk: string, accumulated: string) => {
-      writeResponseEvent(res, "response.output_text.delta", {
-        response_id: id,
-        item_id: itemId,
-        output_index: 0,
-        content_index: 0,
-        delta: chunk,
-      });
-      return accumulated + chunk;
-    };
-
-    const finishStream = (accumulated: string) => {
-      logTrafficResponse(config.verbose, model ?? cursorModel, accumulated, true);
-      const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
-      const completionTokens = Math.max(1, Math.round(accumulated.length / 4));
-      const completedItem = createOutputItem(itemId, "completed", accumulated);
-      writeResponseEvent(res, "response.output_text.done", {
-        response_id: id,
-        item_id: itemId,
-        output_index: 0,
-        content_index: 0,
-        text: accumulated,
-      });
-      writeResponseEvent(res, "response.content_part.done", {
-        response_id: id,
-        item_id: itemId,
-        output_index: 0,
-        content_index: 0,
-        part: completedItem.content[0],
-      });
-      writeResponseEvent(res, "response.output_item.done", {
-        response_id: id,
-        output_index: 0,
-        item: completedItem,
-      });
-      writeResponseEvent(res, "response.completed", {
-        response: createResponseObject({
+      writeResponsesFailure(
+        res,
+        {
           body,
           id,
-          itemId,
           createdAt,
           model: displayModel,
-          status: "completed",
-          text: accumulated,
-          promptTokens,
-          completionTokens,
-        }),
-      });
-      res.write("data: [DONE]\n\n");
-    };
-
-    if (config.useAcp && typeof promptForAgent === "string") {
-      let accumulated = "";
-      runAgentStream(
-        config,
-        workspaceDir,
-        effectiveChatOnly,
-        cmdArgs,
-        (chunk) => {
-          accumulated = writeChunk(chunk, accumulated);
+          promptLength: agentPrompt.length,
         },
-        tempDir,
-        promptForAgent,
-        configDir,
-        abortController.signal,
-        modelCatalogName,
-        mediaBlocks,
-      )
-        .then(({ code, stderr: stderrOut, error }) => {
-          stopKeepalive();
-          const latencyMs = Date.now() - streamStart;
-          reportRequestEnd(configDir);
-
-          if (stderrOut && isRateLimited(stderrOut)) {
-            reportRateLimit(configDir, 60000);
-          }
-
-          if (abortController.signal.aborted) {
-            /* client disconnected — do not count as success or failure */
-          } else if (code !== 0) {
-            reportRequestError(configDir, latencyMs);
-            const publicMsg = logAgentError(
-              config.sessionsLogPath,
-              method,
-              pathname,
-              remoteAddress,
-              code,
-              stderrOut,
-              error,
-            );
-            writeResponseEvent(res, "error", {
-              error: { message: publicMsg, code: "cursor_cli_error" },
-            });
-            res.write("data: [DONE]\n\n");
-            logAccountStats(config.verbose, getAccountStats());
-            res.end();
-            return;
-          } else {
-            reportRequestSuccess(configDir, latencyMs);
-          }
-          logAccountStats(config.verbose, getAccountStats());
-          finishStream(accumulated);
-          res.end();
-        })
-        .catch((err) => {
-          stopKeepalive();
-          reportRequestEnd(configDir);
-          if (!abortController.signal.aborted) {
-            reportRequestError(configDir, Date.now() - streamStart);
-            writeResponseEvent(res, "error", {
-              error: {
-                message:
-                  "The Cursor agent stream failed. See server logs for details.",
-                code: "cursor_cli_error",
-              },
-            });
-            res.write("data: [DONE]\n\n");
-          }
-          console.error(
-            `[${new Date().toISOString()}] Agent stream error:`,
-            err,
-          );
-          res.end();
-        });
-      return;
+        failToolTurn(turnRequest, use, error),
+      );
+    } finally {
+      use.end();
     }
-
-    let accumulated = "";
-    const parseLine = createStreamParser(
-      (text) => {
-        accumulated = writeChunk(text, accumulated);
-      },
-      () => {
-        finishStream(accumulated);
-      },
-    );
-
-    runAgentStream(
-      config,
-      workspaceDir,
-      effectiveChatOnly,
-      cmdArgs,
-      parseLine,
-      tempDir,
-      promptForAgent,
-      configDir,
-      abortController.signal,
-      modelCatalogName,
-      mediaBlocks,
-    )
-      .then(({ code, stderr: stderrOut }) => {
-        stopKeepalive();
-        const latencyMs = Date.now() - streamStart;
-        reportRequestEnd(configDir);
-
-        if (stderrOut && isRateLimited(stderrOut)) {
-          reportRateLimit(configDir, 60000);
-        }
-
-        if (abortController.signal.aborted) {
-          /* client disconnected — do not count as success or failure */
-        } else if (code !== 0) {
-          reportRequestError(configDir, latencyMs);
-          logAgentError(
-            config.sessionsLogPath,
-            method,
-            pathname,
-            remoteAddress,
-            code,
-            stderrOut,
-          );
-        } else {
-          reportRequestSuccess(configDir, latencyMs);
-        }
-        logAccountStats(config.verbose, getAccountStats());
-        res.end();
-      })
-      .catch((err) => {
-        stopKeepalive();
-        reportRequestEnd(configDir);
-        if (!abortController.signal.aborted) {
-          reportRequestError(configDir, Date.now() - streamStart);
-        }
-        console.error(
-          `[${new Date().toISOString()}] Agent stream error:`,
-          err,
-        );
-        res.end();
-      });
     return;
   }
 
-  const configDir = getNextAccountConfigDir();
-  logAccountAssigned(configDir);
-  reportRequestStart(configDir);
-  const syncStart = Date.now();
-
-  const abortController = new AbortController();
-  abortOnClientDisconnect(res, abortController);
-
-  const out = await runAgentSync(
-    config,
+  const turn: PlainTurn = {
+    ...turnRequest,
+    res,
+    logModel: model ?? cursorModel,
     workspaceDir,
     effectiveChatOnly,
     cmdArgs,
     tempDir,
     promptForAgent,
-    configDir,
-    abortController.signal,
     modelCatalogName,
     mediaBlocks,
-  );
-  const syncLatency = Date.now() - syncStart;
-  reportRequestEnd(configDir);
+  };
+  const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
 
-  if (out.stderr && isRateLimited(out.stderr)) {
-    reportRateLimit(configDir, 60000);
-  }
-
-  if (out.code !== 0) {
-    reportRequestError(configDir, syncLatency);
-    logAccountStats(config.verbose, getAccountStats());
-    const errMsg = logAgentError(
-      config.sessionsLogPath,
-      method,
-      pathname,
-      remoteAddress,
-      out.code,
-      out.stderr,
-      out.error,
+  if (body.stream) {
+    // The message item opens with the first text, so a failure that
+    // arrives first reports a response with no output.
+    let itemOpen = false;
+    const openItem = () => {
+      if (itemOpen) return;
+      itemOpen = true;
+      writeResponseEvent(res, "response.output_item.added", {
+        response_id: id,
+        output_index: 0,
+        item: createOutputItem(itemId, "in_progress", ""),
+      });
+      writeResponseEvent(res, "response.content_part.added", {
+        response_id: id,
+        item_id: itemId,
+        output_index: 0,
+        content_index: 0,
+        part: { type: "output_text", text: "", annotations: [] },
+      });
+    };
+    await streamPlainTurn(
+      turn,
+      {
+        open: () =>
+          writeResponseEvent(res, "response.created", {
+            response: createResponseObject({
+              body,
+              id,
+              createdAt,
+              model: displayModel,
+              status: "in_progress",
+              output: [],
+              text: "",
+              promptTokens,
+              completionTokens: 0,
+            }),
+          }),
+        text: (delta) => {
+          openItem();
+          writeResponseEvent(res, "response.output_text.delta", {
+            response_id: id,
+            item_id: itemId,
+            output_index: 0,
+            content_index: 0,
+            delta,
+          });
+        },
+        complete: (text) => {
+          openItem();
+          const item = createOutputItem(itemId, "completed", text);
+          writeResponseEvent(res, "response.output_text.done", {
+            response_id: id,
+            item_id: itemId,
+            output_index: 0,
+            content_index: 0,
+            text,
+          });
+          writeResponseEvent(res, "response.content_part.done", {
+            response_id: id,
+            item_id: itemId,
+            output_index: 0,
+            content_index: 0,
+            part: item.content[0],
+          });
+          writeResponseEvent(res, "response.output_item.done", {
+            response_id: id,
+            output_index: 0,
+            item,
+          });
+          writeResponseEvent(res, "response.completed", {
+            response: createResponseObject({
+              body,
+              id,
+              createdAt,
+              model: displayModel,
+              status: "completed",
+              output: [item],
+              text,
+              promptTokens,
+              completionTokens: Math.max(1, Math.round(text.length / 4)),
+            }),
+          });
+          res.write("data: [DONE]\n\n");
+        },
+        fail: (failure) =>
+          writeResponseFailed(
+            res,
+            {
+              body,
+              id,
+              createdAt,
+              model: displayModel,
+              promptLength: agentPrompt.length,
+            },
+            failure,
+          ),
+      },
+      truncatedHeaders,
     );
-    json(res, 500, {
-      error: { message: errMsg, code: "cursor_cli_error" },
-    });
     return;
   }
 
-  reportRequestSuccess(configDir, syncLatency);
-  const content = out.stdout.trim();
-  logTrafficResponse(config.verbose, model ?? cursorModel, content, false);
-
-  const promptTokens = Math.max(1, Math.round(agentPrompt.length / 4));
-  const completionTokens = Math.max(1, Math.round(content.length / 4));
-
-  logAccountStats(config.verbose, getAccountStats());
+  const outcome = await runPlainTurn(turn);
+  if (!outcome) return;
+  if (!outcome.ok) {
+    json(res, outcome.failure.status, openAiErrorBody(outcome.failure));
+    return;
+  }
   json(
     res,
     200,
     createResponseObject({
       body,
       id,
-      itemId,
       createdAt,
       model: displayModel,
       status: "completed",
-      text: content,
+      output: [createOutputItem(itemId, "completed", outcome.text)],
+      text: outcome.text,
       promptTokens,
-      completionTokens,
+      completionTokens: Math.max(1, Math.round(outcome.text.length / 4)),
     }),
     truncatedHeaders,
   );
