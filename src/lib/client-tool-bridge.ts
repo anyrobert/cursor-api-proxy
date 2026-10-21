@@ -21,10 +21,19 @@ type ToolCallResult = {
   isError?: boolean;
 };
 
-type ParkedCall = PendingClientToolCall & {
-  exposed: boolean;
+/** One tools/call request from the agent, waiting on a parked call. */
+type AgentRequest = {
   resolve: (result: ToolCallResult) => void;
   reject: (error: Error) => void;
+};
+
+type ParkedCall = PendingClientToolCall & {
+  /** Handed to the API caller in a tool_calls turn. */
+  exposed: boolean;
+  /** Tool name plus canonical arguments: what a retry of this call repeats. */
+  retryKey: string;
+  /** Requests the agent still waits on: the original, then any retries. */
+  requests: Set<AgentRequest>;
 };
 
 export type AcpHttpMcpServer = {
@@ -56,10 +65,35 @@ function safeTokenEqual(actual: string, expected: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** JSON with object keys sorted, so equal arguments give equal text. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const fields = Object.keys(record)
+      .filter((key) => record[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`);
+    return `{${fields.join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function retryKeyOf(name: string, args: unknown): string {
+  return `${JSON.stringify(name)}:${canonicalJson(args)}`;
+}
+
 /**
  * Per-agent-turn MCP server. It exposes caller-provided schemas but never
  * executes them. tools/call is parked until the HTTP API caller submits the
  * corresponding tool result.
+ *
+ * Cursor's MCP client gives up on a tools/call after 60 s (the MCP SDK
+ * default request timeout; ACP-supplied servers get no other limit), sends
+ * notifications/cancelled, and the model usually retries the same call. It
+ * sends no progress token, so nothing the bridge sends can extend that
+ * timeout. A retry therefore must not reach the API caller as a new call: it
+ * waits on the call it repeats and gets that call's output (#64).
  */
 export class ClientToolBridge {
   readonly serverName: string;
@@ -72,6 +106,10 @@ export class ClientToolBridge {
   readonly #httpServer: http.Server;
   readonly #pending = new Map<string, ParkedCall>();
   readonly #callListeners = new Set<() => void>();
+  /** The call the agent's latest tools/call request went to. */
+  #latest?: ParkedCall;
+  /** Output of the latest call that arrived after the agent gave up on it. */
+  #unclaimed?: { retryKey: string; result: ToolCallResult };
   #url?: string;
   #closed = false;
   #listed = false;
@@ -101,7 +139,7 @@ export class ClientToolBridge {
       };
     });
 
-    this.#mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
+    this.#mcp.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const { name, arguments: args } = request.params;
       const definition = this.#definitions.get(name);
       if (!definition) {
@@ -123,9 +161,13 @@ export class ClientToolBridge {
         );
       }
 
+      const retryKey = retryKeyOf(name, args ?? {});
+
       return new Promise<ToolCallResult>((resolve, reject) => {
+        const agentRequest = { resolve, reject };
+        if (this.#serveRetry(retryKey, agentRequest, extra.signal)) return;
         this.#totalCalls += 1;
-        this.#pending.set(callId, {
+        const call: ParkedCall = {
           callId,
           itemId,
           name,
@@ -134,9 +176,11 @@ export class ClientToolBridge {
             ? { namespaced: definition.namespaced }
             : {}),
           exposed: false,
-          resolve,
-          reject,
-        });
+          retryKey,
+          requests: new Set(),
+        };
+        this.#pending.set(callId, call);
+        this.#attach(call, agentRequest, extra.signal);
         for (const listener of this.#callListeners) listener();
       });
     });
@@ -250,16 +294,26 @@ export class ClientToolBridge {
       const call = this.#pending.get(output.callId);
       if (!call) continue;
       this.#pending.delete(output.callId);
-      call.resolve({
+      const result: ToolCallResult = {
         content: [{ type: "text", text: output.output }],
         ...(output.isError ? { isError: true } : {}),
-      });
+      };
+      for (const request of call.requests) request.resolve(result);
+      // Nobody took the output, and the agent has made no other call since
+      // it gave up: keep the output for the retry it usually sends next.
+      if (call.requests.size === 0 && this.#latest === call) {
+        this.#unclaimed = { retryKey: call.retryKey, result };
+      }
     }
   }
 
   rejectAll(error: Error): void {
-    for (const call of this.#pending.values()) call.reject(error);
+    for (const call of this.#pending.values()) {
+      for (const request of call.requests) request.reject(error);
+    }
     this.#pending.clear();
+    this.#latest = undefined;
+    this.#unclaimed = undefined;
   }
 
   async close(): Promise<void> {
@@ -277,5 +331,53 @@ export class ClientToolBridge {
         this.#httpServer.close(() => resolve());
       });
     }
+  }
+
+  /**
+   * Serve a tools/call that retries a call the agent gave up on, so the API
+   * caller never runs it twice. False means it is a new call.
+   *
+   * A retry has the same tool name and arguments as a pending call that
+   * either nobody waits on any more or the API caller already has. Cursor
+   * runs one call per MCP server at a time, so a repeat of a handed-out call
+   * means its first request is over even if the cancellation was lost. The
+   * retry joins that call, or takes its output if the output came after the
+   * agent gave up and the agent has called nothing else since. The same call
+   * made before the caller has the first one (a parallel duplicate) or after
+   * its output reached the agent (polling, a re-run) is a new call.
+   */
+  #serveRetry(
+    retryKey: string,
+    request: AgentRequest,
+    signal: AbortSignal,
+  ): boolean {
+    const unclaimed = this.#unclaimed;
+    this.#unclaimed = undefined;
+    if (unclaimed?.retryKey === retryKey) {
+      this.#latest = undefined;
+      request.resolve(unclaimed.result);
+      return true;
+    }
+    for (const call of this.#pending.values()) {
+      const repeated = call.exposed || call.requests.size === 0;
+      if (call.retryKey === retryKey && repeated) {
+        this.#attach(call, request, signal);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Wait `request` on `call` until the agent cancels it (MCP timeout). */
+  #attach(call: ParkedCall, request: AgentRequest, signal: AbortSignal): void {
+    this.#latest = call;
+    call.requests.add(request);
+    const giveUp = () => {
+      call.requests.delete(request);
+      // The SDK answers nothing for a cancelled request; this only ends it.
+      request.reject(new Error("The agent cancelled the tool call"));
+    };
+    if (signal.aborted) giveUp();
+    else signal.addEventListener("abort", giveUp, { once: true });
   }
 }
