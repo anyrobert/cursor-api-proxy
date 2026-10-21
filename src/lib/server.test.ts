@@ -1,6 +1,8 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import * as fs from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { startBridgeServer } from "./server.js";
 import { appendSessionLine } from "./request-log.js";
@@ -281,6 +283,61 @@ describe("startBridgeServer", () => {
     // finish handlers run after response completion; flush microtasks before assert.
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(appendSessionLineMock).not.toHaveBeenCalled();
+  });
+
+  describe("dashboard /api/status launchd probe", () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const listsProxy =
+      '#!/bin/sh\nprintf "PID\\tStatus\\tLabel\\n123\\t0\\tcom.cursor-api-proxy\\n"\n';
+    let binDir = "";
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", realPlatform);
+      vi.unstubAllEnvs();
+      if (binDir) fs.rmSync(binDir, { recursive: true, force: true });
+      binDir = "";
+    });
+
+    // Asks /api/status as if running on `platform`, with PATH holding only a
+    // temp dir (and `launchctlScript` as its launchctl, if given), so the real
+    // launchctl never runs. The pid file /api/status writes lands there too.
+    async function statusLaunchdLoaded(
+      platform: NodeJS.Platform,
+      launchctlScript?: string,
+    ): Promise<unknown> {
+      binDir = fs.mkdtempSync(join(tmpdir(), "cursor-proxy-launchctl-"));
+      if (launchctlScript !== undefined) {
+        fs.writeFileSync(join(binDir, "launchctl"), launchctlScript, { mode: 0o755 });
+      }
+      vi.stubEnv("PATH", binDir);
+      Object.defineProperty(process, "platform", { ...realPlatform, value: platform });
+
+      servers = startBridgeServer({
+        version: "1.0.0",
+        config: createTestConfig({ sessionsLogPath: join(binDir, "sessions.log") }),
+      });
+      await new Promise<void>((resolve) =>
+        servers[0].on("listening", () => resolve()),
+      );
+      const { status, body } = await fetchServer(servers[0], "/api/status");
+      expect(status).toBe(200);
+      return (JSON.parse(body) as { launchdLoaded: unknown }).launchdLoaded;
+    }
+
+    it.skipIf(process.platform === "win32")(
+      "reports launchd loaded on macOS when launchctl lists the proxy",
+      async () => {
+        expect(await statusLaunchdLoaded("darwin", listsProxy)).toBe(true);
+      },
+    );
+
+    it("reports launchd not loaded on macOS when launchctl cannot run", async () => {
+      expect(await statusLaunchdLoaded("darwin")).toBe(false);
+    });
+
+    it("does not consult launchctl off macOS", async () => {
+      expect(await statusLaunchdLoaded("linux", listsProxy)).toBe(false);
+    });
   });
 
   it("POST /api/log/clear archives and truncates sessions log", async () => {
