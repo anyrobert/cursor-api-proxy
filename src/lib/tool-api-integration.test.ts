@@ -20,7 +20,10 @@ const fakeServerPath = join(
 );
 const servers: http.Server[] = [];
 
-function config(scenario = "tool_call"): BridgeConfig {
+function config(
+  scenario = "tool_call",
+  overrides: Partial<BridgeConfig> = {},
+): BridgeConfig {
   return {
     agentBin: "agent",
     acpCommand: process.execPath,
@@ -49,13 +52,17 @@ function config(scenario = "tool_call"): BridgeConfig {
     winCmdlineMax: 30_000,
     contextPreamble: false,
     bridgePackageVersion: "0.0.0-test",
+    ...overrides,
   };
 }
 
-async function start(scenario = "tool_call") {
+async function start(
+  scenario = "tool_call",
+  overrides: Partial<BridgeConfig> = {},
+) {
   const [server] = startBridgeServer({
     version: "test",
-    config: config(scenario),
+    config: config(scenario, overrides),
   });
   servers.push(server as http.Server);
   await new Promise<void>((resolve) => server.once("listening", resolve));
@@ -87,6 +94,25 @@ function sseData(text: string): any[] {
     .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
     .map((line) => JSON.parse(line.slice(6)));
 }
+
+/** A freeform tool shaped like Codex CLI's `apply_patch`. */
+const applyPatchTool = {
+  type: "custom",
+  name: "apply_patch",
+  description:
+    "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.",
+  format: {
+    type: "grammar",
+    syntax: "lark",
+    definition: 'start: begin_patch hunk+ end_patch\nbegin_patch: "*** Begin Patch" LF',
+  },
+};
+
+/**
+ * What the fake agent passes any tool, whatever its schema. With no `input`
+ * string in it, a freeform call hands these arguments on as its raw text.
+ */
+const fakeAgentArguments = JSON.stringify({ city: "Paris", index: 0 });
 
 afterEach(async () => {
   await Promise.all(
@@ -261,6 +287,110 @@ describe.each([false, true])("ACP tool APIs stream=%s", (stream) => {
     expect(follow.status).toBe(200);
     expect(JSON.parse(follow.text).output_text).toContain(
       "Tool result: mcp__docs-hit, mcp__wiki-hit",
+    );
+  });
+
+  it("round-trips Responses freeform custom tool calls", async () => {
+    const base = await start();
+    const initial = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      stream,
+      input: "Patch it",
+      tools: [applyPatchTool],
+      tool_choice: { type: "custom", name: "apply_patch" },
+    });
+    expect(initial.status).toBe(200);
+    const events = stream ? sseData(initial.text) : [];
+    const payload = stream
+      ? events.find((event) => event.type === "response.completed").response
+      : JSON.parse(initial.text);
+    const calls = payload.output.filter(
+      (item: any) => item.type !== "message",
+    );
+    expect(calls).toEqual([
+      {
+        id: expect.any(String),
+        type: "custom_tool_call",
+        status: "completed",
+        call_id: expect.stringMatching(/^call_/),
+        name: "apply_patch",
+        input: fakeAgentArguments,
+      },
+    ]);
+    const [call] = calls;
+    if (stream) {
+      const callEvents = events.filter(
+        (event) => event.item_id === call.id || event.item?.id === call.id,
+      );
+      expect(callEvents.map((event) => event.type)).toEqual([
+        "response.output_item.added",
+        "response.custom_tool_call_input.delta",
+        "response.custom_tool_call_input.done",
+        "response.output_item.done",
+      ]);
+      const [added, delta, done, itemDone] = callEvents;
+      expect(added.item).toEqual({ ...call, status: "in_progress", input: "" });
+      expect(delta.delta).toBe(fakeAgentArguments);
+      expect(done.input).toBe(fakeAgentArguments);
+      expect(done.output_index).toBe(added.output_index);
+      expect(itemDone.item).toEqual(call);
+    }
+
+    const follow = await post(base, "/v1/responses", {
+      model: "gpt-4",
+      stream: false,
+      previous_response_id: payload.id,
+      input: [
+        {
+          type: "custom_tool_call_output",
+          call_id: call.call_id,
+          output: "Done!",
+        },
+      ],
+    });
+    expect(follow.status).toBe(200);
+    expect(JSON.parse(follow.text).output_text).toContain("Tool result: Done!");
+  });
+
+  it("round-trips Chat Completions custom tool calls", async () => {
+    const base = await start();
+    const initial = await post(base, "/v1/chat/completions", {
+      model: "gpt-4",
+      stream,
+      messages: [{ role: "user", content: "Patch it" }],
+      tools: [
+        {
+          type: "custom",
+          custom: { name: "apply_patch", description: "Edit files." },
+        },
+      ],
+      tool_choice: { type: "custom", custom: { name: "apply_patch" } },
+    });
+    expect(initial.status).toBe(200);
+    const call = stream
+      ? sseData(initial.text)
+          .flatMap((chunk) => chunk.choices ?? [])
+          .flatMap((choice: any) => choice.delta?.tool_calls ?? [])[0]
+      : JSON.parse(initial.text).choices[0].message.tool_calls[0];
+    expect(call).toEqual({
+      ...(stream ? { index: 0 } : {}),
+      id: expect.stringMatching(/^call_/),
+      type: "custom",
+      custom: { name: "apply_patch", input: fakeAgentArguments },
+    });
+
+    const follow = await post(base, "/v1/chat/completions", {
+      model: "gpt-4",
+      stream: false,
+      messages: [
+        { role: "user", content: "Patch it" },
+        { role: "assistant", content: null, tool_calls: [call] },
+        { role: "tool", tool_call_id: call.id, content: "Done!" },
+      ],
+    });
+    expect(follow.status).toBe(200);
+    expect(JSON.parse(follow.text).choices[0].message.content).toContain(
+      "Tool result: Done!",
     );
   });
 
@@ -655,6 +785,40 @@ describe("ACP tool session errors", () => {
     }
   });
 
+  it("names the tools it drops in the verbose log", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const base = await start("tool_call", { verbose: true });
+      const responses = await post(base, "/v1/responses", {
+        model: "gpt-4",
+        input: "Search",
+        tool_choice: "required",
+        tools: [{ type: "web_search" }, { type: "local_shell" }],
+      });
+      const anthropic = await post(base, "/v1/messages", {
+        model: "gpt-4",
+        max_tokens: 256,
+        messages: [{ role: "user", content: "Run it" }],
+        tool_choice: { type: "any" },
+        tools: [{ type: "bash_20250124", name: "bash" }],
+      });
+      expect([responses.status, anthropic.status]).toEqual([400, 400]);
+      const lines = log.mock.calls.map((args) => args.join(" "));
+      for (const dropped of [
+        "web_search, local_shell",
+        "bash (bash_20250124)",
+      ]) {
+        expect(lines).toContainEqual(
+          expect.stringContaining(
+            `ignored tools the agent cannot run: ${dropped}`,
+          ),
+        );
+      }
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("keeps Anthropic server tools away from the agent", async () => {
     const base = await start();
     const reply = await post(base, "/v1/messages", {
@@ -730,12 +894,16 @@ function userMessage(text: string) {
  * A request shaped like Codex CLI's: the whole history every time, the same
  * instructions, store=false and no previous_response_id.
  */
-function transcriptTurn(input: unknown[], stream = false) {
+function transcriptTurn(
+  input: unknown[],
+  stream = false,
+  tools: unknown[] = [weatherTool],
+) {
   return {
     model: "gpt-4",
     instructions: "You are a coding agent.",
     input,
-    tools: [weatherTool],
+    tools,
     tool_choice: "auto",
     parallel_tool_calls: true,
     store: false,
@@ -757,6 +925,18 @@ function functionCalls(response: any): any[] {
 
 /** The call and its result as a client records them in its history. */
 function answered(call: any, output: string) {
+  if (call.type === "custom_tool_call") {
+    return [
+      {
+        type: "custom_tool_call",
+        id: call.id,
+        call_id: call.call_id,
+        name: call.name,
+        input: call.input,
+      },
+      { type: "custom_tool_call_output", call_id: call.call_id, output },
+    ];
+  }
   return [
     {
       type: "function_call",
@@ -792,6 +972,31 @@ describe.each([false, true])("Responses transcript clients stream=%s", (stream) 
     expect(second.output_text).toContain("Tool result: sunny");
     expect(second.previous_response_id).toBeNull();
     expect(functionCalls(second)).toEqual([]);
+  });
+
+  it("resumes a store=false custom tool turn by call_id", async () => {
+    const base = await start();
+    const question = userMessage("Patch it");
+    const tools = [applyPatchTool];
+    const first = responseFrom(
+      await post(base, "/v1/responses", transcriptTurn([question], stream, tools)),
+      stream,
+    );
+    const [call] = first.output.filter(
+      (item: any) => item.type === "custom_tool_call",
+    );
+    expect(call.name).toBe("apply_patch");
+
+    const second = responseFrom(
+      await post(
+        base,
+        "/v1/responses",
+        transcriptTurn([question, ...answered(call, "Done!")], stream, tools),
+      ),
+      stream,
+    );
+    expect(second.output_text).toContain("Tool result: Done!");
+    expect(second.output.map((item: any) => item.type)).toEqual(["message"]);
   });
 });
 
@@ -919,6 +1124,31 @@ describe("Responses transcript clients", () => {
     });
     expect(bare.status).toBe(409);
     expect(JSON.parse(bare.text).error.code).toBe("tool_session_expired");
+  });
+
+  it("rebuilds an expired custom tool call from the transcript", async () => {
+    const base = await start("tool_transcript");
+    const expired = {
+      type: "custom_tool_call",
+      id: "ctc_gone",
+      call_id: "call_gone",
+      name: "apply_patch",
+      input: "*** Begin Patch\n*** End Patch",
+    };
+    const rebuilt = responseFrom(
+      await post(
+        base,
+        "/v1/responses",
+        transcriptTurn(
+          [userMessage("Patch it"), ...answered(expired, "Done!")],
+          false,
+          [applyPatchTool],
+        ),
+      ),
+    );
+    expect(rebuilt.output_text).toContain(
+      "[continued] Answer from transcript: Done!",
+    );
   });
 
   it("never resumes another owner's parked call", async () => {

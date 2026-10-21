@@ -29,6 +29,7 @@ import {
   logAccountAssigned,
   logAccountStats,
   logModelResolution,
+  logToolSession,
   logTrafficRequest,
   logTrafficResponse,
   type TrafficMessage,
@@ -55,6 +56,8 @@ import {
 } from "../win-cmdline-limit.js";
 import {
   chatToolOutputs,
+  droppedToolsNote,
+  freeformInput,
   parseOpenAiFunctionTools,
   resolveToolChoice,
   type PendingClientToolCall,
@@ -77,12 +80,19 @@ export type ChatCompletionsCtx = {
   toolSessions: ToolSessionRegistry;
 };
 
-function chatToolCallWire(calls: readonly PendingClientToolCall[]) {
-  return calls.map((call) => ({
-    id: call.callId,
-    type: "function" as const,
-    function: { name: call.name, arguments: call.arguments },
-  }));
+/** A function call with JSON arguments, or a freeform tool's raw input. */
+function chatToolCallWire(call: PendingClientToolCall) {
+  return call.freeform
+    ? {
+        id: call.callId,
+        type: "custom" as const,
+        custom: { name: call.name, input: freeformInput(call.arguments) },
+      }
+    : {
+        id: call.callId,
+        type: "function" as const,
+        function: { name: call.name, arguments: call.arguments },
+      };
 }
 
 function chatToolResponse(opts: {
@@ -100,7 +110,7 @@ function chatToolResponse(opts: {
   );
   const calls =
     opts.result.status === "tool_calls"
-      ? chatToolCallWire(opts.result.toolCalls)
+      ? opts.result.toolCalls.map(chatToolCallWire)
       : undefined;
   return {
     id: opts.id,
@@ -198,14 +208,7 @@ async function writeStructuredChatTurn(opts: {
     if (result.status === "tool_calls") {
       result.toolCalls.forEach((call, index) => {
         writeChunk({
-          tool_calls: [
-            {
-              index,
-              id: call.callId,
-              type: "function",
-              function: { name: call.name, arguments: call.arguments },
-            },
-          ],
+          tool_calls: [{ index, ...chatToolCallWire(call) }],
         });
       });
     }
@@ -246,6 +249,8 @@ export async function handleChatCompletions(
   let submittedToolOutputs;
   try {
     const parsed = parseOpenAiFunctionTools(body.tools, body.functions);
+    const ignored = droppedToolsNote(parsed.dropped);
+    if (ignored) logToolSession(config.verbose, ignored);
     const choice = resolveToolChoice(
       parsed.tools,
       body.tool_choice ?? body.function_call,

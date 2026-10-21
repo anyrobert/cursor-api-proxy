@@ -11,7 +11,22 @@ export type ClientToolDefinition = {
   inputSchema: Record<string, unknown>;
   /** Client-side identity of a flattened `namespace` member. */
   namespaced?: NamespacedToolName;
+  /**
+   * A freeform `custom` tool: the agent passes the tool's raw text as its
+   * one `input` argument, and the client gets that text back as a custom
+   * tool call instead of JSON arguments.
+   */
+  freeform?: boolean;
 };
+
+/**
+ * How the client declared a tool, beyond the name the agent sees. Its calls
+ * carry it, so each API reports them the way the tool was declared.
+ */
+export type ClientToolIdentity = Pick<
+  ClientToolDefinition,
+  "namespaced" | "freeform"
+>;
 
 export type ClientToolOutput = {
   callId: string;
@@ -19,13 +34,12 @@ export type ClientToolOutput = {
   isError?: boolean;
 };
 
-export type PendingClientToolCall = {
+export type PendingClientToolCall = ClientToolIdentity & {
   callId: string;
   itemId: string;
   /** Agent-visible tool name (see ClientToolDefinition.name). */
   name: string;
   arguments: string;
-  namespaced?: NamespacedToolName;
 };
 
 /**
@@ -67,6 +81,15 @@ function schemaOrDefault(value: unknown): Record<string, unknown> {
   );
 }
 
+/**
+ * The fields that declare a tool: Chat nests them under a key named after
+ * the tool's type (`{type: "function", function: {name}}`, `{type:
+ * "custom", custom: {name}}`), while Responses keeps them on the tool.
+ */
+function declaration(tool: Record<string, unknown>): Record<string, unknown> {
+  return (typeof tool.type === "string" && asRecord(tool[tool.type])) || tool;
+}
+
 /** Collects a request's tools under unique agent-visible names. */
 class ToolSet {
   readonly #tools: ClientToolDefinition[] = [];
@@ -97,14 +120,10 @@ class ToolSet {
     this.#tools.push(definition);
   }
 
-  /**
-   * Records a tool the agent cannot run. Its name is top-level or, as in
-   * Chat's `{type: "custom", custom: {name}}`, under a key named after its
-   * type.
-   */
+  /** Records a tool the agent cannot run. */
   drop(tool: Record<string, unknown>, namespace?: string): void {
     const type = typeof tool.type === "string" ? tool.type : "untyped";
-    const name = tool.name ?? asRecord(tool[type])?.name;
+    const name = declaration(tool).name;
     this.#dropped.push({
       type,
       ...(typeof name === "string" && name
@@ -121,8 +140,7 @@ class ToolSet {
 function functionDefinition(
   tool: Record<string, unknown>,
 ): ClientToolDefinition {
-  const wrapped = asRecord(tool.function);
-  const fn = wrapped ?? tool;
+  const fn = declaration(tool);
   if (typeof fn.name !== "string") {
     throw new Error("Function tool is missing name");
   }
@@ -131,6 +149,103 @@ function functionDefinition(
     description:
       typeof fn.description === "string" ? fn.description : undefined,
     inputSchema: schemaOrDefault(fn.parameters),
+  };
+}
+
+/** The one argument the agent passes a freeform tool's raw text in. */
+const FREEFORM_INPUT = "input";
+
+/** How a freeform tool's description names each grammar `syntax`. */
+const GRAMMAR_SYNTAX = new Map([
+  ["lark", "Lark grammar"],
+  ["regex", "regular expression"],
+]);
+
+/**
+ * Tells the agent how to fill `input`, and passes on the grammar the client
+ * constrains the text with, which the JSON schema cannot carry.
+ */
+function freeformDescription(custom: Record<string, unknown>): string {
+  const format = asRecord(custom.format);
+  const grammar =
+    format?.type === "grammar" && typeof format.definition === "string"
+      ? `The text must match this ${GRAMMAR_SYNTAX.get(String(format.syntax)) ?? "grammar"}:\n${format.definition}`
+      : "";
+  return [
+    typeof custom.description === "string" ? custom.description.trim() : "",
+    `Pass the tool's whole input as raw text in the \`${FREEFORM_INPUT}\` string.`,
+    grammar,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
+ * A freeform `custom` tool, such as Codex's `apply_patch`, takes raw text
+ * rather than JSON arguments. MCP tools take a JSON object, so the agent
+ * sees a function with one `input` string.
+ */
+function customToolDefinition(
+  tool: Record<string, unknown>,
+): ClientToolDefinition {
+  const custom = declaration(tool);
+  if (typeof custom.name !== "string") {
+    throw new Error("Custom tool is missing name");
+  }
+  return {
+    name: custom.name,
+    description: freeformDescription(custom),
+    inputSchema: {
+      type: "object",
+      properties: {
+        [FREEFORM_INPUT]: {
+          type: "string",
+          description: "The tool's raw input text, passed on unchanged.",
+        },
+      },
+      required: [FREEFORM_INPUT],
+      additionalProperties: false,
+    },
+    freeform: true,
+  };
+}
+
+/** A `function` or freeform `custom` tool; anything else is not callable. */
+function callableDefinition(
+  tool: Record<string, unknown>,
+): ClientToolDefinition | undefined {
+  if (tool.type === "function") return functionDefinition(tool);
+  if (tool.type === "custom") return customToolDefinition(tool);
+  return undefined;
+}
+
+/**
+ * The raw text of a freeform call: the agent's `input` argument. Arguments
+ * without an `input` string pass on as their JSON text, which the client
+ * can still reject with a result the agent sees.
+ */
+export function freeformInput(args: string): string {
+  try {
+    const input = asRecord(JSON.parse(args))?.[FREEFORM_INPUT];
+    if (typeof input === "string") return input;
+  } catch {
+    // Not JSON: pass the text on as it is.
+  }
+  return args;
+}
+
+/** The arguments the agent sends a freeform tool for the raw `input`. */
+export function freeformArguments(input: unknown): string {
+  return JSON.stringify({
+    [FREEFORM_INPUT]: typeof input === "string" ? input : "",
+  });
+}
+
+/** The identity fields a definition or call sets, for a call to carry. */
+export function callIdentity(source: ClientToolIdentity): ClientToolIdentity {
+  return {
+    ...(source.namespaced ? { namespaced: source.namespaced } : {}),
+    ...(source.freeform ? { freeform: true } : {}),
   };
 }
 
@@ -144,11 +259,11 @@ function addNamespaceMembers(
   for (const member of members) {
     const nested = asRecord(member);
     if (!nested) continue;
-    if (nested.type !== "function") {
+    const definition = callableDefinition(nested);
+    if (!definition) {
       set.drop(nested, namespace || undefined);
       continue;
     }
-    const definition = functionDefinition(nested);
     if (!namespace) {
       set.add(definition);
       continue;
@@ -170,10 +285,11 @@ function addNamespaceMembers(
 
 /**
  * Parse OpenAI Chat Completions (`function` wrapper), Responses (flat
- * function), and legacy Chat `functions` definitions.
+ * function), and legacy Chat `functions` definitions, plus freeform
+ * `custom` tools in either API's shape (see customToolDefinition).
  *
- * Responses `namespace` groups are flattened into their member functions.
- * A member keeps its bare name unless a top-level function or an earlier
+ * Responses `namespace` groups are flattened into their member tools.
+ * A member keeps its bare name unless a top-level tool or an earlier
  * member already uses it, in which case it becomes `<namespace>__<name>`.
  * Either way `namespaced` records the client's own (namespace, name) so
  * calls can be reported back the way the client declared them.
@@ -192,12 +308,12 @@ export function parseOpenAiFunctionTools(
     return tool;
   });
 
-  // Reserve top-level names up front so a top-level function keeps its bare
+  // Reserve top-level names up front so a top-level tool keeps its bare
   // name even when a colliding namespace group is listed before it.
   const topLevelNames = new Set<string>();
   for (const tool of records) {
-    if (tool.type !== "function") continue;
-    const name = (asRecord(tool.function) ?? tool).name;
+    if (tool.type !== "function" && tool.type !== "custom") continue;
+    const name = declaration(tool).name;
     if (typeof name === "string") topLevelNames.add(name);
   }
   for (const value of functions ?? []) {
@@ -206,13 +322,13 @@ export function parseOpenAiFunctionTools(
   }
 
   for (const tool of records) {
-    if (tool.type === "function") {
-      set.add(functionDefinition(tool));
-    } else if (tool.type === "namespace") {
+    if (tool.type === "namespace") {
       addNamespaceMembers(set, topLevelNames, tool);
-    } else {
-      set.drop(tool);
+      continue;
     }
+    const definition = callableDefinition(tool);
+    if (definition) set.add(definition);
+    else set.drop(tool);
   }
 
   for (const value of functions ?? []) {
@@ -276,19 +392,30 @@ export function parseAnthropicFunctionTools(
  * Names dropped tools for a log line or an error, e.g.
  * `web_search (web_search_20250305), file_search`.
  */
-export function describeDroppedTools(dropped: readonly DroppedTool[]): string {
+function describeDroppedTools(dropped: readonly DroppedTool[]): string {
   return dropped
     .map((tool) => (tool.name ? `${tool.name} (${tool.type})` : tool.type))
     .join(", ");
 }
 
+/** The verbose-log line for the tools a parser dropped, if it dropped any. */
+export function droppedToolsNote(
+  dropped: readonly DroppedTool[],
+): string | undefined {
+  return dropped.length > 0
+    ? `ignored tools the agent cannot run: ${describeDroppedTools(dropped)}`
+    : undefined;
+}
+
+/**
+ * The tool a choice names: `{type: "function" | "custom" | "tool", name}`,
+ * Chat's `{type: "function", function: {name}}` and `{type: "custom",
+ * custom: {name}}`, or a legacy `function_call: {name}`.
+ */
 function namedChoice(choice: unknown): string | undefined {
   const rec = asRecord(choice);
-  if (!rec) return undefined;
-  if (typeof rec.name === "string") return rec.name;
-  const fn = asRecord(rec.function);
-  if (fn && typeof fn.name === "string") return fn.name;
-  return undefined;
+  const name = rec && declaration(rec).name;
+  return typeof name === "string" ? name : undefined;
 }
 
 /**
@@ -398,14 +525,34 @@ export function chatToolOutputs(
   return outputs;
 }
 
+/** Responses input items that record a client tool call. */
+const RESPONSES_CALL_TYPES: ReadonlySet<unknown> = new Set([
+  "function_call",
+  "custom_tool_call",
+]);
+
+/** Responses input items that answer a client tool call. */
+const RESPONSES_OUTPUT_TYPES: ReadonlySet<unknown> = new Set([
+  "function_call_output",
+  "custom_tool_call_output",
+]);
+
+/**
+ * Whether a Responses input item answers a client tool call: a
+ * `function_call_output` or a `custom_tool_call_output`.
+ */
+export function isResponsesToolOutput(value: unknown): boolean {
+  return RESPONSES_OUTPUT_TYPES.has(asRecord(value)?.type);
+}
+
 export function responsesToolOutputs(input: unknown): ClientToolOutput[] {
   if (!Array.isArray(input)) return [];
   const outputs: ClientToolOutput[] = [];
   for (const value of input) {
     const item = asRecord(value);
-    if (!item || item.type !== "function_call_output") continue;
+    if (!item || !isResponsesToolOutput(item)) continue;
     if (typeof item.call_id !== "string" || !item.call_id) {
-      throw new Error("function_call_output is missing call_id");
+      throw new Error(`${String(item.type)} is missing call_id`);
     }
     outputs.push({
       callId: item.call_id,
@@ -420,8 +567,9 @@ const TURN_OPENING_ROLES = new Set(["user", "developer", "system"]);
 /**
  * Index of the first `input` item of the model's current turn: everything
  * after the last user, developer or system message (a bare string is a user
- * message). What follows it is model output (`function_call`, assistant
- * `message`, `reasoning`) and the caller's `function_call_output` replies.
+ * message). What follows it is model output (`function_call`,
+ * `custom_tool_call`, assistant `message`, `reasoning`) and the caller's
+ * tool outputs.
  */
 function responsesTurnStart(input: readonly unknown[]): number {
   for (let i = input.length - 1; i >= 0; i -= 1) {
@@ -437,7 +585,7 @@ function responsesTurnStart(input: readonly unknown[]): number {
 }
 
 /**
- * The `function_call_output` items that answer the model's current turn.
+ * The tool outputs that answer the model's current turn.
  *
  * A client that resends its whole history instead of a
  * `previous_response_id` (Codex sends `store: false` and never chains) also
@@ -450,16 +598,16 @@ export function responsesTurnToolOutputs(input: unknown): ClientToolOutput[] {
   return responsesToolOutputs(input.slice(responsesTurnStart(input)));
 }
 
-/** Every `call_id` an input names, on `function_call` or its output. */
+/** Every `call_id` an input names, on a tool call or its output. */
 export function responsesCallIds(input: unknown): string[] {
   if (!Array.isArray(input)) return [];
   const ids = new Set<string>();
   for (const value of input) {
     const item = asRecord(value);
     if (
-      (item?.type === "function_call" ||
-        item?.type === "function_call_output") &&
-      typeof item.call_id === "string" &&
+      (RESPONSES_CALL_TYPES.has(item?.type) ||
+        RESPONSES_OUTPUT_TYPES.has(item?.type)) &&
+      typeof item?.call_id === "string" &&
       item.call_id
     ) {
       ids.add(item.call_id);

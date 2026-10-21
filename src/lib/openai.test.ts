@@ -245,7 +245,6 @@ describe("toolsToSystemText", () => {
         { type: "namespace", name: "mcp__docs", tools: [search] },
         { type: "namespace", name: "mcp__wiki", tools: [search] },
         { type: "file_search", vector_store_ids: ["vs_1"] },
-        { type: "custom", name: "apply_patch", format: { type: "text" } },
         { description: "no name" },
       ]).tools,
     );
@@ -253,9 +252,44 @@ describe("toolsToSystemText", () => {
       "Function: search",
       "Function: mcp__wiki__search",
     ]);
-    expect(text).not.toMatch(
-      /mcp__docs|web_search|file_search|apply_patch|undefined/,
+    expect(text).not.toMatch(/mcp__docs|web_search|file_search|undefined/);
+  });
+
+  it("renders a freeform custom tool as a function of one input string", () => {
+    const text = toolsToSystemText(
+      parseOpenAiFunctionTools([
+        {
+          type: "custom",
+          name: "apply_patch",
+          description: "Edit files.",
+          format: {
+            type: "grammar",
+            syntax: "lark",
+            definition: "start: begin_patch hunk+ end_patch",
+          },
+        },
+      ]).tools,
     );
+    expect(lines(entries(text))).toEqual([
+      "Function: apply_patch",
+      "Description: Edit files.",
+      "",
+      "Pass the tool's whole input as raw text in the `input` string.",
+      "",
+      "The text must match this Lark grammar:",
+      "start: begin_patch hunk+ end_patch",
+      `Parameters: ${JSON.stringify({
+        type: "object",
+        properties: {
+          input: {
+            type: "string",
+            description: "The tool's raw input text, passed on unchanged.",
+          },
+        },
+        required: ["input"],
+        additionalProperties: false,
+      })}`,
+    ]);
   });
 
   it("renders Anthropic input_schema", () => {
@@ -434,5 +468,37 @@ describe("responsesInputToMessages", () => {
       input: [{ type: "function_call_output", call_id: "call_1", output: "42" }],
     });
     expect(result).toEqual([{ role: "tool", content: "42" }]);
+  });
+
+  it("replays freeform custom tool calls the way the agent makes them", () => {
+    const patch = "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch";
+    const result = responsesInputToMessages({
+      input: [
+        { type: "message", role: "user", content: "Add a.txt" },
+        {
+          type: "custom_tool_call",
+          id: "ctc_1",
+          call_id: "call_1",
+          name: "apply_patch",
+          input: patch,
+        },
+        {
+          type: "custom_tool_call_output",
+          call_id: "call_1",
+          output: "Success. Updated the following files:\nA a.txt",
+        },
+      ],
+    });
+    expect(result).toEqual([
+      { role: "user", content: "Add a.txt" },
+      {
+        role: "assistant",
+        content: `Function call apply_patch: ${JSON.stringify({ input: patch })}`,
+      },
+      {
+        role: "tool",
+        content: "Success. Updated the following files:\nA a.txt",
+      },
+    ]);
   });
 });

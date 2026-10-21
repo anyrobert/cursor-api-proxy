@@ -2,13 +2,19 @@ import { describe, expect, it } from "vitest";
 
 import {
   anthropicToolOutputs,
+  callIdentity,
   chatToolOutputs,
+  droppedToolsNote,
+  freeformArguments,
+  freeformInput,
+  isResponsesToolOutput,
   parseAnthropicFunctionTools,
   parseOpenAiFunctionTools,
   resolveToolChoice,
   responsesCallIds,
   responsesToolOutputs,
   responsesTurnToolOutputs,
+  type ClientToolDefinition,
   type ParsedClientTools,
 } from "./tool-types.js";
 
@@ -172,7 +178,7 @@ describe("tool normalization", () => {
     expect(
       parseOpenAiFunctionTools([
         { type: "web_search", external_web_access: true },
-        { type: "custom", custom: { name: "chat_freeform" } },
+        { type: "mcp", server_label: "deepwiki" },
         {
           type: "namespace",
           name: "mcp__img",
@@ -194,7 +200,7 @@ describe("tool normalization", () => {
       ],
       dropped: [
         { type: "web_search" },
-        { type: "custom", name: "chat_freeform" },
+        { type: "mcp" },
         { type: "image_generation", name: "mcp__img.draw" },
         { type: "untyped" },
       ],
@@ -308,6 +314,165 @@ describe("tool normalization", () => {
       choose(mixed, { type: "any" }).tools.map((tool) => tool.name),
     ).toEqual(["lookup"]);
   });
+
+  it("names dropped tools in one verbose-log line", () => {
+    expect(droppedToolsNote([])).toBeUndefined();
+    expect(
+      droppedToolsNote(
+        parseAnthropicFunctionTools([
+          { type: "web_search_20250305", name: "web_search" },
+          { type: "mcp_toolset", mcp_server_name: "docs" },
+        ]).dropped,
+      ),
+    ).toBe(
+      "ignored tools the agent cannot run: web_search (web_search_20250305), mcp_toolset",
+    );
+  });
+});
+
+describe("freeform custom tools", () => {
+  const inputSchema = {
+    type: "object",
+    properties: {
+      input: {
+        type: "string",
+        description: "The tool's raw input text, passed on unchanged.",
+      },
+    },
+    required: ["input"],
+    additionalProperties: false,
+  };
+  const inputNote =
+    "Pass the tool's whole input as raw text in the `input` string.";
+
+  it("maps a custom tool to a function of one input string", () => {
+    expect(
+      parseOpenAiFunctionTools([
+        {
+          type: "custom",
+          name: "apply_patch",
+          description: "Edit files. This is a FREEFORM tool.",
+          format: {
+            type: "grammar",
+            syntax: "lark",
+            definition: "start: begin_patch hunk+ end_patch",
+          },
+        },
+      ]),
+    ).toEqual({
+      tools: [
+        {
+          name: "apply_patch",
+          description: [
+            "Edit files. This is a FREEFORM tool.",
+            inputNote,
+            "The text must match this Lark grammar:\nstart: begin_patch hunk+ end_patch",
+          ].join("\n\n"),
+          inputSchema,
+          freeform: true,
+        },
+      ],
+      dropped: [],
+    });
+  });
+
+  it("describes each input format", () => {
+    const descriptionFor = (format?: unknown) =>
+      parseOpenAiFunctionTools([{ type: "custom", name: "t", format }])
+        .tools[0].description;
+    expect(descriptionFor()).toBe(inputNote);
+    expect(descriptionFor({ type: "text" })).toBe(inputNote);
+    expect(
+      descriptionFor({ type: "grammar", syntax: "regex", definition: "^\\d+$" }),
+    ).toBe(`${inputNote}\n\nThe text must match this regular expression:\n^\\d+$`);
+    expect(
+      descriptionFor({ type: "grammar", syntax: "peg", definition: "a <- 'a'" }),
+    ).toBe(`${inputNote}\n\nThe text must match this grammar:\na <- 'a'`);
+  });
+
+  it("reads Chat's nested shape and namespace members", () => {
+    const { tools } = parseOpenAiFunctionTools([
+      { type: "custom", custom: { name: "chat_patch", description: "Chat." } },
+      {
+        type: "namespace",
+        name: "mcp__fs",
+        tools: [
+          { type: "custom", name: "chat_patch" },
+          { type: "custom", name: "write" },
+        ],
+      },
+    ]);
+    expect(
+      tools.map(({ name, freeform, namespaced }) => ({
+        name,
+        freeform,
+        namespaced,
+      })),
+    ).toEqual([
+      { name: "chat_patch", freeform: true, namespaced: undefined },
+      {
+        name: "mcp__fs__chat_patch",
+        freeform: true,
+        namespaced: { namespace: "mcp__fs", name: "chat_patch" },
+      },
+      {
+        name: "write",
+        freeform: true,
+        namespaced: { namespace: "mcp__fs", name: "write" },
+      },
+    ]);
+    expect(tools[0].description).toBe(`Chat.\n\n${inputNote}`);
+    expect(() =>
+      parseOpenAiFunctionTools([{ type: "custom", custom: {} }]),
+    ).toThrow(/Custom tool is missing name/);
+    expect(() =>
+      parseOpenAiFunctionTools([
+        { type: "function", name: "apply_patch" },
+        { type: "custom", name: "apply_patch" },
+      ]),
+    ).toThrow(/Duplicate function tool name: apply_patch/);
+  });
+
+  it("selects a custom tool by name in either API's tool_choice", () => {
+    const { tools } = parseOpenAiFunctionTools([
+      { type: "function", name: "shell" },
+      { type: "custom", name: "apply_patch" },
+    ]);
+    for (const choice of [
+      { type: "custom", name: "apply_patch" },
+      { type: "custom", custom: { name: "apply_patch" } },
+    ]) {
+      const resolved = resolveToolChoice(tools, choice);
+      expect(resolved.tools.map((tool) => tool.name)).toEqual(["apply_patch"]);
+      expect(resolved.required).toBe(true);
+      expect(resolved.instruction).toBe("You must call the apply_patch tool.");
+    }
+  });
+
+  it("turns the agent's arguments back into the raw text", () => {
+    const patch = '*** Begin Patch\n*** Add File: "a".txt\n+hi\n*** End Patch';
+    expect(freeformInput(freeformArguments(patch))).toBe(patch);
+    expect(freeformInput('{"input":"x","extra":1}')).toBe("x");
+    // Without an input string the text passes on as the agent sent it.
+    expect(freeformInput('{"city":"Paris"}')).toBe('{"city":"Paris"}');
+    expect(freeformInput('{"input":42}')).toBe('{"input":42}');
+    expect(freeformInput("not json")).toBe("not json");
+    expect(freeformArguments(undefined)).toBe('{"input":""}');
+  });
+
+  it("copies only the identity fields a tool sets", () => {
+    const namespaced = { namespace: "mcp__fs", name: "write" };
+    const definition: ClientToolDefinition = {
+      name: "mcp__fs__write",
+      description: "Write a file.",
+      inputSchema: {},
+      namespaced,
+      freeform: true,
+    };
+    expect(callIdentity(definition)).toEqual({ namespaced, freeform: true });
+    expect(callIdentity({})).toEqual({});
+    expect(callIdentity({ freeform: false })).toEqual({});
+  });
 });
 
 describe("tool output correlation", () => {
@@ -398,6 +563,60 @@ describe("tool output correlation", () => {
         ]),
       ).toEqual(["call_1", "call_2"]);
     });
+
+    it("treats custom tool calls and outputs like function calls", () => {
+      const customCall = (id: string) => ({
+        type: "custom_tool_call",
+        call_id: id,
+        name: "apply_patch",
+        input: "*** Begin Patch",
+      });
+      const customOutput = (id: string) => ({
+        type: "custom_tool_call_output",
+        call_id: id,
+        output: `${id}-out`,
+      });
+      const input = [
+        message("user", "first"),
+        customCall("call_old"),
+        customOutput("call_old"),
+        message("user", "second"),
+        call("call_a"),
+        output("call_a"),
+        customCall("call_b"),
+        customOutput("call_b"),
+      ];
+      expect(responsesTurnToolOutputs(input)).toEqual([
+        { callId: "call_a", output: "call_a-out" },
+        { callId: "call_b", output: "call_b-out" },
+      ]);
+      expect(responsesCallIds(input)).toEqual([
+        "call_old",
+        "call_a",
+        "call_b",
+      ]);
+      expect(responsesCallIds([customCall("call_parked")])).toEqual([
+        "call_parked",
+      ]);
+    });
+  });
+
+  it("reads Responses custom_tool_call_output", () => {
+    expect(
+      responsesToolOutputs([
+        { type: "custom_tool_call", call_id: "call_4", input: "x" },
+        { type: "custom_tool_call_output", call_id: "call_4", output: "ok" },
+      ]),
+    ).toEqual([{ callId: "call_4", output: "ok" }]);
+    expect(() =>
+      responsesToolOutputs([{ type: "custom_tool_call_output", output: "ok" }]),
+    ).toThrow("custom_tool_call_output is missing call_id");
+    expect(isResponsesToolOutput({ type: "custom_tool_call_output" })).toBe(
+      true,
+    );
+    expect(isResponsesToolOutput({ type: "function_call_output" })).toBe(true);
+    expect(isResponsesToolOutput({ type: "custom_tool_call" })).toBe(false);
+    expect(isResponsesToolOutput(null)).toBe(false);
   });
 
   it("reads Anthropic tool_result and error state", () => {

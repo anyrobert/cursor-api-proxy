@@ -29,6 +29,7 @@ import {
   logAccountAssigned,
   logAccountStats,
   logModelResolution,
+  logToolSession,
   logTrafficRequest,
   logTrafficResponse,
   type TrafficMessage,
@@ -53,6 +54,7 @@ import {
 import { abortOnClientDisconnect } from "../client-disconnect.js";
 import {
   anthropicToolOutputs,
+  droppedToolsNote,
   parseAnthropicFunctionTools,
   resolveToolChoice,
   type PendingClientToolCall,
@@ -262,6 +264,8 @@ export async function handleAnthropicMessages(
   let submittedToolOutputs;
   try {
     const parsed = parseAnthropicFunctionTools(body.tools);
+    const ignored = droppedToolsNote(parsed.dropped);
+    if (ignored) logToolSession(config.verbose, ignored);
     const choice = resolveToolChoice(parsed.tools, body.tool_choice, {
       parallelToolCalls:
         body.tool_choice?.disable_parallel_tool_use === true

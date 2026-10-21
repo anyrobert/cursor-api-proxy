@@ -57,6 +57,9 @@ import {
 } from "../win-cmdline-limit.js";
 import { abortOnClientDisconnect } from "../client-disconnect.js";
 import {
+  droppedToolsNote,
+  freeformInput,
+  isResponsesToolOutput,
   parseOpenAiFunctionTools,
   resolveToolChoice,
   responsesCallIds,
@@ -87,22 +90,44 @@ export type ResponsesCtx = {
 type ResponseStatus = "in_progress" | "completed" | "failed";
 
 /**
+ * How the Responses API reports a call: a function's JSON `arguments`, or
+ * the raw `input` text of a freeform `custom` tool, each under its own item
+ * type and streaming events.
+ */
+function callWire(call: PendingClientToolCall) {
+  return call.freeform
+    ? {
+        type: "custom_tool_call",
+        field: "input",
+        events: "response.custom_tool_call_input",
+        text: freeformInput(call.arguments),
+      }
+    : {
+        type: "function_call",
+        field: "arguments",
+        events: "response.function_call_arguments",
+        text: call.arguments,
+      };
+}
+
+/**
  * A `namespace` member is reported as its bare name plus `namespace`, the
  * shape the Responses API uses and clients such as Codex route on, even when
  * the agent saw it under a `<namespace>__` prefix.
  */
-function functionCallItem(
+function toolCallItem(
   call: PendingClientToolCall,
   status: "in_progress" | "completed" = "completed",
 ) {
+  const wire = callWire(call);
   return {
     id: call.itemId,
-    type: "function_call",
+    type: wire.type,
     status,
     call_id: call.callId,
     name: call.namespaced?.name ?? call.name,
     ...(call.namespaced ? { namespace: call.namespaced.namespace } : {}),
-    arguments: status === "completed" ? call.arguments : "",
+    [wire.field]: status === "completed" ? wire.text : "",
   };
 }
 
@@ -236,7 +261,7 @@ function structuredResponseObject(opts: {
     });
   }
   if (opts.result.status === "tool_calls") {
-    output.push(...opts.result.toolCalls.map((call) => functionCallItem(call)));
+    output.push(...opts.result.toolCalls.map((call) => toolCallItem(call)));
   }
   const inputTokens = Math.max(1, Math.round(opts.promptLength / 4));
   const outputTokens = Math.max(1, Math.round(opts.result.text.length / 4));
@@ -393,35 +418,36 @@ async function writeStructuredResponseTurn(opts: {
     }
     if (result.status === "tool_calls") {
       for (const call of result.toolCalls) {
+        const wire = callWire(call);
         writeResponseEvent(opts.res, "response.output_item.added", {
           response_id: opts.id,
           output_index: outputIndex,
-          item: functionCallItem(call, "in_progress"),
+          item: toolCallItem(call, "in_progress"),
         });
         writeResponseEvent(
           opts.res,
-          "response.function_call_arguments.delta",
+          `${wire.events}.delta`,
           {
             response_id: opts.id,
             item_id: call.itemId,
             output_index: outputIndex,
-            delta: call.arguments,
+            delta: wire.text,
           },
         );
         writeResponseEvent(
           opts.res,
-          "response.function_call_arguments.done",
+          `${wire.events}.done`,
           {
             response_id: opts.id,
             item_id: call.itemId,
             output_index: outputIndex,
-            arguments: call.arguments,
+            [wire.field]: wire.text,
           },
         );
         writeResponseEvent(opts.res, "response.output_item.done", {
           response_id: opts.id,
           output_index: outputIndex,
-          item: functionCallItem(call),
+          item: toolCallItem(call),
         });
         outputIndex += 1;
       }
@@ -574,6 +600,8 @@ export async function handleResponses(
   let submittedToolOutputs;
   try {
     const parsed = parseOpenAiFunctionTools(body.tools);
+    const ignored = droppedToolsNote(parsed.dropped);
+    if (ignored) logToolSession(config.verbose, ignored);
     const choice = resolveToolChoice(parsed.tools, body.tool_choice, {
       parallelToolCalls: body.parallel_tool_calls,
       dropped: parsed.dropped,
@@ -603,17 +631,12 @@ export async function handleResponses(
   if (statefulResume) {
     if (
       Array.isArray(body.input) &&
-      body.input.some(
-        (item) =>
-          !item ||
-          typeof item !== "object" ||
-          (item as { type?: unknown }).type !== "function_call_output",
-      )
+      body.input.some((item) => !isResponsesToolOutput(item))
     ) {
       json(res, 400, {
         error: {
           message:
-            "A function_call_output resume cannot include other input item types",
+            "A tool output resume cannot include input items other than function_call_output or custom_tool_call_output",
           code: "invalid_tool_resume",
           type: "invalid_request_error",
         },
