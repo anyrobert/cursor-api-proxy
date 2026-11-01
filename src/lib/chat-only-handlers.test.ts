@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BridgeConfig } from "./config.js";
 import { run, runStreaming } from "./process.js";
+import { POSIX_MAX_ARG_BYTES } from "./prompt-delivery.js";
 import { startBridgeServer } from "./server.js";
 import { fitPromptToWinCmdline } from "./win-cmdline-limit.js";
 
@@ -146,6 +147,23 @@ describe("chat-only handlers", () => {
       expect(prompt).toContain("nothing outside it is in scope");
       expect(prompt).not.toContain(HOST_WORKSPACE);
       expect(fs.existsSync(path.dirname(cwd))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(endpoints)(
+    "$path sends a prompt too long for one argv string on stdin",
+    async ({ path: endpoint, body }) => {
+      vi.mocked(run).mockResolvedValue({ code: 0, stdout: "ok", stderr: "" });
+      const long = "x".repeat(POSIX_MAX_ARG_BYTES);
+      const longBody = JSON.parse(JSON.stringify(body).replace('"hi"', `"${long}"`));
+
+      const res = await post(endpoint, longBody);
+
+      expect(res.status).toBe(200);
+      expect(run).toHaveBeenCalledTimes(1);
+      const [, args, opts] = vi.mocked(run).mock.calls[0];
+      expect(opts?.stdinContent).toContain(long);
+      expect(args.some((a) => a.includes(long))).toBe(false);
     },
   );
 

@@ -41,6 +41,7 @@ import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
 } from "../win-cmdline-limit.js";
+import { sendsPromptOnStdin } from "../prompt-delivery.js";
 import {
   chatToolOutputs,
   droppedToolsNote,
@@ -516,11 +517,10 @@ export async function handleChatCompletions(
   // When the prompt is delivered via stdin (or ACP), keep it OUT of argv,
   // otherwise a long prompt still blows past the kernel ARG_MAX (spawn E2BIG
   // on Linux). fit.args appends the full prompt for the argv path only.
-  const cmdArgs =
-    config.promptViaStdin || config.useAcp ? fixedArgs : fit.args;
+  const viaStdin = sendsPromptOnStdin(config, agentPrompt);
+  const cmdArgs = viaStdin ? fixedArgs : fit.args;
 
-  const promptForAgent =
-    config.promptViaStdin || config.useAcp ? agentPrompt : undefined;
+  const promptForAgent = viaStdin ? agentPrompt : undefined;
 
   const truncatedHeaders = fit.truncated
     ? { "X-Cursor-Proxy-Prompt-Truncated": "true" }
