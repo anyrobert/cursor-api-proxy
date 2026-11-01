@@ -38,6 +38,7 @@ import {
   fitPromptToWinCmdline,
   warnPromptTruncated,
 } from "../win-cmdline-limit.js";
+import { sendsPromptOnStdin } from "../prompt-delivery.js";
 import {
   anthropicToolOutputs,
   droppedToolsNote,
@@ -541,15 +542,14 @@ export async function handleAnthropicMessages(
   // When the prompt is delivered via stdin (or ACP), keep it OUT of argv,
   // otherwise a long prompt still blows past the kernel ARG_MAX (spawn E2BIG
   // on Linux). fit.args appends the full prompt for the argv path only.
-  const cmdArgs =
-    config.promptViaStdin || config.useAcp ? fixedArgs : fit.args;
+  const viaStdin = sendsPromptOnStdin(config, agentPrompt);
+  const cmdArgs = viaStdin ? fixedArgs : fit.args;
 
   const truncatedHeaders = fit.truncated
     ? { "X-Cursor-Proxy-Prompt-Truncated": "true" }
     : undefined;
 
-  const promptForAgent =
-    config.promptViaStdin || config.useAcp ? agentPrompt : undefined;
+  const promptForAgent = viaStdin ? agentPrompt : undefined;
 
   if (structuredToolStart) {
     const use = new AccountUse(res, config.verbose, getNextAccountConfigDir());
